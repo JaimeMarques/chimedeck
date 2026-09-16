@@ -36,6 +36,8 @@ const McpDocsPage = () => {
             <NavItem href="#tool-details" label="Tool Details" />
             <NavItem href="#tool-move-card" label="move_card" />
             <NavItem href="#tool-write-comment" label="write_comment" />
+            <NavItem href="#tool-create-board" label="create_board" />
+            <NavItem href="#tool-create-list" label="create_list" />
             <NavItem href="#tool-create-card" label="create_card" />
             <NavItem href="#tool-edit-card-description" label="edit_card_description" />
             <NavItem href="#tool-set-card-price" label="set_card_price" />
@@ -56,7 +58,7 @@ const McpDocsPage = () => {
         {/* Header */}
         <div className="border-b border-border bg-bg-base px-8 py-5">
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => { navigate(-1); }}
             className="mb-2 flex items-center gap-1 text-sm text-muted hover:text-subtle"
           >
             ← Back
@@ -90,7 +92,6 @@ const McpDocsPage = () => {
                 '<strong>stdio</strong> — a local Bun subprocess that communicates over stdin/stdout. Best for Claude Desktop and Cursor.',
                 `<strong>Remote HTTP</strong> — a persistent HTTP endpoint (<code class="${inlineCodeClass}">/api/mcp</code>) served on the same port as ChimeDeck. Best for remote agents, CI, and web-based AI assistants.`,
               ].map((step, i) => (
-                // eslint-disable-next-line react/no-array-index-key
                 <li key={i} className="flex gap-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-700 text-xs font-bold text-inverse">
                     {i + 1}
@@ -121,7 +122,6 @@ const McpDocsPage = () => {
                 'Go to <strong>User Settings → API Tokens</strong>.',
                 'Click <strong>Generate new token</strong> and copy the value.',
               ].map((step, i) => (
-                // eslint-disable-next-line react/no-array-index-key
                 <li key={i} className="flex gap-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-700 text-xs font-bold text-inverse">
                     {i + 1}
@@ -236,7 +236,6 @@ const McpDocsPage = () => {
                 `<strong>Interact</strong> — subsequent <code class="${inlineCodeClass}">POST</code> requests (tool calls / notifications) or <code class="${inlineCodeClass}">GET</code> requests (SSE stream) must include the <code class="${inlineCodeClass}">mcp-session-id</code> header.`,
                 `<strong>Terminate</strong> — <code class="${inlineCodeClass}">DELETE /api/mcp</code> with the session ID tears down the session immediately.`,
               ].map((step, i) => (
-                // eslint-disable-next-line react/no-array-index-key
                 <li key={i} className="flex gap-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-700 text-xs font-bold text-inverse">
                     {i + 1}
@@ -340,7 +339,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="available-tools">
             <H2>Available Tools</H2>
             <P>
-              ChimeDeck exposes 13 MCP tools. Each tool maps to a specific REST API endpoint.
+              ChimeDeck exposes 15 MCP tools. Each tool maps to a specific REST API endpoint.
             </P>
             <Table
               headers={['Tool', 'Description', 'Endpoint']}
@@ -359,6 +358,22 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>write_comment</Code> },
                     { key: 'desc', content: 'Post a comment on a card' },
                     { key: 'endpoint', content: <Code>POST /api/v1/cards/:cardId/comments</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-create-board',
+                  cells: [
+                    { key: 'tool', content: <Code>create_board</Code> },
+                    { key: 'desc', content: 'Create a board in a workspace' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/workspaces/:workspaceId/boards</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-create-list',
+                  cells: [
+                    { key: 'tool', content: <Code>create_list</Code> },
+                    { key: 'desc', content: 'Create a new list on a board' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/boards/:boardId/lists</Code> },
                   ],
                 },
                 {
@@ -528,6 +543,30 @@ curl -X POST http://localhost:3000/api/mcp \\
                 },
               ]}
             />
+          </Section>
+
+          {/* create_board */}
+          <Section id="tool-create-board">
+            <H3>create_board</H3>
+            <P>Create a board in a workspace. Existing API authorization enforces workspace membership and defaults visibility to <Code>PRIVATE</Code>.</P>
+            <Table headers={['Parameter', 'Type', 'Required', 'Description']} rows={[
+              { rowId: 'cb-workspaceId', cells: [{ key: 'param', content: <Code>workspaceId</Code> }, { key: 'type', content: 'string' }, { key: 'req', content: '✅' }, { key: 'desc', content: 'Target workspace ID' }] },
+              { rowId: 'cb-title', cells: [{ key: 'param', content: <Code>title</Code> }, { key: 'type', content: 'string' }, { key: 'req', content: '✅' }, { key: 'desc', content: 'Board title' }] },
+              { rowId: 'cb-visibility', cells: [{ key: 'param', content: <Code>visibility</Code> }, { key: 'type', content: 'PRIVATE | WORKSPACE | PUBLIC' }, { key: 'req', content: 'No' }, { key: 'desc', content: 'Defaults to PRIVATE' }] },
+              { rowId: 'cb-description', cells: [{ key: 'param', content: <Code>description</Code> }, { key: 'type', content: 'string' }, { key: 'req', content: 'No' }, { key: 'desc', content: 'Optional description' }] },
+              { rowId: 'cb-background', cells: [{ key: 'param', content: <Code>background</Code> }, { key: 'type', content: 'string' }, { key: 'req', content: 'No' }, { key: 'desc', content: 'Optional background value' }] },
+            ]} />
+          </Section>
+
+          {/* create_list */}
+          <Section id="tool-create-list">
+            <H3>create_list</H3>
+            <P>Create a list on a board. Existing API authorization enforces board writable-member permission.</P>
+            <Table headers={['Parameter', 'Type', 'Required', 'Description']} rows={[
+              { rowId: 'cl-boardId', cells: [{ key: 'param', content: <Code>boardId</Code> }, { key: 'type', content: 'string' }, { key: 'req', content: '✅' }, { key: 'desc', content: 'Target board ID' }] },
+              { rowId: 'cl-title', cells: [{ key: 'param', content: <Code>title</Code> }, { key: 'type', content: 'string' }, { key: 'req', content: '✅' }, { key: 'desc', content: 'List title' }] },
+              { rowId: 'cl-afterId', cells: [{ key: 'param', content: <Code>afterId</Code> }, { key: 'type', content: 'string | null' }, { key: 'req', content: 'No' }, { key: 'desc', content: 'Optional insertion anchor' }] },
+            ]} />
           </Section>
 
           {/* create_card */}
