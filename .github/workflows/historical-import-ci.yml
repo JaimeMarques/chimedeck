@@ -14,3 +14,8 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun test tests/integration/historicalImport tests/unit/server/extensions/historicalImport
+      # [why] Imported historical comment content is persisted verbatim, so the render-time
+      # sanitizer (src/extensions/Comment/utils/sanitizeCommentHtml.ts) is the defence that keeps
+      # raw source HTML out of the DOM. Run its tests on the same push.
+      - name: Run comment render sanitizer tests
+        run: bun test src/extensions/Comment
