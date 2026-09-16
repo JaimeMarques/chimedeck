@@ -384,6 +384,50 @@ async function performCreate(
   }
 }
 
+interface LinkProvenanceInput {
+  entity_type: EntityType;
+  source_id: string;
+  target_id: string;
+  plan_hash: string;
+}
+
+// Shared link body: dry-run and apply execute the same provenance INSERT. In a
+// rehearsal the nested transaction releases its savepoint so dependent ops can
+// observe the claim; endDryRunScope rolls back the outer transaction. Without a
+// rehearsal scope, dry-run rolls the standalone transaction back.
+async function performLink(
+  input: LinkProvenanceInput,
+  mode: 'apply' | 'dry-run',
+  openTrx?: OpenOperationTransaction
+): Promise<void> {
+  const opened: OperationTransaction = openTrx
+    ? await openTrx()
+    : { trx: await db.transaction(), nested: false };
+  const trx = opened.trx;
+  try {
+    await trx('import_provenance').insert({
+      id: randomUUID(),
+      source_system: 'trello',
+      entity_type: input.entity_type,
+      source_id: input.source_id,
+      target_id: input.target_id,
+      target_ref: targetRef(input.entity_type, input.target_id),
+      import_plan_hash: input.plan_hash,
+      operation: 'link' satisfies Operation,
+    });
+    if (mode === 'dry-run' && !opened.nested) await trx.rollback();
+    else await trx.commit();
+  } catch (err) {
+    if (!trx.isCompleted()) await trx.rollback();
+    if (isUniqueViolation(err)) {
+      throw new Error(
+        `target ${targetRef(input.entity_type, input.target_id)} was claimed by another import between observation and link`
+      );
+    }
+    throw err;
+  }
+}
+
 function sameProjectedFields(
   left: Record<string, unknown>,
   right: Record<string, unknown>,
@@ -703,7 +747,10 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
           | { owner_id?: string }
           | undefined;
         if (!workspace) return { error: 'staged board payload workspace does not exist' };
-        if (typeof payload.historical_author !== 'string' || payload.historical_author.length === 0) {
+        if (
+          typeof payload.historical_author !== 'string' ||
+          payload.historical_author.length === 0
+        ) {
           return { error: 'staged board payload requires a historical_author' };
         }
         const authorUserId = identityMap.get(payload.historical_author) ?? null;
@@ -768,7 +815,13 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     // a rolled-back transaction, including composite-key row validation.
     async preflightCreate(input) {
       try {
-        const result = await performCreate(input, 'dry-run', identityMap, projection, beginOperation);
+        const result = await performCreate(
+          input,
+          'dry-run',
+          identityMap,
+          projection,
+          beginOperation
+        );
         return { ok: true, created: result.created, target_id: result.target_id } as const;
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) } as const;
@@ -783,29 +836,12 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
       return performMutation(input, 'dry-run', identityMap, beginOperation);
     },
 
-    async linkProvenance({ entity_type, source_id, target_id, plan_hash }) {
-      const trx = await trxOf();
-      try {
-        await trx('import_provenance').insert({
-          id: randomUUID(),
-          source_system: 'trello',
-          entity_type,
-          source_id,
-          target_id,
-          target_ref: targetRef(entity_type, target_id),
-          import_plan_hash: plan_hash,
-          operation: 'link' satisfies Operation,
-        });
-        await trx.commit();
-      } catch (err) {
-        await trx.rollback();
-        if (isUniqueViolation(err)) {
-          throw new Error(
-            `target ${targetRef(entity_type, target_id)} was claimed by another import between observation and link`
-          );
-        }
-        throw err;
-      }
+    linkProvenance(input) {
+      return performLink(input, 'apply', beginOperation);
+    },
+
+    preflightLink(input) {
+      return performLink(input, 'dry-run', beginOperation);
     },
 
     async writeAudit(entry) {

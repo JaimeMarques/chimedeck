@@ -259,10 +259,7 @@ export interface ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
-  }): Promise<
-    | { ok: true; created?: boolean; target_id?: string }
-    | { ok: false; reason: string }
-  >;
+  }): Promise<{ ok: true; created?: boolean; target_id?: string } | { ok: false; reason: string }>;
   // Existing-row mutations share one adapter body in apply and dry-run. The
   // adapter owns the row lock, exact pre-image check, constrained update, and
   // provenance write/verification so they are one atomic decision.
@@ -287,7 +284,16 @@ export interface ImporterDeps {
   beginDryRunScope?(): Promise<void>;
   endDryRunScope?(): Promise<void>;
   // Link an existing target row to a source identity (provenance insert only).
+  // Apply commits the claim; dry-run executes the identical insert inside the
+  // rehearsal scope so dependent operations can observe it, then the outer
+  // scope rolls everything back.
   linkProvenance(input: {
+    entity_type: EntityType;
+    source_id: string;
+    target_id: string;
+    plan_hash: string;
+  }): Promise<void>;
+  preflightLink(input: {
     entity_type: EntityType;
     source_id: string;
     target_id: string;
@@ -1149,14 +1155,14 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
           return;
         }
       }
-      if (ctx.mode === 'apply') {
-        await deps.linkProvenance({
-          entity_type: op.entity_type,
-          source_id: op.source_id,
-          target_id: targetId,
-          plan_hash: planHash,
-        });
-      }
+      const linkInput = {
+        entity_type: op.entity_type,
+        source_id: op.source_id,
+        target_id: targetId,
+        plan_hash: planHash,
+      };
+      if (ctx.mode === 'apply') await deps.linkProvenance(linkInput);
+      else await deps.preflightLink(linkInput);
       ctx.outcomes.push({ status: 'applied', op_id: op.op_id, target_id: targetId });
       ctx.counts.applied++;
       appliedOrNoop.add(op.op_id);

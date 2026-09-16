@@ -62,8 +62,10 @@ export class MemoryImporterDeps implements ImporterDeps {
   // Dry-run rehearsal scope (mirrors the knex adapter's single rehearsal
   // transaction): writes performed inside the scope are visible to later
   // operations and are discarded when the scope ends.
-  private scopeSnapshot: { rows: Map<string, Record<string, unknown>>; provenance: ProvenanceRow[] } | null =
-    null;
+  private scopeSnapshot: {
+    rows: Map<string, Record<string, unknown>>;
+    provenance: ProvenanceRow[];
+  } | null = null;
 
   get inDryRunScope(): boolean {
     return this.scopeSnapshot !== null;
@@ -138,10 +140,7 @@ export class MemoryImporterDeps implements ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
-  }): Promise<
-    | { ok: true; created?: boolean; target_id?: string }
-    | { ok: false; reason: string }
-  > {
+  }): Promise<{ ok: true; created?: boolean; target_id?: string } | { ok: false; reason: string }> {
     const key = `${input.entity_type}:${input.source_id}`;
     const payload = input.payload_ref ? this.payloadStore.get(input.payload_ref) : undefined;
     if (!payload) return { ok: false, reason: `no staged payload for ${key}` };
@@ -218,9 +217,30 @@ export class MemoryImporterDeps implements ImporterDeps {
         updated_at: payload.updated_at,
       });
     } else {
+      const attachmentId = payload.fields.cover_attachment_id ?? null;
+      const color = payload.fields.cover_color ?? null;
+      if (attachmentId !== null) {
+        const attachment = this.rows.get(`attachment:${String(attachmentId)}`);
+        if (
+          !attachment ||
+          attachment.card_id !== input.target_id ||
+          attachment.type !== 'FILE' ||
+          attachment.status !== 'READY' ||
+          typeof attachment.mime_type !== 'string' ||
+          !attachment.mime_type.startsWith('image/')
+        ) {
+          throw new Error('card cover enrich attachment must be a READY image on the same card');
+        }
+        const attachmentClaim = this.provenance.find(
+          (claim) =>
+            claim.target_ref === targetRef('attachment', String(attachmentId)) &&
+            claim.source_system === input.source_system
+        );
+        if (!attachmentClaim) throw new Error('card cover enrich attachment must be import-owned');
+      }
       Object.assign(patch, {
-        cover_attachment_id: payload.fields.cover_attachment_id ?? null,
-        cover_color: payload.fields.cover_color ?? null,
+        cover_attachment_id: attachmentId,
+        cover_color: color,
         cover_size: payload.fields.cover_size ?? 'SMALL',
       });
     }
@@ -323,6 +343,17 @@ export class MemoryImporterDeps implements ImporterDeps {
       operation: input.operation,
     });
     return { target_id: input.target_id, created: true };
+  }
+
+  async preflightLink(input: {
+    entity_type: EntityType;
+    source_id: string;
+    target_id: string;
+    plan_hash: string;
+  }): Promise<void> {
+    // Mirror the knex adapter: the claim is visible only inside the rehearsal
+    // scope and endDryRunScope restores the exact pre-run state.
+    if (this.scopeSnapshot) await this.linkProvenance(input);
   }
 
   async linkProvenance(input: {

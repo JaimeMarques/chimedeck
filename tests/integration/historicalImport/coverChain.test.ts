@@ -24,6 +24,7 @@ import {
   CARD_COVER_FIELDS,
   CARD_FINGERPRINT_FIELDS,
   fingerprintFields,
+  fingerprintJson,
 } from '../../../server/extensions/historicalImport/core/fingerprint';
 import { MemoryImporterDeps } from './harness';
 import { SYNTH_BOARD_ID, SYNTH_IDENTITY_MAP, SYNTH_LIST_ID } from './fixtures';
@@ -46,7 +47,8 @@ function emptyCoverFingerprint(): string {
 }
 
 function op(
-  partial: Partial<ImportOperation> & Pick<ImportOperation, 'op_id' | 'entity_type' | 'source_id' | 'operation'>
+  partial: Partial<ImportOperation> &
+    Pick<ImportOperation, 'op_id' | 'entity_type' | 'source_id' | 'operation'>
 ): ImportOperation {
   return {
     target_id: undefined,
@@ -144,6 +146,31 @@ function linkChainPlan(nativeCard: Record<string, unknown>): ImportPlan {
   };
 }
 
+// link (native card) -> link (native attachment) -> cover enrich. This is the
+// production Phoenix shape: the attachment provenance claim must exist inside
+// the dry-run rehearsal transaction before enrich verifies import ownership.
+function linkedAttachmentChainPlan(
+  nativeCardRow: Record<string, unknown>,
+  nativeAttachmentRow: Record<string, unknown>
+): ImportPlan {
+  const plan = linkChainPlan(nativeCardRow);
+  plan.plan_id = 'plan_cover_chain_attachment_link_0001';
+  plan.operations[1] = op({
+    op_id: 'op-attachment-link',
+    entity_type: 'attachment',
+    source_id: ATT_SOURCE,
+    operation: 'link',
+    target_id: ATT_ID,
+    dependencies: ['op-card-link'],
+    expected_target_fingerprint: fingerprintJson(nativeAttachmentRow),
+  });
+  plan.operations[2] = {
+    ...plan.operations[2]!,
+    dependencies: ['op-card-link', 'op-attachment-link'],
+  };
+  return plan;
+}
+
 const PAYLOADS: Record<string, unknown> = {
   [CARD_PAYLOAD]: {
     entity_type: 'card',
@@ -199,6 +226,22 @@ function nativeCard(overrides: Record<string, unknown> = {}): Record<string, unk
     due_complete: false,
     start_date: null,
     ...EMPTY_COVER,
+    ...overrides,
+  };
+}
+
+function nativeAttachment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: ATT_ID,
+    short_id: 'Attcov01',
+    card_id: CARD_ID,
+    name: 'cover.png',
+    type: 'FILE',
+    s3_key: 'imports/cover.png',
+    s3_bucket: 'chimedeck',
+    mime_type: 'image/png',
+    size_bytes: 1024,
+    status: 'READY',
     ...overrides,
   };
 }
@@ -303,6 +346,72 @@ describe('cover chain — create then cover enrich on the same source identity',
       cover_attachment_id: ATT_ID,
       cover_size: 'FULL',
     });
+  });
+
+  it('rehearses card link -> attachment link -> cover enrich with claims visible and no durable writes', async () => {
+    const deps = freshDeps();
+    const card = nativeCard();
+    const attachment = nativeAttachment();
+    deps.rows.set(`card:${CARD_ID}`, card);
+    deps.rows.set(`attachment:${ATT_ID}`, attachment);
+    const plan = linkedAttachmentChainPlan(card, attachment);
+    const rowsBefore = structuredClone([...deps.rows.entries()]);
+
+    const dry = await dryRunPlan(plan, deps, OPERATOR);
+
+    expect(dry.operations_applied).toBe(3);
+    expect(dry.operations_noop).toBe(0);
+    expect(dry.operations_blocked).toBe(0);
+    expect(dry.operations_failed).toBe(0);
+    expect([...deps.rows.entries()]).toEqual(rowsBefore);
+    expect(deps.provenance).toHaveLength(0);
+
+    const first = await applyPlan(plan, await gatesFor(plan, deps), deps, OPERATOR);
+    expect('error' in first).toBe(false);
+    if ('error' in first) return;
+    expect(first.operations_applied).toBe(3);
+    expect(first.operations_blocked).toBe(0);
+    expect(first.operations_failed).toBe(0);
+    expect(deps.rows.get(`card:${CARD_ID}`)).toMatchObject({
+      cover_attachment_id: ATT_ID,
+      cover_color: null,
+      cover_size: 'FULL',
+    });
+    expect(deps.provenance).toHaveLength(2);
+
+    const second = await applyPlan(plan, await gatesFor(plan, deps), deps, OPERATOR);
+    expect('error' in second).toBe(false);
+    if ('error' in second) return;
+    expect(second.operations_applied).toBe(0);
+    expect(second.operations_noop).toBe(3);
+    expect(second.operations_blocked).toBe(0);
+    expect(second.operations_failed).toBe(0);
+    expect(deps.provenance).toHaveLength(2);
+  });
+
+  it('still refuses a native attachment when its rehearsal link does not create an import claim', async () => {
+    const deps = freshDeps();
+    const card = nativeCard();
+    const attachment = nativeAttachment();
+    deps.rows.set(`card:${CARD_ID}`, card);
+    deps.rows.set(`attachment:${ATT_ID}`, attachment);
+    const plan = linkedAttachmentChainPlan(card, attachment);
+    const link = deps.linkProvenance.bind(deps);
+    deps.linkProvenance = async (input) => {
+      if (input.entity_type !== 'attachment') await link(input);
+    };
+
+    const dry = await dryRunPlan(plan, deps, OPERATOR);
+
+    expect(dry.operations_applied).toBe(2);
+    expect(dry.operations_failed).toBe(1);
+    expect(dry.outcomes.find((outcome) => outcome.op_id === 'op-cover-enrich')).toMatchObject({
+      status: 'failed',
+      reason: 'card cover enrich attachment must be import-owned',
+    });
+    expect(deps.rows.get(`card:${CARD_ID}`)).toEqual(card);
+    expect(deps.rows.get(`attachment:${ATT_ID}`)).toEqual(attachment);
+    expect(deps.provenance).toHaveLength(0);
   });
 
   it('preserves a native cover on a linked card instead of overwriting it (drift)', async () => {
