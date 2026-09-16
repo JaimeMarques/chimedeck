@@ -75,7 +75,9 @@ export async function loadPayloadManifest(): Promise<PayloadManifest> {
   }
   if (cachedManifest) return cachedManifest;
   const text = await readFile(PAYLOAD_MANIFEST_PATH, 'utf8');
-  const parsed = JSON.parse(text) as { payloads?: Array<{ payload_ref?: string; sha256?: string }> };
+  const parsed = JSON.parse(text) as {
+    payloads?: Array<{ payload_ref?: string; sha256?: string }>;
+  };
   const entries = Array.isArray(parsed.payloads) ? parsed.payloads : null;
   if (!entries) {
     throw new Error(`payload manifest ${PAYLOAD_MANIFEST_PATH} has no payloads[] array`);
@@ -96,7 +98,9 @@ export function resetPayloadManifestCache(): void {
   cachedManifest = null;
 }
 
-export async function resolveStagedPayload(payloadRef: string | null): Promise<StagedPayload | null> {
+export async function resolveStagedPayload(
+  payloadRef: string | null
+): Promise<StagedPayload | null> {
   if (!payloadRef) return null;
   const { bytes } = await readStagedFile(payloadRef);
   return JSON.parse(bytes.toString('utf8')) as StagedPayload;
@@ -105,20 +109,20 @@ export async function resolveStagedPayload(payloadRef: string | null): Promise<S
 // Read a staged payload and verify it against the configured manifest.
 // Throws (never returns a payload) when the reference is absent from the
 // manifest or the bytes differ from the manifested SHA-256.
-export async function readVerifiedStagedPayload(payloadRef: string | null): Promise<StagedPayload | null> {
+export async function readVerifiedStagedPayload(
+  payloadRef: string | null
+): Promise<StagedPayload | null> {
   if (!payloadRef) return null;
   const { bytes } = await readStagedFile(payloadRef);
   const manifest = await loadPayloadManifest();
   const expected = manifest.byRef.get(payloadRef);
   if (!expected) {
-    throw new Error(
-      `payload_ref is absent from the configured payload manifest: ${payloadRef}`,
-    );
+    throw new Error(`payload_ref is absent from the configured payload manifest: ${payloadRef}`);
   }
   const actual = sha256Hex(bytes);
   if (actual !== expected) {
     throw new Error(
-      `payload sha256 mismatch for ${payloadRef}: expected ${expected.slice(0, 12)}, found ${actual.slice(0, 12)}`,
+      `payload sha256 mismatch for ${payloadRef}: expected ${expected.slice(0, 12)}, found ${actual.slice(0, 12)}`
     );
   }
   return JSON.parse(bytes.toString('utf8')) as StagedPayload;

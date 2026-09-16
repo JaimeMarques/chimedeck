@@ -14,18 +14,29 @@
 //        => 200 { data: { result } }  — no writes to entity tables
 //
 //   POST /api/v1/admin/historical-import/apply
-//        body: { plan: ImportPlan, confirmed_plan_hash: string }
-//        => 200 { data: { result } } | 403 gate errors
+//        body: { plan: ImportPlan, confirmed_plan_hash: string,
+//                confirmed_destination_fingerprint: string }
+//        => 200 { data: { result } } | 403/409 gate errors
+//        The destination fingerprint is returned by validate/dry-run and is
+//        mandatory: it is the stop for destination-state divergence.
 //
 //   POST /api/v1/admin/historical-import/reset
-//        body: { plan_hash: string }
-//        => 200 { data: { cleared } }  — clears provenance rows only
+//        body: { plan_hash: string, recovery?: boolean, confirm_destructive?: boolean }
+//        => 200 { data: { cleared, created_targets_remaining, ... } }
+//           with recovery=true (+ confirm_destructive) deletes the rows this
+//           plan created, then clears provenance; refused (409) when any row
+//           outside the plan's own creation set would be affected.
 //
 //   GET  /api/v1/admin/historical-import/provenance?entity_type=&source_id=
 //   => 200 { data: { provenance | null } }
 //
 //   GET  /api/v1/admin/historical-import/audit?plan_hash=&limit=
 //   => 200 { data: { entries: [...] } }
+//
+// Environment gates: HISTORICAL_IMPORT_ENABLED, HISTORICAL_IMPORT_APPLY_ENABLED,
+// HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH (frozen source snapshot — enforced
+// against the plan's snapshot_hash), HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED
+// (enables destructive recovery).
 //
 // Notifications/webhooks/automation suppression: entity rows are written
 // directly (knex) without dispatching domain events, so mentions/automation/
@@ -34,23 +45,33 @@
 // OPERATOR; historical authors are recorded in import_provenance + payload.
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
-import {
-  importDisabledResponse,
-  requireImportOperator,
-  resolvePlanWorkspace,
-} from './authorize';
+import { importDisabledResponse, requireImportOperator, resolvePlanWorkspace } from './authorize';
 import {
   applyPlan,
   dryRunPlan,
+  recoverPlan,
   resetPlan,
   validatePlan,
   type ImportPlan,
   type PlanApplyResult,
+  type PlanExpectations,
 } from '../core/plan';
 import { createKnexDeps, loadIdentityMap } from '../core/adapters';
+import { decodeCompositeTargetId } from '../core/composite';
 
 function badRequest(message: string): Response {
   return Response.json({ error: { code: 'bad-request', message } }, { status: 400 });
+}
+
+const HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+// Out-of-band expectations are read per request from the server environment —
+// never from the plan document, which must not authorize its own snapshot.
+function readExpectations(): PlanExpectations {
+  const expected = Bun.env['HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH'];
+  return {
+    expectedSnapshotHash: typeof expected === 'string' && expected.length > 0 ? expected : null,
+  };
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
@@ -77,7 +98,10 @@ interface ImportOperationExtra {
   provenance?: { board_id?: string };
 }
 
-export async function historicalImportRouter(req: Request, pathname: string): Promise<Response | null> {
+export async function historicalImportRouter(
+  req: Request,
+  pathname: string
+): Promise<Response | null> {
   if (!pathname.startsWith('/api/v1/admin/historical-import')) return null;
 
   // Gates are evaluated per-request (not cached at module load) so ops can
@@ -93,7 +117,7 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
   if (!currentUser) {
     return Response.json(
       { error: { code: 'unauthorized', message: 'Authentication required' } },
-      { status: 401 },
+      { status: 401 }
     );
   }
   const actorId = currentUser.id;
@@ -110,7 +134,7 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
     if (authz) return authz;
 
     const deps = await createDeps();
-    const validation = await validatePlan(plan, deps, actorId);
+    const validation = await validatePlan(plan, deps, actorId, readExpectations());
     return Response.json({ data: { validation } });
   }
 
@@ -126,7 +150,12 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
     if (authz) return authz;
 
     const deps = await createDeps();
-    const result = (await dryRunPlan(plan, deps, actorId)) as PlanApplyResult & {
+    const result = (await dryRunPlan(
+      plan,
+      deps,
+      actorId,
+      readExpectations()
+    )) as PlanApplyResult & {
       validation_errors?: unknown;
     };
     if (result.validation_errors) {
@@ -138,7 +167,7 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
             data: result.validation_errors,
           },
         },
-        { status: 422 },
+        { status: 422 }
       );
     }
     return Response.json({ data: { result } });
@@ -148,15 +177,26 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
   if (pathname === '/api/v1/admin/historical-import/apply' && req.method === 'POST') {
     if (Bun.env['HISTORICAL_IMPORT_APPLY_ENABLED'] !== 'true') {
       return Response.json(
-        { error: { code: 'apply-disabled', message: 'Apply is disabled (set HISTORICAL_IMPORT_APPLY_ENABLED=true)' } },
-        { status: 403 },
+        {
+          error: {
+            code: 'apply-disabled',
+            message: 'Apply is disabled (set HISTORICAL_IMPORT_APPLY_ENABLED=true)',
+          },
+        },
+        { status: 403 }
       );
     }
     const body = await readJson(req);
     const plan = body?.plan as ImportPlan | undefined;
     const confirmed = body?.confirmed_plan_hash;
+    const confirmedDestination = body?.confirmed_destination_fingerprint;
     if (!plan) return badRequest('body.plan is required');
     if (typeof confirmed !== 'string') return badRequest('body.confirmed_plan_hash is required');
+    if (typeof confirmedDestination !== 'string' || !HASH_PATTERN.test(confirmedDestination)) {
+      return badRequest(
+        'body.confirmed_destination_fingerprint is required (64-hex): re-run validate/dry-run and echo destination_fingerprint'
+      );
+    }
     const boards = planTargetBoards(plan);
     const ws = await resolvePlanWorkspace(boards);
     if ('error' in ws) return ws.error;
@@ -164,9 +204,26 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
     if (authz) return authz;
 
     const deps = await createDeps();
-    const result = await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: confirmed }, deps, actorId);
+    const result = await applyPlan(
+      plan,
+      {
+        applyEnabled: true,
+        confirmedPlanHash: confirmed,
+        confirmedDestinationFingerprint: confirmedDestination,
+        expectations: readExpectations(),
+      },
+      deps,
+      actorId
+    );
     if ('error' in result) {
-      return Response.json({ error: { code: result.code, message: result.error } }, { status: 403 });
+      // 409 = the world changed under the confirmation (re-observe and retry);
+      // 403 = a gate refused.
+      const conflict =
+        result.code === 'destination-state-divergence' || result.code === 'snapshot-divergence';
+      return Response.json(
+        { error: { code: result.code, message: result.error } },
+        { status: conflict ? 409 : 403 }
+      );
     }
     return Response.json({ data: { result } });
   }
@@ -175,14 +232,25 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
   if (pathname === '/api/v1/admin/historical-import/reset' && req.method === 'POST') {
     const body = await readJson(req);
     const planHash = body?.plan_hash;
-    if (typeof planHash !== 'string' || !/^[0-9a-f]{64}$/.test(planHash)) {
+    const recovery = body?.recovery === true;
+    const confirmDestructive = body?.confirm_destructive === true;
+    if (typeof planHash !== 'string' || !HASH_PATTERN.test(planHash)) {
       return badRequest('body.plan_hash must be a 64-hex string');
     }
     // Reset authorizes against the workspace of any provenance row of the plan.
-    const row = (await db('import_provenance')
-      .where({ import_plan_hash: planHash })
-      .first()) as { entity_type: string; target_id: string } | undefined;
-    if (!row) return Response.json({ data: { cleared: 0 } });
+    const row = (await db('import_provenance').where({ import_plan_hash: planHash }).first()) as
+      | { entity_type: string; target_id: string }
+      | undefined;
+    if (!row) {
+      return Response.json({
+        data: {
+          cleared: 0,
+          created_targets_remaining: [],
+          recovery: recovery ? 'recovery' : 'provenance-only',
+          recovery_note: 'no provenance rows for this plan hash — nothing to reset',
+        },
+      });
+    }
     const entityTableBoard = await resolveBoardForEntity(row.entity_type, row.target_id);
     if (!entityTableBoard) return badRequest('cannot resolve workspace for plan — reset denied');
     const ws = await resolvePlanWorkspace([entityTableBoard]);
@@ -191,8 +259,26 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
     if (authz) return authz;
 
     const deps = await createDeps();
-    const result = await resetPlan(planHash, deps, actorId);
-    return Response.json({ data: result });
+    if (!recovery) {
+      const result = await resetPlan(planHash, deps, actorId);
+      return Response.json({ data: result });
+    }
+    const report = await recoverPlan(planHash, deps, actorId, {
+      confirmDestructive,
+      recoveryEnabled: Bun.env['HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED'] === 'true',
+    });
+    if ('error' in report) {
+      const status = report.code === 'recovery-disabled' ? 403 : 400;
+      return Response.json({ error: { code: report.code, message: report.error } }, { status });
+    }
+    if (!report.ok) {
+      // Fail-closed: nothing was deleted; the blockers explain why.
+      return Response.json(
+        { error: { code: 'recovery-refused', message: 'recovery refused', data: report } },
+        { status: 409 }
+      );
+    }
+    return Response.json({ data: report });
   }
 
   // ---- GET provenance ----
@@ -200,7 +286,8 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
     const url = new URL(req.url);
     const entityType = url.searchParams.get('entity_type');
     const sourceId = url.searchParams.get('source_id');
-    if (!entityType || !sourceId) return badRequest('entity_type and source_id query params are required');
+    if (!entityType || !sourceId)
+      return badRequest('entity_type and source_id query params are required');
     const row = await db('import_provenance')
       .where({ entity_type: entityType, source_id: sourceId })
       .first();
@@ -220,7 +307,7 @@ export async function historicalImportRouter(req: Request, pathname: string): Pr
 
   return Response.json(
     { error: { code: 'not-found', message: `${req.method} ${pathname} not found` } },
-    { status: 404 },
+    { status: 404 }
   );
 }
 
@@ -236,7 +323,9 @@ async function resolveBoardForEntity(entityType: string, targetId: string): Prom
       case 'board':
         return targetId;
       case 'list': {
-        const row = (await db('lists').where({ id: targetId }).first()) as { board_id?: string } | undefined;
+        const row = (await db('lists').where({ id: targetId }).first()) as
+          | { board_id?: string }
+          | undefined;
         return row?.board_id ?? null;
       }
       case 'card':
@@ -249,9 +338,13 @@ async function resolveBoardForEntity(entityType: string, targetId: string): Prom
       case 'custom_field_value': {
         const cardId = await resolveCardId(targetId, entityType);
         if (!cardId) return null;
-        const card = (await db('cards').where({ id: cardId }).first()) as { list_id: string } | undefined;
+        const card = (await db('cards').where({ id: cardId }).first()) as
+          | { list_id: string }
+          | undefined;
         if (!card) return null;
-        const list = (await db('lists').where({ id: card.list_id }).first()) as { board_id?: string } | undefined;
+        const list = (await db('lists').where({ id: card.list_id }).first()) as
+          | { board_id?: string }
+          | undefined;
         return list?.board_id ?? null;
       }
       case 'label':
@@ -277,31 +370,40 @@ async function resolveCardId(targetId: string, entityType: string): Promise<stri
     case 'card':
       return targetId;
     case 'comment': {
-      const c = (await db('comments').where({ id: targetId }).first()) as { card_id?: string } | undefined;
+      const c = (await db('comments').where({ id: targetId }).first()) as
+        | { card_id?: string }
+        | undefined;
       return c?.card_id ?? null;
     }
     case 'attachment': {
-      const a = (await db('attachments').where({ id: targetId }).first()) as { card_id?: string } | undefined;
+      const a = (await db('attachments').where({ id: targetId }).first()) as
+        | { card_id?: string }
+        | undefined;
       return a?.card_id ?? null;
     }
     case 'checklist': {
-      const cl = (await db('checklists').where({ id: targetId }).first()) as { card_id?: string } | undefined;
+      const cl = (await db('checklists').where({ id: targetId }).first()) as
+        | { card_id?: string }
+        | undefined;
       return cl?.card_id ?? null;
     }
     case 'checklist_item': {
-      const ci = (await db('checklist_items').where({ id: targetId }).first()) as { card_id?: string } | undefined;
+      const ci = (await db('checklist_items').where({ id: targetId }).first()) as
+        | { card_id?: string }
+        | undefined;
       return ci?.card_id ?? null;
     }
-    case 'card_label': {
-      const cl = (await db('card_labels').where({ card_id: targetId }).first()) as { card_id?: string } | undefined;
-      return cl?.card_id ?? null;
-    }
+    case 'card_label':
     case 'card_member': {
-      const cm = (await db('card_members').where({ card_id: targetId }).first()) as { card_id?: string } | undefined;
-      return cm?.card_id ?? null;
+      // Join tables: provenance target_id is the composite key
+      // "<card_id>:<label_id|user_id>" — the parent card is its first part.
+      const key = decodeCompositeTargetId(entityType, targetId);
+      return key.card_id ?? null;
     }
     case 'custom_field_value': {
-      const cfv = (await db('card_custom_field_values').where({ id: targetId }).first()) as { card_id?: string } | undefined;
+      const cfv = (await db('card_custom_field_values').where({ id: targetId }).first()) as
+        | { card_id?: string }
+        | undefined;
       return cfv?.card_id ?? null;
     }
     default:

@@ -31,7 +31,7 @@ export function importDisabledResponse(): Response | null {
         message: 'Historical import extension is disabled (set HISTORICAL_IMPORT_ENABLED=true).',
       },
     },
-    { status: 503 },
+    { status: 503 }
   );
 }
 
@@ -39,7 +39,7 @@ export function importDisabledResponse(): Response | null {
 // workspace scope). GUEST/VIEWER/MEMBER/ADMIN are rejected.
 export async function requireImportOperator(
   req: AuthenticatedRequest,
-  workspaceId: string,
+  workspaceId: string
 ): Promise<Response | null> {
   const scoped = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scoped, workspaceId);
@@ -52,7 +52,7 @@ export async function requireImportOperator(
           message: 'Historical import requires workspace OWNER role',
         },
       },
-      { status: 403 },
+      { status: 403 }
     );
   }
   return null;
@@ -62,29 +62,37 @@ export async function requireImportOperator(
 // board each operation targets. All operations must resolve to a single
 // workspace, else the plan is rejected (no cross-workspace plans).
 export async function resolvePlanWorkspace(
-  targetBoardIds: string[],
+  targetBoardIds: string[]
 ): Promise<{ workspaceId: string } | { error: Response }> {
   if (targetBoardIds.length === 0) {
-    return { error: Response.json(
-      { error: { code: 'bad-request', message: 'plan targets no board — cannot authorize' } },
-      { status: 400 },
-    ) };
+    return {
+      error: Response.json(
+        { error: { code: 'bad-request', message: 'plan targets no board — cannot authorize' } },
+        { status: 400 }
+      ),
+    };
   }
   const boards = await db('boards').whereIn('id', targetBoardIds).select('id', 'workspace_id');
-  const byId = new Map(boards.map((b: { id: string; workspace_id: string }) => [b.id, b.workspace_id]));
+  const byId = new Map(
+    boards.map((b: { id: string; workspace_id: string }) => [b.id, b.workspace_id])
+  );
   const missing = targetBoardIds.filter((id) => !byId.has(id));
   if (missing.length > 0) {
-    return { error: Response.json(
-      { error: { code: 'board-not-found', message: `unknown board(s): ${missing.join(', ')}` } },
-      { status: 404 },
-    ) };
+    return {
+      error: Response.json(
+        { error: { code: 'board-not-found', message: `unknown board(s): ${missing.join(', ')}` } },
+        { status: 404 }
+      ),
+    };
   }
   const workspaces = new Set(targetBoardIds.map((id) => byId.get(id)));
   if (workspaces.size !== 1) {
-    return { error: Response.json(
-      { error: { code: 'bad-request', message: 'plan spans multiple workspaces — not allowed' } },
-      { status: 400 },
-    ) };
+    return {
+      error: Response.json(
+        { error: { code: 'bad-request', message: 'plan spans multiple workspaces — not allowed' } },
+        { status: 400 }
+      ),
+    };
   }
   return { workspaceId: workspaces.values().next().value as string };
 }

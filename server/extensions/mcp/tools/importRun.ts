@@ -23,15 +23,20 @@ export function registerImportDryRun(server: McpServer, token: string): void {
         return { content: [{ type: 'text', text: `Error: ${result.error.name}` }], isError: true };
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
-    },
+    }
   );
 }
 
 export function registerImportReset(server: McpServer, token: string): void {
   server.tool(
     'historical_import_reset',
-    'Reset provenance rows recorded by a plan hash (entity rows are never deleted). Requires OWNER.',
-    { planHash: z.string().regex(/^[0-9a-f]{64}$/).describe('The 64-hex plan hash to reset.') },
+    'Reset provenance rows recorded by a plan hash (provenance-only: entity rows are never deleted here). Requires OWNER. Destructive recovery is REST-only (POST /reset with recovery=true + confirm_destructive=true and the HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED server gate).',
+    {
+      planHash: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/)
+        .describe('The 64-hex plan hash to reset.'),
+    },
     async ({ planHash }) => {
       const result = await apiCall<{ data: unknown }>({
         method: 'POST',
@@ -43,6 +48,6 @@ export function registerImportReset(server: McpServer, token: string): void {
         return { content: [{ type: 'text', text: `Error: ${result.error.name}` }], isError: true };
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
-    },
+    }
   );
 }

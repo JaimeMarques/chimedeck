@@ -28,7 +28,14 @@ import {
   CARD_FINGERPRINT_FIELDS,
   COMMENT_FINGERPRINT_FIELDS,
   hashPlanDocument,
+  sha256Hex,
+  canonicalJson,
 } from './fingerprint';
+import {
+  COMPOSITE_KEY_COLUMNS,
+  isCompositeKeyEntity,
+  tryDecodeCompositeTargetId,
+} from './composite';
 
 // ---------------------------------------------------------------------------
 // Manifest types
@@ -98,14 +105,46 @@ export interface PlanValidationResult {
   ok: boolean;
   plan_hash: string;
   snapshot_hash: string | null;
+  // true when the operator pinned the expected source snapshot hash out of
+  // band (HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH); false => only shape-validated.
+  snapshot_hash_pinned: boolean;
+  // Fingerprint of the destination state observed for every target this plan
+  // touches. The operator must echo it back on apply (state-divergence stop).
+  destination_fingerprint: string;
   operations_total: number;
   errors: Array<{ op_id: string; code: string; message: string }>;
   warnings: Array<{ op_id: string; code: string; message: string }>;
 }
 
+// Out-of-band expectations supplied by the operator/server configuration, not
+// by the plan document itself (a plan must not be able to authorize its own
+// snapshot).
+export interface PlanExpectations {
+  // Frozen SHA-256 of the SOURCE snapshot the plan was built from. When set,
+  // the plan's declared snapshot_hash must match it exactly, else the plan is
+  // invalid and apply is refused (snapshot divergence stop).
+  expectedSnapshotHash?: string | null;
+}
+
+export interface DestinationObservation {
+  op_id: string;
+  entity_type: string;
+  target_id: string | null;
+  row_present: boolean;
+  row_fingerprint: string | null; // sha256 of the canonical full row
+  provenance_ref: string | null; // "<source_system>:<source_id>" when claimed
+}
+
+export interface DestinationState {
+  fingerprint: string;
+  entries: DestinationObservation[];
+}
+
 export interface PlanApplyResult {
   mode: 'dry-run' | 'apply';
   plan_hash: string;
+  snapshot_hash?: string | null;
+  destination_fingerprint: string;
   operations_total: number;
   operations_applied: number;
   operations_noop: number;
@@ -189,6 +228,65 @@ export interface ImporterDeps {
 }
 
 // ---------------------------------------------------------------------------
+// Destination state observation — the external drift stop.
+// ---------------------------------------------------------------------------
+
+// Observe, per operation, the destination row/claim this plan is about to act
+// on, and fold it into a single fingerprint. Computed BEFORE any write.
+//
+// [why] Fingerprint preconditions only protect individual `link` operations.
+// Apply had no witness of the destination state as a whole, so a plan could be
+// confirmed against one state and executed against another. The operator now
+// echoes this fingerprint back on apply; any change to a touched row, to its
+// claim, or to the presence of a target row makes apply refuse instead of
+// silently acting on drifted state.
+export async function observeDestination(
+  plan: ImportPlan,
+  deps: ImporterDeps
+): Promise<DestinationState> {
+  const entries: DestinationObservation[] = [];
+  for (const op of plan?.operations ?? []) {
+    const targetId =
+      typeof op?.target_id === 'string' && op.target_id.length > 0 ? op.target_id : null;
+    let row: Record<string, unknown> | null = null;
+    let provenance: ProvenanceRow | null = null;
+    if (targetId) {
+      row = await deps.fetchTarget(op.entity_type, targetId);
+      provenance = await deps.fetchProvenanceByTarget(op.entity_type, targetId);
+    }
+    entries.push({
+      op_id: op.op_id,
+      entity_type: op.entity_type,
+      target_id: targetId,
+      row_present: row !== null,
+      row_fingerprint: row ? fingerprintJson(row) : null,
+      provenance_ref: provenance ? `${provenance.source_system}:${provenance.source_id}` : null,
+    });
+  }
+  return { fingerprint: sha256Hex(canonicalJson(entries)), entries };
+}
+
+async function observeDestinationSafe(
+  plan: ImportPlan,
+  deps: ImporterDeps,
+  errors: PlanValidationResult['errors']
+): Promise<string> {
+  try {
+    const observed = await observeDestination(plan, deps);
+    return observed.fingerprint;
+  } catch (err: unknown) {
+    // Fail-closed: without an observation we cannot certify the destination
+    // state, so the plan must not be applicable.
+    errors.push({
+      op_id: 'plan',
+      code: 'destination-observation-failed',
+      message: `could not observe the destination state: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Validation — pure over the manifest + deps reads.
 // ---------------------------------------------------------------------------
 
@@ -204,6 +302,7 @@ export async function validatePlan(
   plan: unknown,
   deps: ImporterDeps,
   actorUserId: string,
+  expectations?: PlanExpectations
 ): Promise<PlanValidationResult> {
   const errors: PlanValidationResult['errors'] = [];
   const warnings: PlanValidationResult['warnings'] = [];
@@ -211,6 +310,8 @@ export async function validatePlan(
     ok: false,
     plan_hash: '',
     snapshot_hash: null,
+    snapshot_hash_pinned: false,
+    destination_fingerprint: '',
     operations_total: 0,
     errors,
     warnings,
@@ -225,10 +326,18 @@ export async function validatePlan(
     errors.push({ op_id: 'plan', code: 'plan-id-required', message: 'plan_id is required' });
   }
   if (!isNonEmptyString(p.source_system)) {
-    errors.push({ op_id: 'plan', code: 'source-system-required', message: 'source_system is required' });
+    errors.push({
+      op_id: 'plan',
+      code: 'source-system-required',
+      message: 'source_system is required',
+    });
   }
   if (typeof p.created_at !== 'string' || Number.isNaN(Date.parse(p.created_at))) {
-    errors.push({ op_id: 'plan', code: 'created-at-invalid', message: 'created_at must be an ISO timestamp' });
+    errors.push({
+      op_id: 'plan',
+      code: 'created-at-invalid',
+      message: 'created_at must be an ISO timestamp',
+    });
   }
   if (p.snapshot_hash !== undefined && p.snapshot_hash !== null && !isValidHash(p.snapshot_hash)) {
     errors.push({
@@ -237,8 +346,38 @@ export async function validatePlan(
       message: 'snapshot_hash must be a 64-hex sha256 (algorithm sha256-plan-v1)',
     });
   }
+  // Snapshot divergence stop. The plan cannot authorize its own snapshot: the
+  // expected value must come out of band (frozen artifact / server config).
+  // [why] Shape-only validation let a tampered snapshot_hash pass validate.
+  const pinnedSnapshot = isNonEmptyString(expectations?.expectedSnapshotHash ?? null)
+    ? (expectations?.expectedSnapshotHash as string)
+    : null;
+  result.snapshot_hash_pinned = pinnedSnapshot !== null;
+  if (pinnedSnapshot !== null) {
+    if (pinnedSnapshot !== (p.snapshot_hash ?? null)) {
+      errors.push({
+        op_id: 'plan',
+        code: 'snapshot-divergence',
+        message:
+          p.snapshot_hash === undefined || p.snapshot_hash === null
+            ? 'plan.snapshot_hash is required when snapshot pinning is enabled'
+            : `plan.snapshot_hash (${p.snapshot_hash.slice(0, 12)}…) diverges from the frozen snapshot hash (${pinnedSnapshot.slice(0, 12)}…)`,
+      });
+    }
+  } else {
+    warnings.push({
+      op_id: 'plan',
+      code: 'snapshot-hash-unpinned',
+      message:
+        'no expected snapshot hash configured (HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH): snapshot_hash is only shape-validated, not enforced against the frozen source snapshot',
+    });
+  }
   if (!Array.isArray(p.operations)) {
-    errors.push({ op_id: 'plan', code: 'operations-required', message: 'operations must be an array' });
+    errors.push({
+      op_id: 'plan',
+      code: 'operations-required',
+      message: 'operations must be an array',
+    });
     return result;
   }
 
@@ -260,7 +399,11 @@ export async function validatePlan(
     if (!isNonEmptyString(op.op_id)) {
       errors.push({ op_id: opId, code: 'op-id-required', message: 'op_id is required' });
     } else if (seenOpIds.has(op.op_id)) {
-      errors.push({ op_id: op.op_id, code: 'op-id-duplicate', message: `duplicate op_id ${op.op_id}` });
+      errors.push({
+        op_id: op.op_id,
+        code: 'op-id-duplicate',
+        message: `duplicate op_id ${op.op_id}`,
+      });
     } else {
       seenOpIds.add(op.op_id);
     }
@@ -313,7 +456,11 @@ export async function validatePlan(
         message: 'evidence_refs must be a non-empty array (e.g. trello-export action IDs)',
       });
     } else if (op.evidence_refs.some((r) => !isNonEmptyString(r))) {
-      errors.push({ op_id: opId, code: 'evidence-refs-invalid', message: 'evidence_refs entries must be non-empty strings' });
+      errors.push({
+        op_id: opId,
+        code: 'evidence-refs-invalid',
+        message: 'evidence_refs entries must be non-empty strings',
+      });
     }
 
     if (op.expected_target_fingerprint !== null && op.expected_target_fingerprint !== undefined) {
@@ -326,12 +473,44 @@ export async function validatePlan(
       }
     }
 
-    if (op.payload_ref !== null && op.payload_ref !== undefined && !isNonEmptyString(op.payload_ref)) {
-      errors.push({ op_id: opId, code: 'payload-ref-invalid', message: 'payload_ref must be a non-empty string or null' });
+    if (
+      op.payload_ref !== null &&
+      op.payload_ref !== undefined &&
+      !isNonEmptyString(op.payload_ref)
+    ) {
+      errors.push({
+        op_id: opId,
+        code: 'payload-ref-invalid',
+        message: 'payload_ref must be a non-empty string or null',
+      });
+    }
+
+    // Composite-key (join-table) entities: the row identity IS the composite
+    // key, and the destination table has no surrogate id column, so target_id
+    // is mandatory and must decode into the declared key columns. The engine
+    // never synthesises an id for these rows.
+    if (isCompositeKeyEntity(op.entity_type)) {
+      const columns = COMPOSITE_KEY_COLUMNS[op.entity_type] as readonly string[];
+      if (!isNonEmptyString(op.target_id)) {
+        errors.push({
+          op_id: opId,
+          code: 'composite-target-required',
+          message: `${op.entity_type} requires target_id "${columns.join(':')}" (composite-key table without an id column)`,
+        });
+      } else {
+        const decoded = tryDecodeCompositeTargetId(op.entity_type, op.target_id);
+        if (decoded && 'error' in decoded) {
+          errors.push({ op_id: opId, code: decoded.error.code, message: decoded.error.message });
+        }
+      }
     }
 
     if (!Array.isArray(op.dependencies)) {
-      errors.push({ op_id: opId, code: 'dependencies-invalid', message: 'dependencies must be an array of op_ids' });
+      errors.push({
+        op_id: opId,
+        code: 'dependencies-invalid',
+        message: 'dependencies must be an array of op_ids',
+      });
     }
 
     // duplicate source identity within one plan
@@ -373,10 +552,15 @@ export async function validatePlan(
   const adjacency = new Map<string, string[]>();
   for (const op of p.operations) {
     if (op && typeof op === 'object' && isNonEmptyString(op.op_id)) {
-      adjacency.set(op.op_id, (op.dependencies ?? []).filter((d) => seenOpIds.has(d) && d !== op.op_id));
+      adjacency.set(
+        op.op_id,
+        (op.dependencies ?? []).filter((d) => seenOpIds.has(d) && d !== op.op_id)
+      );
     }
   }
-  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const WHITE = 0,
+    GRAY = 1,
+    BLACK = 2;
   const color = new Map<string, number>();
   const reportCycle = (start: string) => {
     errors.push({
@@ -421,6 +605,11 @@ export async function validatePlan(
   const planHash = hashPlanDocument({ ...p, plan_hash: undefined, snapshot_hash: p.snapshot_hash });
   result.plan_hash = planHash;
   result.snapshot_hash = p.snapshot_hash ?? null;
+  // Observe the destination only for a contract-valid plan: an invalid plan is
+  // never applicable, and a malformed composite key would otherwise surface as
+  // a second, confusing error.
+  result.destination_fingerprint =
+    errors.length === 0 ? await observeDestinationSafe(p, deps, errors) : '';
   result.ok = errors.length === 0;
 
   await deps.writeAudit({
@@ -431,7 +620,14 @@ export async function validatePlan(
     operations_applied: 0,
     operations_noop: 0,
     operations_failed: 0,
-    detail: { ok: result.ok, errors: errors.length, warnings: warnings.length, plan_id: p.plan_id },
+    detail: {
+      ok: result.ok,
+      errors: errors.length,
+      warnings: warnings.length,
+      plan_id: p.plan_id,
+      snapshot_hash_pinned: result.snapshot_hash_pinned,
+      destination_fingerprint: result.destination_fingerprint,
+    },
   });
 
   return result;
@@ -445,6 +641,8 @@ interface ExecutionContext {
   mode: 'dry-run' | 'apply';
   plan: ImportPlan;
   planHash: string;
+  snapshotHash: string | null;
+  destinationFingerprint: string;
   deps: ImporterDeps;
   outcomes: OpOutcome[];
   counts: { applied: number; noop: number; blocked: number; failed: number };
@@ -503,7 +701,8 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       // author identity rides in evidence convention: provenance.source_id is
       // the entity; the author identity map is consulted by adapters via
       // payload_ref. Here we resolve the plan's declared author when present.
-      const declaredAuthor = (op as ImportOperation & { historical_author?: string }).historical_author;
+      const declaredAuthor = (op as ImportOperation & { historical_author?: string })
+        .historical_author;
       if (isNonEmptyString(declaredAuthor)) {
         const resolved = await deps.resolveIdentity(plan.source_system, declaredAuthor);
         if (!resolved) {
@@ -588,6 +787,19 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
     }
 
     // operation === 'create'
+    // (3a) composite-key rows have no id column and no synthesised id: the
+    // composite key is the identity, so it must have been resolved by the
+    // plan (validation enforces this; this is defence in depth).
+    if (!targetId && isCompositeKeyEntity(op.entity_type)) {
+      ctx.outcomes.push({
+        status: 'blocked',
+        op_id: op.op_id,
+        reason: `${op.entity_type} requires a composite target_id "<card_id>:<${(COMPOSITE_KEY_COLUMNS[op.entity_type] as readonly string[])[1] as string}>" (table has no id column)`,
+      });
+      ctx.counts.blocked++;
+      return;
+    }
+
     // (3a) if a target_id is pre-declared, it must not exist (no overwrite).
     if (targetId) {
       const existingRow = await deps.fetchTarget(op.entity_type, targetId);
@@ -714,6 +926,8 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
   return {
     mode: ctx.mode,
     plan_hash: planHash,
+    snapshot_hash: ctx.snapshotHash,
+    destination_fingerprint: ctx.destinationFingerprint,
     operations_total: plan.operations.length,
     operations_applied: ctx.counts.applied,
     operations_noop: ctx.counts.noop,
@@ -732,12 +946,15 @@ export async function dryRunPlan(
   plan: ImportPlan,
   deps: ImporterDeps,
   actorUserId: string,
+  expectations?: PlanExpectations
 ): Promise<PlanApplyResult> {
-  const validation = await validatePlan(plan, deps, actorUserId);
+  const validation = await validatePlan(plan, deps, actorUserId, expectations);
   if (!validation.ok) {
     return {
       mode: 'dry-run',
       plan_hash: validation.plan_hash,
+      snapshot_hash: validation.snapshot_hash,
+      destination_fingerprint: validation.destination_fingerprint,
       operations_total: validation.operations_total,
       operations_applied: 0,
       operations_noop: 0,
@@ -752,6 +969,8 @@ export async function dryRunPlan(
     mode: 'dry-run',
     plan,
     planHash: validation.plan_hash,
+    snapshotHash: validation.snapshot_hash,
+    destinationFingerprint: validation.destination_fingerprint,
     deps,
     outcomes: [],
     counts: { applied: 0, noop: 0, blocked: 0, failed: 0 },
@@ -778,19 +997,34 @@ export async function dryRunPlan(
 export interface ApplyGates {
   applyEnabled: boolean; // env HISTORICAL_IMPORT_APPLY_ENABLED === 'true'
   confirmedPlanHash: string; // operator-confirmed hash from validation/dry-run
+  // Destination-state witness: the fingerprint returned by validate/dry-run,
+  // echoed back by the operator. Required (fail-closed) — a stale value means
+  // the destination changed between confirmation and apply.
+  confirmedDestinationFingerprint?: string | null;
+  // Out-of-band expectations (frozen snapshot hash). Not plan-supplied.
+  expectations?: PlanExpectations;
 }
 
 export async function applyPlan(
   plan: ImportPlan,
   gates: ApplyGates,
   deps: ImporterDeps,
-  actorUserId: string,
+  actorUserId: string
 ): Promise<PlanApplyResult | { error: string; code: string }> {
   if (!gates.applyEnabled) {
-    return { error: 'apply is disabled: set HISTORICAL_IMPORT_APPLY_ENABLED=true to enable', code: 'apply-disabled' };
+    return {
+      error: 'apply is disabled: set HISTORICAL_IMPORT_APPLY_ENABLED=true to enable',
+      code: 'apply-disabled',
+    };
   }
-  const validation = await validatePlan(plan, deps, actorUserId);
+  const validation = await validatePlan(plan, deps, actorUserId, gates.expectations);
   if (!validation.ok) {
+    const snapshotError = validation.errors.find(
+      (e) => e.code === 'snapshot-divergence' || e.code === 'snapshot-hash-invalid'
+    );
+    if (snapshotError) {
+      return { error: snapshotError.message, code: 'snapshot-divergence' };
+    }
     return { error: 'plan failed validation', code: 'plan-invalid' };
   }
   if (gates.confirmedPlanHash !== validation.plan_hash) {
@@ -799,10 +1033,28 @@ export async function applyPlan(
       code: 'plan-hash-mismatch',
     };
   }
+  // Destination-state stop: apply only onto the exact state the operator
+  // confirmed. Missing confirmation is refused, not defaulted.
+  const confirmedDestination = gates.confirmedDestinationFingerprint ?? null;
+  if (!confirmedDestination || !/^[0-9a-f]{64}$/.test(confirmedDestination)) {
+    return {
+      error:
+        'confirmed_destination_fingerprint is required: re-run validate/dry-run and echo the returned destination_fingerprint',
+      code: 'destination-state-unconfirmed',
+    };
+  }
+  if (confirmedDestination !== validation.destination_fingerprint) {
+    return {
+      error: `destination state diverged: confirmed ${confirmedDestination.slice(0, 12)}… but observed ${validation.destination_fingerprint.slice(0, 12)}… — re-run validate/dry-run`,
+      code: 'destination-state-divergence',
+    };
+  }
   const ctx: ExecutionContext = {
     mode: 'apply',
     plan,
     planHash: validation.plan_hash,
+    snapshotHash: validation.snapshot_hash,
+    destinationFingerprint: validation.destination_fingerprint,
     deps,
     outcomes: [],
     counts: { applied: 0, noop: 0, blocked: 0, failed: 0 },
@@ -821,19 +1073,59 @@ export async function applyPlan(
       blocked: result.operations_blocked,
       stopped_early: result.stopped_early,
       plan_id: plan.plan_id,
+      destination_fingerprint: result.destination_fingerprint,
+      snapshot_hash: result.snapshot_hash,
     },
   });
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Reset and recovery
+// ---------------------------------------------------------------------------
+
+export interface CreatedTargetRef {
+  entity_type: string;
+  target_id: string;
+}
+
+export interface ResetResult {
+  cleared: number;
+  // Rows created by this plan that still exist after a provenance-only reset.
+  // They are the reason a plain reset cannot be re-applied: the engine refuses
+  // to overwrite rows with no provenance. Reported so the operator is never
+  // surprised by "already exists without provenance".
+  created_targets_remaining: CreatedTargetRef[];
+  recovery: 'provenance-only';
+  recovery_note: string;
+}
+
+export interface RecoveryOptions {
+  confirmDestructive: boolean; // caller must explicitly acknowledge deletions
+  recoveryEnabled: boolean; // server gate HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED
+}
+
+export interface RecoveryReport {
+  ok: boolean;
+  mode: 'recovery';
+  deleted: number;
+  provenance_cleared: number;
+  already_absent: number;
+  // Where the delete candidates came from: live provenance, or the audit trail
+  // when a provenance-only reset already ran for this plan hash.
+  candidates_from?: 'provenance' | 'audit';
+  blockers: Array<{ code: string; detail: string }>;
+}
+
 // Reset: clears provenance for a plan hash so a corrected plan can be re-run.
-// Never deletes native entity rows — only provenance and audit remain,
-// the entity rows created by the plan stay (documented limitation, see docs).
+// Never deletes native entity rows — only provenance; the entity rows created
+// by the plan stay. Use recoverPlan() for the destructive variant.
 export async function resetPlan(
   planHash: string,
   deps: ImporterDeps,
-  actorUserId: string,
-): Promise<{ cleared: number }> {
+  actorUserId: string
+): Promise<ResetResult> {
+  const created = await listCreatedTargets(deps, planHash);
   const cleared = await depsClearProvenance(deps, planHash);
   await deps.writeAudit({
     actor_user_id: actorUserId,
@@ -843,17 +1135,100 @@ export async function resetPlan(
     operations_applied: 0,
     operations_noop: 0,
     operations_failed: 0,
-    detail: { cleared },
+    detail: {
+      cleared,
+      mode: 'provenance-only',
+      created_targets_remaining: created.length,
+      // The authoritative record of what this plan created. Kept in the
+      // append-only audit log so an operator who resets first (before
+      // recovering) can still recover afterwards: the adapter reconstructs its
+      // delete candidates from here when provenance is already gone.
+      created_targets: created,
+    },
   });
-  return { cleared };
+  return {
+    cleared,
+    created_targets_remaining: created,
+    recovery: 'provenance-only',
+    recovery_note:
+      'provenance-only reset: entity rows created by this plan remain and will block a re-apply ("already exists without provenance"). Recover by restoring the pre-apply backup, or use reset with recovery=true + confirm_destructive=true when the plan rows are leaf-owned (see docs/historical-import.md).',
+  };
 }
 
-// Adapter hook — adapters implement this; tests stub it.
+// Destructive recovery: delete the rows this plan CREATED, then clear its
+// provenance, so the same (corrected) plan can be re-executed without a
+// restore. Every safety check lives in the adapter, which refuses (and rolls
+// back) whenever a row outside the plan's own creation set would be affected.
+export async function recoverPlan(
+  planHash: string,
+  deps: ImporterDeps,
+  actorUserId: string,
+  options: RecoveryOptions
+): Promise<RecoveryReport | { error: string; code: string }> {
+  if (!options.recoveryEnabled) {
+    return {
+      error:
+        'destructive recovery is disabled: set HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED=true (restore-based recovery does not need it)',
+      code: 'recovery-disabled',
+    };
+  }
+  if (!options.confirmDestructive) {
+    return {
+      error:
+        'recovery deletes entity rows created by this plan: pass confirm_destructive=true to acknowledge',
+      code: 'destructive-confirmation-required',
+    };
+  }
+  const recover = (deps as RecoverableDeps).recoverByPlan;
+  if (typeof recover !== 'function') {
+    return { error: 'adapter does not support destructive recovery', code: 'recovery-unsupported' };
+  }
+  // Keep the receiver: the hook may be implemented as a class method (tests do)
+  // that relies on `this`; the knex adapter's is a module-level function.
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- see above
+  const report = await recover.call(deps, planHash);
+  await deps.writeAudit({
+    actor_user_id: actorUserId,
+    action: 'reset',
+    import_plan_hash: planHash,
+    operations_total: 0,
+    operations_applied: 0,
+    operations_noop: 0,
+    operations_failed: 0,
+    detail: {
+      mode: 'recovery',
+      ok: report.ok,
+      deleted: report.deleted,
+      provenance_cleared: report.provenance_cleared,
+      already_absent: report.already_absent,
+      blockers: report.blockers.map((b) => b.code),
+    },
+  });
+  return report;
+}
+
+// Adapter hooks — production implements them (./adapters.ts); tests stub them.
 interface ClearableDeps extends ImporterDeps {
   clearProvenanceByPlan?(planHash: string): Promise<number>;
+  listProvenanceByPlan?(planHash: string): Promise<ProvenanceRow[]>;
+  recoverByPlan?(planHash: string): Promise<RecoveryReport>;
 }
+type RecoverableDeps = ClearableDeps;
+
 function depsClearProvenance(deps: ImporterDeps, planHash: string): Promise<number> {
   const c = deps as ClearableDeps;
   if (typeof c.clearProvenanceByPlan === 'function') return c.clearProvenanceByPlan(planHash);
   return Promise.resolve(0);
+}
+
+async function listCreatedTargets(
+  deps: ImporterDeps,
+  planHash: string
+): Promise<CreatedTargetRef[]> {
+  const c = deps as ClearableDeps;
+  if (typeof c.listProvenanceByPlan !== 'function') return [];
+  const rows = await c.listProvenanceByPlan(planHash);
+  return rows
+    .filter((row) => row.operation === 'create')
+    .map((row) => ({ entity_type: row.entity_type, target_id: row.target_id }));
 }
