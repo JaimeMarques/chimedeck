@@ -45,7 +45,7 @@
 // OPERATOR; historical authors are recorded in import_provenance + payload.
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
-import { importDisabledResponse, requireImportOperator, resolvePlanWorkspace } from './authorize';
+import { importDisabledResponse, planAuthorizationWitnesses, requireImportOperator, resolvePlanWorkspace } from './authorize';
 import {
   applyPlan,
   dryRunPlan,
@@ -83,20 +83,9 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
 }
 
 // Boards referenced by a plan (payloads are private; authorization resolves
-// from op target boards for board/list ops and op.provenance.board_id for
-// entity ops — carried as provenance.board_id when present).
-function planTargetBoards(plan: ImportPlan): string[] {
-  const boards = new Set<string>();
-  for (const op of plan?.operations ?? []) {
-    const b = (op as ImportOperationExtra).provenance?.board_id;
-    if (typeof b === 'string' && b) boards.add(b);
-    if (op?.entity_type === 'board' && op.target_id) boards.add(op.target_id);
-  }
-  return [...boards];
-}
-interface ImportOperationExtra {
-  provenance?: { board_id?: string };
-}
+// from op target boards for board/list ops and op.provenance.board_id for entity
+// ops — carried as provenance.board_id when present), including the workspace
+// witness of every board the plan itself creates.
 
 export async function historicalImportRouter(
   req: Request,
@@ -127,13 +116,13 @@ export async function historicalImportRouter(
     const body = await readJson(req);
     const plan = body?.plan as ImportPlan | undefined;
     if (!plan) return badRequest('body.plan is required');
-    const boards = planTargetBoards(plan);
-    const ws = await resolvePlanWorkspace(boards);
+    // Authorization consumes the adapter's out-of-band board-create witness
+    // proof, so deps are created before the workspace is resolved.
+    const deps = await createDeps();
+    const ws = await resolvePlanWorkspace(planAuthorizationWitnesses(plan), deps);
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
     if (authz) return authz;
-
-    const deps = await createDeps();
     const validation = await validatePlan(plan, deps, actorId, readExpectations());
     return Response.json({ data: { validation } });
   }
@@ -143,13 +132,13 @@ export async function historicalImportRouter(
     const body = await readJson(req);
     const plan = body?.plan as ImportPlan | undefined;
     if (!plan) return badRequest('body.plan is required');
-    const boards = planTargetBoards(plan);
-    const ws = await resolvePlanWorkspace(boards);
+    // Authorization consumes the adapter's out-of-band board-create witness
+    // proof, so deps are created before the workspace is resolved.
+    const deps = await createDeps();
+    const ws = await resolvePlanWorkspace(planAuthorizationWitnesses(plan), deps);
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
     if (authz) return authz;
-
-    const deps = await createDeps();
     const result = (await dryRunPlan(
       plan,
       deps,
@@ -197,13 +186,13 @@ export async function historicalImportRouter(
         'body.confirmed_destination_fingerprint is required (64-hex): re-run validate/dry-run and echo destination_fingerprint'
       );
     }
-    const boards = planTargetBoards(plan);
-    const ws = await resolvePlanWorkspace(boards);
+    // Authorization consumes the adapter's out-of-band board-create witness
+    // proof, so deps are created before the workspace is resolved.
+    const deps = await createDeps();
+    const ws = await resolvePlanWorkspace(planAuthorizationWitnesses(plan), deps);
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
     if (authz) return authz;
-
-    const deps = await createDeps();
     const result = await applyPlan(
       plan,
       {
@@ -253,12 +242,17 @@ export async function historicalImportRouter(
     }
     const entityTableBoard = await resolveBoardForEntity(row.entity_type, row.target_id);
     if (!entityTableBoard) return badRequest('cannot resolve workspace for plan — reset denied');
-    const ws = await resolvePlanWorkspace([entityTableBoard]);
+    // Reset authorises against an existing board only (the plan's own witness is
+    // not applicable: reset is addressed by a provenance row, not a plan).
+    const deps = await createDeps();
+    const ws = await resolvePlanWorkspace(
+      { existingBoardIds: [entityTableBoard], boardCreates: [] },
+      deps
+    );
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
     if (authz) return authz;
 
-    const deps = await createDeps();
     if (!recovery) {
       const result = await resetPlan(planHash, deps, actorId);
       return Response.json({ data: result });

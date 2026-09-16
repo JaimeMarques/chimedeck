@@ -149,6 +149,17 @@ export interface CreateWithProvenanceInput {
   operation: Operation;
 }
 
+// A rehearsal (dry-run) runs every operation inside ONE transaction: each
+// operation gets a savepoint it can release on success or roll back on failure,
+// so pending writes are visible to the operations that depend on them while the
+// scope's own rollback still discards everything. Outside a rehearsal every
+// operation owns a whole transaction.
+export interface OperationTransaction {
+  trx: Knex.Transaction;
+  nested: boolean;
+}
+export type OpenOperationTransaction = () => Promise<OperationTransaction>;
+
 // Shared create body: resolve + verify the staged payload, resolve the
 // historical author, then (in one transaction) insert the entity row and its
 // provenance row. `mode: 'dry-run'` rolls the transaction back instead of
@@ -157,7 +168,8 @@ export interface CreateWithProvenanceInput {
 async function performCreate(
   input: CreateWithProvenanceInput,
   mode: 'apply' | 'dry-run',
-  identityMap: Map<string, string>
+  identityMap: Map<string, string>,
+  openTrx?: OpenOperationTransaction
 ): Promise<{ target_id: string; created: boolean }> {
   const { entity_type, source_id, target_id, payload_ref, plan_hash, operation } = input;
   const table = ENTITY_TABLES[entity_type];
@@ -190,7 +202,10 @@ async function performCreate(
     if (!user) throw new Error(`mapped user ${authorUserId} does not exist`);
   }
 
-  const trx = await db.transaction();
+  const opened: OperationTransaction = openTrx
+    ? await openTrx()
+    : { trx: await db.transaction(), nested: false };
+  const trx = opened.trx;
   try {
     const existingProv = await trx('import_provenance').where({ entity_type, source_id }).first();
     if (existingProv) {
@@ -285,8 +300,11 @@ async function performCreate(
     });
     if (mode === 'dry-run') {
       // Rehearsal: the write path above is validated by the real schema
-      // (NOT NULL/CHECK/FK/unique), then discarded.
-      await trx.rollback();
+      // (NOT NULL/CHECK/FK/unique), then discarded. Inside a rehearsal scope the
+      // savepoint is released instead, so the operations that depend on this row
+      // see the pending write (the scope rollback still discards everything).
+      if (opened.nested) await trx.commit();
+      else await trx.rollback();
       return { target_id, created: false };
     }
     await trx.commit();
@@ -322,7 +340,8 @@ function sameProjectedFields(
 async function performMutation(
   input: MutationInput,
   mode: 'apply' | 'dry-run',
-  identityMap: Map<string, string>
+  identityMap: Map<string, string>,
+  openTrx?: OpenOperationTransaction
 ): Promise<MutationResult> {
   const payload = await readVerifiedStagedPayload(input.payload_ref);
   if (!payload) throw new Error(`no staged payload resolved for mutation ${input.source_id}`);
@@ -337,7 +356,10 @@ async function performMutation(
     throw new Error('mutation expected fields do not match expected fingerprint');
   }
 
-  const trx = await db.transaction();
+  const opened: OperationTransaction = openTrx
+    ? await openTrx()
+    : { trx: await db.transaction(), nested: false };
+  const trx = opened.trx;
   try {
     const table = ENTITY_TABLES[input.entity_type];
     const current = (await trx(table).where({ id: input.target_id }).forUpdate().first()) as
@@ -516,8 +538,12 @@ async function performMutation(
     if (!sameProjectedFields(after, patch, fields))
       throw new Error('mutation postcondition failed');
 
-    if (mode === 'dry-run') await trx.rollback();
-    else await trx.commit();
+    if (mode === 'dry-run') {
+      if (opened.nested) await trx.commit();
+      else await trx.rollback();
+    } else {
+      await trx.commit();
+    }
     return { status: 'applied', target_id: input.target_id };
   } catch (err) {
     if (!trx.isCompleted()) await trx.rollback();
@@ -543,8 +569,76 @@ const COMPOSITE_REFERENCES: Record<string, ReadonlyArray<{ column: string; table
 
 export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
   const trxOf = async (): Promise<Knex.Transaction> => db.transaction();
+  // Dry-run rehearsal scope: ONE transaction shared by every operation of a
+  // rehearsal. Each operation runs inside a savepoint so a failing operation can
+  // be rolled back on its own, while a successful one stays visible to the ops
+  // that depend on it (a created card's cover attachment and cover enrich can
+  // only be rehearsed against the plan's own pending writes). The whole scope is
+  // rolled back in endDryRunScope — nothing durable survives.
+  let rehearsalScope: Knex.Transaction | null = null;
+
+  const beginOperation = async (): Promise<OperationTransaction> => {
+    if (rehearsalScope) {
+      return { trx: (await rehearsalScope.transaction()) as Knex.Transaction, nested: true };
+    }
+    return { trx: await trxOf(), nested: false };
+  };
 
   return {
+    async beginDryRunScope() {
+      if (rehearsalScope) throw new Error('nested dry-run rehearsal scope');
+      rehearsalScope = await db.transaction();
+    },
+
+    async endDryRunScope() {
+      const scope = rehearsalScope;
+      rehearsalScope = null;
+      if (!scope) return;
+      // Rollback, never commit: the rehearsal must leave the destination exactly
+      // as it was, and writeAudit runs outside the scope afterwards.
+      await scope.rollback();
+    },
+
+    async resolveBoardCreateWorkspace({ source_id, payload_ref }) {
+      // Authorization witness for a board CREATE. The workspace is proven from
+      // the staged board payload (identity + workspace_id) plus the same owner
+      // gate the create path enforces — never from the plan's own claim.
+      try {
+        const payload = await readVerifiedStagedPayload(payload_ref);
+        if (!payload) return { error: 'board create requires a staged board payload' };
+        if (payload.entity_type !== 'board' || payload.source_id !== source_id) {
+          return { error: 'staged payload identity does not match the board create operation' };
+        }
+        const workspaceId = payload.fields.workspace_id;
+        if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+          return { error: 'staged board payload requires a workspace_id' };
+        }
+        const workspace = (await db('workspaces').where({ id: workspaceId }).first()) as
+          | { owner_id?: string }
+          | undefined;
+        if (!workspace) return { error: 'staged board payload workspace does not exist' };
+        if (typeof payload.historical_author !== 'string' || payload.historical_author.length === 0) {
+          return { error: 'staged board payload requires a historical_author' };
+        }
+        const authorUserId = identityMap.get(payload.historical_author) ?? null;
+        if (!authorUserId) {
+          return { error: `unresolved historical identity: ${payload.historical_author}` };
+        }
+        if (workspace.owner_id !== authorUserId) {
+          return { error: 'board historical_author must resolve to the workspace owner' };
+        }
+        const membership = await db('memberships')
+          .where({ workspace_id: workspaceId, user_id: authorUserId, role: 'OWNER' })
+          .first();
+        if (!membership) return { error: 'workspace owner is missing an OWNER membership' };
+        return { workspace_id: workspaceId };
+      } catch (err: unknown) {
+        // Unreadable, unverified (manifest SHA-256) or escapeless payload: the
+        // witness cannot be proven, so the plan must not be authorized.
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
     async fetchTarget(entityType, targetId) {
       const table = ENTITY_TABLES[entityType];
       // Join tables (card_labels, card_members) have no id column: address the
@@ -581,14 +675,14 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     },
 
     createWithProvenance(input) {
-      return performCreate(input, 'apply', identityMap);
+      return performCreate(input, 'apply', identityMap, beginOperation);
     },
 
     // Dry-run preflight invokes the identical verified-payload/create body in
     // a rolled-back transaction, including composite-key row validation.
     async preflightCreate(input) {
       try {
-        await performCreate(input, 'dry-run', identityMap);
+        await performCreate(input, 'dry-run', identityMap, beginOperation);
         return { ok: true } as const;
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) } as const;
@@ -596,11 +690,11 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     },
 
     mutateWithProvenance(input) {
-      return performMutation(input, 'apply', identityMap);
+      return performMutation(input, 'apply', identityMap, beginOperation);
     },
 
     preflightMutation(input) {
-      return performMutation(input, 'dry-run', identityMap);
+      return performMutation(input, 'dry-run', identityMap, beginOperation);
     },
 
     async linkProvenance({ entity_type, source_id, target_id, plan_hash }) {

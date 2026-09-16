@@ -53,6 +53,51 @@ export class MemoryImporterDeps implements ImporterDeps {
   dispatchedDomainEvents: string[] = []; // must stay empty (suppression proof)
   concurrencyOverwrite: 'none' | 'provenance-race' = 'none';
 
+  // Authorization witness fixture for board creates: board source_id => the
+  // workspace proven from the staged board payload + destination owner gate.
+  // An absent entry means the witness cannot be proven (fail-closed) — the same
+  // outcome as an unreadable, unverified or owner-incoherent staged payload.
+  boardCreateWorkspaces = new Map<string, string>();
+
+  // Dry-run rehearsal scope (mirrors the knex adapter's single rehearsal
+  // transaction): writes performed inside the scope are visible to later
+  // operations and are discarded when the scope ends.
+  private scopeSnapshot: { rows: Map<string, Record<string, unknown>>; provenance: ProvenanceRow[] } | null =
+    null;
+
+  get inDryRunScope(): boolean {
+    return this.scopeSnapshot !== null;
+  }
+
+  async beginDryRunScope(): Promise<void> {
+    if (this.scopeSnapshot) throw new Error('nested dry-run scope');
+    this.scopeSnapshot = { rows: new Map(this.rows), provenance: [...this.provenance] };
+  }
+
+  async endDryRunScope(): Promise<void> {
+    const snapshot = this.scopeSnapshot;
+    this.scopeSnapshot = null;
+    if (!snapshot) return;
+    this.rows = snapshot.rows;
+    this.provenance = snapshot.provenance;
+  }
+
+  async resolveBoardCreateWorkspace(input: {
+    source_id: string;
+    payload_ref: string | null;
+  }): Promise<{ workspace_id: string } | { error: string }> {
+    if (!input.payload_ref) return { error: 'board create requires a staged board payload' };
+    const payload = this.payloadStore.get(input.payload_ref);
+    if (!payload || payload.entity_type !== 'board' || payload.source_id !== input.source_id) {
+      return { error: 'staged payload identity does not match the board create operation' };
+    }
+    const workspaceId = this.boardCreateWorkspaces.get(input.source_id);
+    if (!workspaceId) {
+      return { error: 'board create witness cannot be proven from the staged payload' };
+    }
+    return { workspace_id: workspaceId };
+  }
+
   constructor(identityMap: Record<string, string>, payloads?: Record<string, unknown>) {
     this.identityMap = new Map(Object.entries(identityMap));
     this.payloadStore = new Map(
@@ -102,11 +147,22 @@ export class MemoryImporterDeps implements ImporterDeps {
     }
     if (this.failCreateFor.has(key))
       return { ok: false, reason: `injected failure creating ${key}` };
+    // Inside a rehearsal scope the real adapter runs the same INSERTs as apply
+    // (visible to later ops, discarded when the scope ends), so the mirror does
+    // too instead of only checking preconditions.
+    if (this.scopeSnapshot) {
+      try {
+        await this.createWithProvenance(input);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    }
     return { ok: true };
   }
 
   async preflightMutation(input: MutationInput): Promise<MutationResult> {
-    return this.performMutation(input, false);
+    return this.performMutation(input, this.scopeSnapshot !== null);
   }
 
   async mutateWithProvenance(input: MutationInput): Promise<MutationResult> {
@@ -236,7 +292,14 @@ export class MemoryImporterDeps implements ImporterDeps {
       delete fields.id;
       row = { ...fields, ...compositeKey };
     } else {
-      row = { id: input.target_id, ...fields };
+      // Mirror the destination schema defaults (migration 0090_card_cover): a
+      // created card starts with an empty cover, which is the only pre-image the
+      // cover enrich accepts.
+      const cardDefaults =
+        input.entity_type === 'card'
+          ? { cover_attachment_id: null, cover_color: null, cover_size: 'SMALL' }
+          : {};
+      row = { id: input.target_id, ...cardDefaults, ...fields };
       if (input.entity_type === 'comment') {
         if (!authorUserId) throw new Error('comment payload requires a resolved historical_author');
         row.user_id = authorUserId;

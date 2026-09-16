@@ -73,6 +73,13 @@ export interface ImportProvenanceInfo {
   // Board whose workspace authorizes this operation (optional for
   // board-level ops where target_id is the board itself).
   board_id?: string;
+  // Workspace authorization witness for a board CREATE operation. A board that
+  // does not exist yet cannot be resolved from the boards table, so the op
+  // declares the workspace it will land in. The value is NEVER self-authorizing:
+  // the API cross-checks it against the workspace_id of the staged board payload
+  // and against the owner gate the create path enforces (the payload's
+  // historical_author must be workspaces.owner_id with an OWNER membership).
+  workspace_id?: string;
 }
 
 export interface ImportOperation {
@@ -237,6 +244,24 @@ export interface ImporterDeps {
   // provenance write/verification so they are one atomic decision.
   mutateWithProvenance(input: MutationInput): Promise<MutationResult>;
   preflightMutation(input: MutationInput): Promise<MutationResult>;
+  // Authorization witness for a board CREATE: the workspace the staged board
+  // payload will land in, proven against the same invariants the create path
+  // enforces — payload identity, an existing workspace, and a historical author
+  // that is the workspace OWNER with an OWNER membership. The plan's own claim
+  // (`provenance.workspace_id`) is never trusted: this is the out-of-band proof
+  // the API cross-checks it against.
+  resolveBoardCreateWorkspace(input: {
+    source_id: string;
+    payload_ref: string | null;
+  }): Promise<{ workspace_id: string } | { error: string }>;
+  // Dry-run rehearsal scope. Every operation of one rehearsal runs in a single
+  // scope so a write is visible to the operations that depend on it: an
+  // attachment-backed cover (card create -> attachment create -> card enrich)
+  // can only be rehearsed against its own pending writes, exactly as apply does
+  // — but nothing may survive endDryRunScope(). Implementations that omit the
+  // scope fall back to per-operation rehearsals.
+  beginDryRunScope?(): Promise<void>;
+  endDryRunScope?(): Promise<void>;
   // Link an existing target row to a source identity (provenance insert only).
   linkProvenance(input: {
     entity_type: EntityType;
@@ -346,6 +371,59 @@ function hasExactFields(
   );
 }
 
+// The single duplicate source identity a plan may contain: a card `create|link`
+// followed by that same card's cover `enrich`, where the enrich depends directly
+// on both the materialisation and the import-owned cover attachment (an
+// attachment create|link planned against that same card).
+//
+// Returns null when the chain is valid, else the violation to report against the
+// duplicate operation. Anything that is not this shape is the generic
+// `duplicate-source` refusal.
+function coverChainViolation(
+  materialisation: ImportOperation,
+  enrich: ImportOperation,
+  opsById: Map<string, ImportOperation>
+): { code: string; message: string } | null {
+  const key = `${materialisation.entity_type}:${materialisation.source_id}`;
+  const duplicateSource = {
+    code: 'duplicate-source',
+    message: `duplicate source entity ${key} within plan`,
+  };
+  const chainShape =
+    materialisation.entity_type === 'card' &&
+    enrich.entity_type === 'card' &&
+    isNonEmptyString(materialisation.target_id) &&
+    materialisation.target_id === enrich.target_id &&
+    (materialisation.operation === 'create' || materialisation.operation === 'link') &&
+    enrich.operation === 'enrich';
+  if (!chainShape) return duplicateSource;
+
+  const dependencies = Array.isArray(enrich.dependencies) ? enrich.dependencies : [];
+  if (!dependencies.includes(materialisation.op_id)) {
+    return {
+      code: 'enrich-chain-dependency-missing',
+      message: `enrich on card:${materialisation.target_id} must depend directly on its card ${materialisation.operation} (${materialisation.op_id})`,
+    };
+  }
+  const coverAttachment = dependencies.some((dependency) => {
+    const candidate = opsById.get(dependency);
+    return (
+      candidate !== undefined &&
+      candidate.entity_type === 'attachment' &&
+      (candidate.operation === 'create' || candidate.operation === 'link') &&
+      isNonEmptyString(candidate.target_id) &&
+      (candidate.dependencies ?? []).includes(materialisation.op_id)
+    );
+  });
+  if (!coverAttachment) {
+    return {
+      code: 'enrich-chain-attachment-missing',
+      message: `enrich on card:${materialisation.target_id} must depend directly on the import-owned cover attachment planned against that card (an attachment create|link depending on ${materialisation.op_id})`,
+    };
+  }
+  return null;
+}
+
 export async function validatePlan(
   plan: unknown,
   deps: ImporterDeps,
@@ -435,7 +513,7 @@ export async function validatePlan(
   }
 
   const seenOpIds = new Set<string>();
-  const seenSourceKeys = new Set<string>();
+  const sourceKeyGroups = new Map<string, ImportOperation[]>();
 
   for (let i = 0; i < p.operations.length; i++) {
     const op = p.operations[i];
@@ -578,6 +656,40 @@ export async function validatePlan(
       }
     }
 
+    // A board the plan creates does not exist yet, so its workspace cannot be
+    // resolved from the boards table. The op must declare the workspace witness
+    // the API cross-checks against the staged board payload + owner gate.
+    if (op.entity_type === 'board' && op.operation === 'create') {
+      const witness = (prov as { workspace_id?: unknown } | undefined)?.workspace_id;
+      if (!isNonEmptyString(witness)) {
+        errors.push({
+          op_id: opId,
+          code: 'board-create-witness-required',
+          message:
+            'board create requires provenance.workspace_id (workspace authorization witness for a board that does not exist yet)',
+        });
+      }
+    }
+
+    // `enrich` only ever fills an exactly empty native cover. A non-empty
+    // pre-image can never be applied, so it is refused at validation instead of
+    // failing mid-apply.
+    if (op.operation === 'enrich' && hasExactFields(op.expected_target_fields, CARD_COVER_FIELDS)) {
+      const preimage = op.expected_target_fields;
+      if (
+        preimage.cover_attachment_id !== null ||
+        preimage.cover_color !== null ||
+        preimage.cover_size !== 'SMALL'
+      ) {
+        errors.push({
+          op_id: opId,
+          code: 'enrich-preimage-not-empty',
+          message:
+            'enrich requires the exact empty native cover pre-image {cover_attachment_id:null,cover_color:null,cover_size:"SMALL"}',
+        });
+      }
+    }
+
     if (
       op.payload_ref !== null &&
       op.payload_ref !== undefined &&
@@ -618,17 +730,39 @@ export async function validatePlan(
       });
     }
 
-    // duplicate source identity within one plan
+    // duplicate source identity within one plan — collected here, decided after
+    // all operations are known (the constrained cover chain needs the whole plan)
     if (isNonEmptyString(op.source_id) && typeof op.entity_type === 'string') {
       const key = `${op.entity_type}:${op.source_id}`;
-      if (seenSourceKeys.has(key)) {
-        errors.push({
-          op_id: opId,
-          code: 'duplicate-source',
-          message: `duplicate source entity ${key} within plan`,
-        });
-      } else {
-        seenSourceKeys.add(key);
+      const group = sourceKeyGroups.get(key);
+      if (group) group.push(op);
+      else sourceKeyGroups.set(key, [op]);
+    }
+  }
+
+  // One source identity may appear twice in a plan ONLY as the constrained cover
+  // chain: a card `create|link` materialisation and that same card's `enrich`.
+  // [why] An attachment-backed cover needs card create -> attachment create ->
+  // card enrich, and a second source id would conflict with the single unique
+  // provenance claim for the target. Every other duplicate source/target case is
+  // still rejected.
+  const opsById = new Map<string, ImportOperation>();
+  for (const op of p.operations) {
+    if (op && typeof op === 'object' && isNonEmptyString(op.op_id) && !opsById.has(op.op_id)) {
+      opsById.set(op.op_id, op);
+    }
+  }
+  for (const [key, group] of sourceKeyGroups) {
+    if (group.length < 2) continue;
+    const materialisation = group[0] as ImportOperation;
+    for (let i = 1; i < group.length; i++) {
+      const duplicate = group[i] as ImportOperation;
+      const violation =
+        group.length === 2
+          ? coverChainViolation(materialisation, duplicate, opsById)
+          : { code: 'duplicate-source', message: `duplicate source entity ${key} within plan` };
+      if (violation) {
+        errors.push({ op_id: duplicate.op_id, code: violation.code, message: violation.message });
       }
     }
   }
@@ -1122,7 +1256,21 @@ export async function dryRunPlan(
     counts: { applied: 0, noop: 0, blocked: 0, failed: 0 },
     appliedOps: new Set(),
   };
-  const result = await executePlan(ctx);
+  // Rehearsal scope: every operation of the rehearsal runs inside one scope so
+  // writes are visible to the operations that depend on them (a created card's
+  // cover attachment and cover enrich can only be rehearsed against the plan's
+  // own pending writes), while nothing durable survives the scope.
+  await deps.beginDryRunScope?.();
+  let result: PlanApplyResult;
+  try {
+    result = await executePlan(ctx);
+  } finally {
+    try {
+      await deps.endDryRunScope?.();
+    } catch (err: unknown) {
+      console.error('[historicalImport] dry-run rehearsal scope cleanup failed:', err);
+    }
+  }
   await deps.writeAudit({
     actor_user_id: actorUserId,
     action: 'dry_run',
