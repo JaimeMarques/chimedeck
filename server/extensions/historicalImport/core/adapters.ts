@@ -48,7 +48,7 @@ import type {
   ProvenanceRow,
   RecoveryReport,
 } from './plan';
-import { readVerifiedStagedPayload } from './payload';
+import { exactHistoricalCommentContent, readVerifiedStagedPayload } from './payload';
 import {
   applyHistoricalTimestamps,
   createCachedColumnProbe,
@@ -64,7 +64,6 @@ import {
   fingerprintFields,
   sha256Hex,
 } from './fingerprint';
-import { sanitizeRichText } from '../../../common/sanitize';
 
 export {
   PAYLOAD_STAGING_ROOT,
@@ -217,6 +216,12 @@ async function performCreate(
   }
   if (payload && (payload.entity_type !== entity_type || payload.source_id !== source_id)) {
     throw new Error('staged payload identity does not match create operation');
+  }
+  if (entity_type === 'comment' && payload) {
+    // Import content is a manifest-pinned historical record, not untrusted
+    // request input. Validate only PostgreSQL representability; preserve it
+    // verbatim for the row insert below.
+    exactHistoricalCommentContent(payload.fields);
   }
   // FILE attachments are not representable until the exact staged object has
   // been read back and proven. This runs in both preflight and apply before any
@@ -518,14 +523,7 @@ async function performMutation(
         throw new Error(`unresolved historical identity: ${payload.historical_author}`);
       const user = await trx('users').where({ id: authorUserId }).first();
       if (!user) throw new Error(`mapped user ${authorUserId} does not exist`);
-      const content = payload.fields.content;
-      if (typeof content !== 'string' || content.trim().length === 0) {
-        throw new Error('comment correction requires non-empty content');
-      }
-      const canonicalContent = sanitizeRichText(content.trim());
-      if (canonicalContent !== content) {
-        throw new Error('comment correction content must already be canonical sanitized rich text');
-      }
+      const content = exactHistoricalCommentContent(payload.fields);
       if (!payload.created_at || Number.isNaN(Date.parse(payload.created_at))) {
         throw new Error('comment correction requires a valid created_at');
       }

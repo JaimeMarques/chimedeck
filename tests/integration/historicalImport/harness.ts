@@ -21,6 +21,7 @@ import {
   COMMENT_CORRECTION_FIELDS,
   fingerprintFields,
 } from '../../../server/extensions/historicalImport/core/fingerprint';
+import { exactHistoricalCommentContent } from '../../../server/extensions/historicalImport/core/payload';
 
 export interface StagedPayload {
   entity_type: EntityType;
@@ -203,15 +204,13 @@ export class MemoryImporterDeps implements ImporterDeps {
       }
       const userId = this.identityMap.get(author);
       if (!userId) throw new Error(`unresolved historical identity: ${author}`);
-      if (typeof payload.fields.content !== 'string' || payload.fields.content.trim() === '') {
-        throw new Error('comment correction requires non-empty content');
-      }
+      const content = exactHistoricalCommentContent(payload.fields);
       if (!payload.created_at || !payload.updated_at) {
         throw new Error('comment correction requires created_at and updated_at');
       }
       Object.assign(patch, {
         user_id: userId,
-        content: payload.fields.content,
+        content,
         parent_id: payload.fields.parent_id ?? null,
         created_at: payload.created_at,
         updated_at: payload.updated_at,
@@ -289,6 +288,9 @@ export class MemoryImporterDeps implements ImporterDeps {
       ? decodeCompositeTargetId(input.entity_type, input.target_id)
       : null;
     if (!payload && !compositeKey) throw new Error(`no staged payload for ${key}`);
+    if (input.entity_type === 'comment' && payload) {
+      exactHistoricalCommentContent(payload.fields);
+    }
 
     let authorUserId: string | null = null;
     if (payload?.historical_author) {

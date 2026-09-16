@@ -51,6 +51,45 @@ export interface StagedPayload {
   };
 }
 
+// Historical comments are preserved exactly as staged rather than passed through
+// the normal user-input sanitizer. PostgreSQL TEXT stores every valid Unicode
+// string without a length limit, but it cannot represent U+0000 or unpaired
+// UTF-16 surrogates. Refuse only those unrepresentable values before opening a
+// write transaction; never trim, normalize, escape, or otherwise alter content.
+export function exactHistoricalCommentContent(fields: unknown): string {
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new Error('historical comment payload requires fields.content to be a string');
+  }
+  const content = (fields as Record<string, unknown>).content;
+  if (typeof content !== 'string') {
+    throw new Error('historical comment payload requires string content');
+  }
+  if (content.includes('\u0000')) {
+    throw new Error(
+      'historical comment content is not representable by PostgreSQL text: contains U+0000'
+    );
+  }
+  for (let index = 0; index < content.length; index += 1) {
+    const codeUnit = content.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = content.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      throw new Error(
+        'historical comment content is not representable by PostgreSQL text: contains an unpaired UTF-16 surrogate'
+      );
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new Error(
+        'historical comment content is not representable by PostgreSQL text: contains an unpaired UTF-16 surrogate'
+      );
+    }
+  }
+  return content;
+}
+
 export function sha256Hex(bytes: string | Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }

@@ -122,6 +122,46 @@ describe('historical import mutations', () => {
     });
   });
 
+  it('preserves uncanonical historical correction content exactly', async () => {
+    const deps = depsForCorrection();
+    const plan = correctionPlan();
+    const exactContent = '  <img src="x" onerror="historical()">  \r\n@alice  ';
+    deps.payloadStore.get(PAYLOAD_REF)!.fields.content = exactContent;
+
+    const result = await applyPlan(plan, await gates(plan, deps), deps, OPERATOR);
+
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+    expect(result.operations_applied).toBe(1);
+    expect(deps.rows.get(`comment:${COMMENT_ID}`)).toMatchObject({
+      user_id: 'usr_synth_alice',
+      content: exactContent,
+      created_at: '2026-01-09T08:00:00.000Z',
+      updated_at: '2026-01-09T08:00:00.000Z',
+    });
+    expect(deps.provenance).toHaveLength(1);
+    expect(deps.dispatchedDomainEvents).toEqual([]);
+  });
+
+  it('fails closed for historical correction content PostgreSQL TEXT cannot represent', async () => {
+    const deps = depsForCorrection();
+    deps.payloadStore.get(PAYLOAD_REF)!.fields.content = 'not representable\u0000';
+    const before = structuredClone(deps.rows.get(`comment:${COMMENT_ID}`));
+
+    const result = await import('../../../server/extensions/historicalImport/core/plan').then(
+      ({ dryRunPlan }) => dryRunPlan(correctionPlan(), deps, OPERATOR)
+    );
+
+    expect(result.operations_failed).toBe(1);
+    expect(result.outcomes).toContainEqual({
+      op_id: 'op-correct-comment',
+      status: 'failed',
+      reason: 'historical comment content is not representable by PostgreSQL text: contains U+0000',
+    });
+    expect(deps.rows.get(`comment:${COMMENT_ID}`)).toEqual(before);
+    expect(deps.provenance).toHaveLength(0);
+  });
+
   it('keeps correction dry-run write-free and makes the second apply a no-op', async () => {
     const deps = depsForCorrection();
     const plan = correctionPlan();

@@ -309,6 +309,24 @@ describe('apply — historical fidelity', () => {
     expect(comment.content).toContain('@bob'); // mention preserved verbatim
   });
 
+  it('creates a comment with exact staged content without sanitizer or trim', async () => {
+    const deps = freshDeps();
+    const plan = syntheticPlan();
+    const exactContent = '  <script>historical()</script>\r\n@bob  ';
+    deps.payloadStore.get(plan.operations[1]!.payload_ref!)!.fields.content = exactContent;
+    const hash = await validatedPlanHash(plan, deps);
+
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
+
+    expect(deps.rows.get('comment:cmt_synth_0001')).toMatchObject({
+      user_id: 'usr_synth_alice',
+      content: exactContent,
+      created_at: '2026-01-16T11:20:00.000Z',
+      updated_at: '2026-01-16T11:20:00.000Z',
+    });
+    expect(deps.dispatchedDomainEvents).toEqual([]);
+  });
+
   it('records the operator (executor) in audit — separate from historical authors', async () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
