@@ -15,6 +15,17 @@
 // provenance uniqueness conflict. Drift between rehearsal and apply is
 // structural, not merely tested.
 //
+// [why timestamp projection] A staged payload may declare historical
+// created_at/updated_at for any entity type, but only some destination tables
+// have those columns (`lists`, `checklist_items`, `labels` and
+// `card_custom_field_values` have neither; `boards`, `activities`,
+// `comment_reactions`, `custom_fields` and `mentions` have `created_at` only).
+// The declared timestamps are therefore projected through ./columns, which
+// resolves the real destination columns from the live schema: a timestamp is
+// written only where the column exists (historical fidelity preserved) and a
+// proven absence is omitted and reported instead of failing the INSERT — with
+// fail-fast, one list carrying a timestamp used to abort the whole plan.
+//
 // Payload resolution lives in ./payload.ts (staging-root containment +
 // manifest SHA-256 verification) and is re-exported here for callers that
 // used to import it from this module.
@@ -38,6 +49,13 @@ import type {
   RecoveryReport,
 } from './plan';
 import { readVerifiedStagedPayload } from './payload';
+import {
+  applyHistoricalTimestamps,
+  createCachedColumnProbe,
+  queryTableColumns,
+  type ColumnProbe,
+  type HistoricalTimestampField,
+} from './columns';
 import { verifyAttachmentObjectPrecondition } from './objectPrecondition';
 import {
   CARD_COVER_FIELDS,
@@ -165,10 +183,25 @@ export type OpenOperationTransaction = () => Promise<OperationTransaction>;
 // provenance row. `mode: 'dry-run'` rolls the transaction back instead of
 // committing, so nothing durable is written. Composite join rows may omit a
 // payload because their complete destination row is their verified target key.
+//
+// Historical created_at/updated_at are projected through `projection` (see
+// ./columns): written where the destination table really has the column, and
+// omitted + reported where it provably does not. The projection is a required
+// argument — a caller cannot silently bypass it.
+export interface CreateTimestampProjection {
+  probe: ColumnProbe;
+  reportOmission(omission: {
+    entity_type: EntityType;
+    table: string;
+    field: HistoricalTimestampField;
+  }): void;
+}
+
 async function performCreate(
   input: CreateWithProvenanceInput,
   mode: 'apply' | 'dry-run',
   identityMap: Map<string, string>,
+  projection: CreateTimestampProjection,
   openTrx?: OpenOperationTransaction
 ): Promise<{ target_id: string; created: boolean }> {
   const { entity_type, source_id, target_id, payload_ref, plan_hash, operation } = input;
@@ -255,8 +288,16 @@ async function performCreate(
           throw new Error('FILE attachment import requires status READY');
         }
       }
-      if (payload?.created_at) row.created_at = payload.created_at;
-      if (payload?.updated_at) row.updated_at = payload.updated_at;
+      const timestamps = await applyHistoricalTimestamps(
+        projection.probe,
+        trx,
+        table,
+        row,
+        payload
+      );
+      for (const field of timestamps.omitted) {
+        projection.reportOmission({ entity_type, table, field });
+      }
       await ensureNativeShortId(trx, entity_type, row);
 
       // A board imported through direct knex writes must have the same ownership
@@ -584,6 +625,25 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     return { trx: await trxOf(), nested: false };
   };
 
+  // Staged historical timestamps are projected from the LIVE destination schema
+  // (one metadata query per table per deps instance), never from a hardcoded
+  // table/column list: a timestamp is written only where the column exists, and
+  // a proven absence is omitted and reported once per entity/field instead of
+  // failing the INSERT.
+  const columnProbe = createCachedColumnProbe(queryTableColumns);
+  const reportedOmissions = new Set<string>();
+  const projection: CreateTimestampProjection = {
+    probe: columnProbe,
+    reportOmission({ entity_type, table, field }) {
+      const key = `${entity_type}:${field}`;
+      if (reportedOmissions.has(key)) return;
+      reportedOmissions.add(key);
+      console.warn(
+        `[historicalImport] staged ${field} cannot be preserved for ${entity_type}: table ${table} has no ${field} column — omitted`
+      );
+    },
+  };
+
   return {
     async beginDryRunScope() {
       if (rehearsalScope) throw new Error('nested dry-run rehearsal scope');
@@ -675,14 +735,14 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     },
 
     createWithProvenance(input) {
-      return performCreate(input, 'apply', identityMap, beginOperation);
+      return performCreate(input, 'apply', identityMap, projection, beginOperation);
     },
 
     // Dry-run preflight invokes the identical verified-payload/create body in
     // a rolled-back transaction, including composite-key row validation.
     async preflightCreate(input) {
       try {
-        await performCreate(input, 'dry-run', identityMap, beginOperation);
+        await performCreate(input, 'dry-run', identityMap, projection, beginOperation);
         return { ok: true } as const;
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) } as const;
