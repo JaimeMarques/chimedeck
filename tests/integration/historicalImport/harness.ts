@@ -138,7 +138,10 @@ export class MemoryImporterDeps implements ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
-  }): Promise<{ ok: true } | { ok: false; reason: string }> {
+  }): Promise<
+    | { ok: true; created?: boolean; target_id?: string }
+    | { ok: false; reason: string }
+  > {
     const key = `${input.entity_type}:${input.source_id}`;
     const payload = input.payload_ref ? this.payloadStore.get(input.payload_ref) : undefined;
     if (!payload) return { ok: false, reason: `no staged payload for ${key}` };
@@ -152,13 +155,13 @@ export class MemoryImporterDeps implements ImporterDeps {
     // too instead of only checking preconditions.
     if (this.scopeSnapshot) {
       try {
-        await this.createWithProvenance(input);
-        return { ok: true };
+        const result = await this.createWithProvenance(input);
+        return { ok: true, created: result.created, target_id: result.target_id };
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
     }
-    return { ok: true };
+    return { ok: true, created: true, target_id: input.target_id };
   }
 
   async preflightMutation(input: MutationInput): Promise<MutationResult> {

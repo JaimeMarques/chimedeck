@@ -16,6 +16,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 
+// Exported for compatibility with existing callers. Internal reads use the
+// per-call helpers below so tests and long-running workers observe env changes.
 export const PAYLOAD_STAGING_ROOT = Bun.env['HISTORICAL_IMPORT_PAYLOAD_ROOT'] ?? '';
 
 // Path to the payload-manifest.json produced with the plan. This is mandatory
@@ -23,6 +25,14 @@ export const PAYLOAD_STAGING_ROOT = Bun.env['HISTORICAL_IMPORT_PAYLOAD_ROOT'] ??
 // that staged bytes equal the reviewed payload bytes, so both dry-run and apply
 // fail closed rather than silently skipping integrity verification.
 export const PAYLOAD_MANIFEST_PATH = Bun.env['HISTORICAL_IMPORT_PAYLOAD_MANIFEST'] ?? '';
+
+function configuredPayloadRoot(): string {
+  return Bun.env['HISTORICAL_IMPORT_PAYLOAD_ROOT'] ?? '';
+}
+
+function configuredManifestPath(): string {
+  return Bun.env['HISTORICAL_IMPORT_PAYLOAD_MANIFEST'] ?? '';
+}
 
 // Payload staged-file shape. The staged file carries the historical author
 // and timestamps; the API/manifest only carries the reference.
@@ -47,7 +57,8 @@ export function sha256Hex(bytes: string | Uint8Array): string {
 
 // Read + hash a staged payload file, enforcing staging-root containment.
 async function readStagedFile(payloadRef: string): Promise<{ path: string; bytes: Buffer }> {
-  if (!PAYLOAD_STAGING_ROOT) {
+  const configuredRoot = configuredPayloadRoot();
+  if (!configuredRoot) {
     throw new Error('HISTORICAL_IMPORT_PAYLOAD_ROOT is not configured on the server');
   }
   // Only file: refs under the configured staging root are allowed — no
@@ -56,7 +67,7 @@ async function readStagedFile(payloadRef: string): Promise<{ path: string; bytes
     throw new Error(`unsupported payload_ref scheme: ${payloadRef.split(':')[0]}`);
   }
   const rawPath = payloadRef.slice('file://'.length);
-  const stagingRoot = resolve(PAYLOAD_STAGING_ROOT);
+  const stagingRoot = resolve(configuredRoot);
   const absPath = resolve(rawPath);
   if (absPath !== stagingRoot && !absPath.startsWith(stagingRoot + sep)) {
     throw new Error('payload_ref escapes the configured staging root');
@@ -68,34 +79,49 @@ async function readStagedFile(payloadRef: string): Promise<{ path: string; bytes
 export interface PayloadManifest {
   // payload_ref (exact, as declared in the plan) => sha256 of the staged file
   byRef: Map<string, string>;
+  path: string;
+  document: Record<string, unknown>;
 }
 
 let cachedManifest: PayloadManifest | null = null;
 
-// Load (once per process) the operator-staged payload manifest. A malformed
-// manifest is a hard failure — silently skipping the integrity check would
-// turn a misconfiguration into an unverified apply.
-export async function loadPayloadManifest(): Promise<PayloadManifest> {
-  if (!PAYLOAD_MANIFEST_PATH) {
+async function readPayloadManifest(): Promise<PayloadManifest> {
+  const manifestPath = configuredManifestPath();
+  if (!manifestPath) {
     throw new Error('HISTORICAL_IMPORT_PAYLOAD_MANIFEST is not configured on the server');
   }
-  if (cachedManifest) return cachedManifest;
-  const text = await readFile(PAYLOAD_MANIFEST_PATH, 'utf8');
-  const parsed = JSON.parse(text) as {
+  const text = await readFile(manifestPath, 'utf8');
+  const parsed = JSON.parse(text) as Record<string, unknown> & {
     payloads?: Array<{ payload_ref?: string; sha256?: string }>;
   };
   const entries = Array.isArray(parsed.payloads) ? parsed.payloads : null;
   if (!entries) {
-    throw new Error(`payload manifest ${PAYLOAD_MANIFEST_PATH} has no payloads[] array`);
+    throw new Error(`payload manifest ${manifestPath} has no payloads[] array`);
   }
   const byRef = new Map<string, string>();
   for (const entry of entries) {
     if (typeof entry.payload_ref !== 'string' || !/^[0-9a-f]{64}$/.test(String(entry.sha256))) {
-      throw new Error(`payload manifest ${PAYLOAD_MANIFEST_PATH} has a malformed entry`);
+      throw new Error(`payload manifest ${manifestPath} has a malformed entry`);
+    }
+    if (byRef.has(entry.payload_ref)) {
+      throw new Error(`payload manifest ${manifestPath} has a duplicate payload_ref`);
     }
     byRef.set(entry.payload_ref, entry.sha256 as string);
   }
-  cachedManifest = { byRef };
+  return { byRef, path: manifestPath, document: parsed };
+}
+
+// Load the manifest used by payload execution. Validation calls reload first,
+// pinning this exact parsed document for the subsequent dry-run/apply body.
+export async function loadPayloadManifest(): Promise<PayloadManifest> {
+  const manifestPath = configuredManifestPath();
+  if (cachedManifest?.path === manifestPath) return cachedManifest;
+  cachedManifest = await readPayloadManifest();
+  return cachedManifest;
+}
+
+export async function reloadPayloadManifest(): Promise<PayloadManifest> {
+  cachedManifest = await readPayloadManifest();
   return cachedManifest;
 }
 

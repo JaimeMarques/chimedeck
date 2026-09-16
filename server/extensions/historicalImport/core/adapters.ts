@@ -62,6 +62,7 @@ import {
   COMMENT_CORRECTION_FIELDS,
   canonicalJson,
   fingerprintFields,
+  sha256Hex,
 } from './fingerprint';
 import { sanitizeRichText } from '../../../common/sanitize';
 
@@ -346,7 +347,7 @@ async function performCreate(
       // see the pending write (the scope rollback still discards everything).
       if (opened.nested) await trx.commit();
       else await trx.rollback();
-      return { target_id, created: false };
+      return { target_id, created: true };
     }
     await trx.commit();
     return { target_id, created: true };
@@ -356,8 +357,28 @@ async function performCreate(
     // between observation and insert. The unique constraints are authoritative;
     // report the winning provenance claim instead of incorrectly failing it.
     if (isUniqueViolation(err)) {
-      const winner = await db('import_provenance').where({ entity_type, source_id }).first();
-      if (winner) return { target_id: (winner as ProvenanceRow).target_id, created: false };
+      const ownWinner = (await db('import_provenance')
+        .where({ source_system: 'trello', entity_type, source_id })
+        .where({ target_ref: targetRef(entity_type, target_id) })
+        .first()) as ProvenanceRow | undefined;
+      if (ownWinner) return { target_id: ownWinner.target_id, created: false };
+
+      const sourceConflict = (await db('import_provenance')
+        .where({ source_system: 'trello', entity_type, source_id })
+        .first()) as ProvenanceRow | undefined;
+      if (sourceConflict) {
+        throw new Error(
+          `provenance conflict: source ${entity_type}:${source_id} is already claimed by target ${sourceConflict.target_id} — create declares ${target_id}`
+        );
+      }
+      const targetConflict = (await db('import_provenance')
+        .where({ target_ref: targetRef(entity_type, target_id) })
+        .first()) as ProvenanceRow | undefined;
+      if (targetConflict) {
+        throw new Error(
+          `provenance conflict: target ${entity_type}:${target_id} is already claimed by ${targetConflict.source_system}:${targetConflict.source_id}`
+        );
+      }
     }
     throw err;
   }
@@ -645,6 +666,11 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
   };
 
   return {
+    loadedExternalInputHash(name) {
+      if (name !== 'identity_map') return Promise.resolve(null);
+      return Promise.resolve(sha256Hex(canonicalJson(Object.fromEntries(identityMap))));
+    },
+
     async beginDryRunScope() {
       if (rehearsalScope) throw new Error('nested dry-run rehearsal scope');
       rehearsalScope = await db.transaction();
@@ -742,8 +768,8 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     // a rolled-back transaction, including composite-key row validation.
     async preflightCreate(input) {
       try {
-        await performCreate(input, 'dry-run', identityMap, projection, beginOperation);
-        return { ok: true } as const;
+        const result = await performCreate(input, 'dry-run', identityMap, projection, beginOperation);
+        return { ok: true, created: result.created, target_id: result.target_id } as const;
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) } as const;
       }

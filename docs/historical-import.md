@@ -13,6 +13,7 @@ Código novo — nada do upstream foi alterado exceto 2 linhas de montagem:
 | `server/extensions/historicalImport/core/fingerprint.ts`                   | Canonização JSON + SHA-256 (`sha256-fingerprint-v1`, `sha256-plan-v1`). Puro, sem DB.                                                                                                                                                                      |
 | `server/extensions/historicalImport/core/composite.ts`                     | Chaves compostas (join tables `card_labels`/`card_members`, sem coluna `id`): codificação canónica de `target_id`, descodificação fail-closed e `target_ref` de proveniência. Puro, sem DB.                                                                |
 | `server/extensions/historicalImport/core/columns.ts`                       | Projeção de timestamps históricos: colunas reais do destino lidas do schema **live** (`information_schema.columns`), cache por tabela por plan run, fail-closed se a metadata não resolver; decidem se um `created_at`/`updated_at` declarado entra na linha. Puro + injectável (`ColumnProbe`), testável sem DB.               |
+| `server/extensions/historicalImport/core/externalInputs.ts`                  | Recalcula e impõe os hashes dos artefactos externos fixados pelo plano (manifest de payloads/objectos, identity map e row source) antes de qualquer mutação.                                                                                           |
 | `server/extensions/historicalImport/core/plan.ts`                          | Motor: `validatePlan` / `dryRunPlan` (default) / `applyPlan` (com gates) / `resetPlan`. Contrato de manifest completo.                                                                                                                                     |
 | `server/extensions/historicalImport/core/adapters.ts`                      | `ImporterDeps` knex: transação por operação (linha + provenance, ou nada), `payload_ref` resolvido **só no servidor** a partir de `HISTORICAL_IMPORT_PAYLOAD_ROOT` (nada de payloads no transporte/API), identity map de `HISTORICAL_IMPORT_IDENTITY_MAP`. |
 | `server/extensions/historicalImport/api/authorize.ts`                      | OWNER do workspace é obrigatório; plano multi-workspace rejeitado; gates por env avaliados por request.                                                                                                                                                    |
@@ -95,12 +96,13 @@ Regras (implementadas em `core/composite.ts`, aplicadas pelo motor e pelo adapte
 5. **Paragem por divergência do snapshot de origem** — `HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH` (valor congelado, fora de banda) é comparado com `plan.snapshot_hash`: divergência => `snapshot-divergence` no validate (ok=false) e recusa no apply. Sem essa env, o `snapshot_hash` é apenas validado por forma e o validate emite o aviso `snapshot-hash-unpinned` (o plano nunca autoriza o seu próprio snapshot).
 6. **Autorização** — owner do workspace (via `provenance.board_id` de cada operação), mais o testemunho `provenance.workspace_id` para boards que o plano cria (ver §Operações mutáveis); plano que atravesse workspaces é rejeitado; RBAC normal do ChimeDeck reutilizado. O `reset`/recuperação autoriza pelo workspace da primeira linha de proveniência do plano (para join tables a chave composta é descodificada para chegar ao cartão).
 7. **Identidades** — `historical_author` resolvido via identity map; **não resolvido bloqueia a operação** (nunca salta, nunca atribui ao bot/executante).
-8. **Dedupe/idempotência** — provenance existente para a fonte => no-op (mesmo plano: "idempotent re-run"; outro plano: indica o plano anterior). Re-run do plano aplicado = 0 applied, N noop. Colisão de unicidade em corrida (`23505`) é relida e resolvida como materialização existente, em vez de falhar a operação.
-9. **Sem overwrites** — create sobre target existente sem provenance => `blocked` ("overwrite prohibited", cobre nativo e drift); link com `expected_target_fingerprint` divergente => `blocked` ("fingerprint drift").
-10. **Sem destruição não autorizada** — nenhuma operação faz UPDATE de conteúdo nativo; `reset` sem `recovery=true` limpa só provenance do plano e **reporta** as linhas criadas que ficam (`created_targets_remaining`), com a nota de que a re-execução fica bloqueada. A variante `recovery=true` é destrutiva, explícita e restrita (ver §Recuperação).
-11. **Falhas** — por operação: transação knex (linha+provenance ou nada); falha injectada => fail-fast, resto bloqueado por dependência, retry após correcção aplica só o que falta.
-12. **Supressão de efeitos** — escritas directa knex, sem `dispatchEvent`/`writeActivity`/pubsub/mentions-sync dos caminhos normais: zero notificações, webhooks, automatismos ou DMs; audit trail do executante separado (`import_audit_log.actor_user_id`) dos autores históricos (`comments.user_id` = autor resolvido; `import_provenance` mantém a fonte).
-13. **Concorrência** — duas applies simultâneas do mesmo plano => uma materialização (invariante testado: 1 linha por fonte, 1 provenance por entidade). Com o gate de estado, uma delas pode ser recusada por `destination-state-divergence` (comportamento desejado: só a corrida que confirmou o estado observado avança).
+8. **Dedupe/idempotência sem conflitos silenciosos** — provenance existente para a mesma fonte e o mesmo target => no-op. Se a fonte já aponta para outro target, ou o target pertence a outra fonte, o resultado é `blocked`, nunca `noop`; dependentes permanecem bloqueados. Colisão concorrente só é no-op quando o claim vencedor é exactamente a mesma fonte→target.
+9. **Hashes externos fail-closed** — quando `plan.input_preconditions` fixa payload manifest, identity map, attachment-object manifest ou destination row source, `validate` recalcula os SHA-256 canónicos dos ficheiros privados configurados; ausente, ilegível, trocado ou divergente invalida o plano. `dry-run` e `apply` reutilizam este validate antes de qualquer mutação; o payload manifest exacto validado é o mesmo usado na execução.
+10. **Sem overwrites** — create sobre target existente sem provenance => `blocked` ("overwrite prohibited", cobre nativo e drift); link com `expected_target_fingerprint` divergente => `blocked` ("fingerprint drift").
+11. **Sem destruição não autorizada** — nenhuma operação faz UPDATE de conteúdo nativo; `reset` sem `recovery=true` limpa só provenance do plano e **reporta** as linhas criadas que ficam (`created_targets_remaining`), com a nota de que a re-execução fica bloqueada. A variante `recovery=true` é destrutiva, explícita e restrita (ver §Recuperação).
+12. **Falhas** — por operação: transação knex (linha+provenance ou nada); falha injectada => fail-fast, resto bloqueado por dependência, retry após correcção aplica só o que falta.
+13. **Supressão de efeitos** — escritas directa knex, sem `dispatchEvent`/`writeActivity`/pubsub/mentions-sync dos caminhos normais: zero notificações, webhooks, automatismos ou DMs; audit trail do executante separado (`import_audit_log.actor_user_id`) dos autores históricos (`comments.user_id` = autor resolvido; `import_provenance` mantém a fonte).
+14. **Concorrência** — duas applies simultâneas do mesmo plano => uma materialização (invariante testado: 1 linha por fonte, 1 provenance por entidade). Com o gate de estado, uma delas pode ser recusada por `destination-state-divergence` (comportamento desejado: só a corrida que confirmou o estado observado avança).
 
 ## Matriz de capacidades vs. lacunas (representabilidade histórica)
 
@@ -135,7 +137,10 @@ Pré-requisitos no servidor de staging:
 export HISTORICAL_IMPORT_ENABLED=true          # liga a extensão (sem apply)
 export HISTORICAL_IMPORT_APPLY_ENABLED=true    # só na janela de apply, depois desligar
 export HISTORICAL_IMPORT_PAYLOAD_ROOT=/var/lib/chimedeck/import-payloads   # root privada
-export HISTORICAL_IMPORT_IDENTITY_MAP=/var/lib/chimedeck/identity-map.json # {"<trello_id>": "<user_id>"}
+export HISTORICAL_IMPORT_PAYLOAD_MANIFEST=/var/lib/chimedeck/payload-manifest.json
+export HISTORICAL_IMPORT_IDENTITY_MAP=/var/lib/chimedeck/importer-identity-map.json # mapa exacto consumido pelo importer
+export HISTORICAL_IMPORT_ATTACHMENT_OBJECT_MANIFEST=/var/lib/chimedeck/attachment-object-manifest.json
+export HISTORICAL_IMPORT_DESTINATION_ROW_SOURCE=/var/lib/chimedeck/destination-db-rows.json
 export HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH=<sha256 do snapshot de origem congelado>  # paragem por divergência do snapshot (recomendado)
 export HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED=true   # SÓ se precisar de recuperação destrutiva (ver passo 8)
 ```
@@ -148,7 +153,7 @@ export HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED=true   # SÓ se precisar de recu
 ```bash
 curl -s -X POST "$APP_URL/api/v1/admin/historical-import/validate" \
   -H "Authorization: Bearer ***" -H 'Content-Type: application/json' \
-  -d "{\"plan\": $(cat plan.json)}" | jq '.data.validation | {ok, plan_hash, snapshot_hash_pinned, destination_fingerprint, errors}'
+  -d "{\"plan\": $(cat plan.json)}" | jq '.data.validation | {ok, plan_hash, snapshot_hash_pinned, external_input_hashes_verified, destination_fingerprint, errors}'
 ```
 
 5. Ensaio (não escreve nada):

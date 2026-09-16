@@ -208,7 +208,9 @@ export async function historicalImportRouter(
       // 409 = the world changed under the confirmation (re-observe and retry);
       // 403 = a gate refused.
       const conflict =
-        result.code === 'destination-state-divergence' || result.code === 'snapshot-divergence';
+        result.code === 'destination-state-divergence' ||
+        result.code === 'snapshot-divergence' ||
+        result.code === 'external-input-divergence';
       return Response.json(
         { error: { code: result.code, message: result.error } },
         { status: conflict ? 409 : 403 }

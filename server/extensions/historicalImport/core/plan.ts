@@ -38,6 +38,7 @@ import {
   isCompositeKeyEntity,
   tryDecodeCompositeTargetId,
 } from './composite';
+import { verifyExternalInputHashes } from './externalInputs';
 
 // ---------------------------------------------------------------------------
 // Manifest types
@@ -100,12 +101,24 @@ export interface ImportOperation {
   historical_author?: string; // source-system user id, resolved fail-closed
 }
 
+export interface ExternalInputPreconditions {
+  payload_manifest?: { canonical_sha256: string };
+  identity_map?: { importer_map_sha256: string };
+  attachment_object_manifest?: {
+    canonical_sha256: string;
+    operations?: number;
+    bytes?: number;
+  };
+  destination_row_source?: { rows_sha256: string };
+}
+
 export interface ImportPlan {
   plan_id: string;
   plan_hash?: string; // server-computed on validation; caller passes on apply
   snapshot_hash?: string; // hash of the source snapshot the plan was built from
   source_system: string; // 'trello'
   created_at: string;
+  input_preconditions?: ExternalInputPreconditions;
   operations: ImportOperation[];
 }
 
@@ -122,6 +135,10 @@ export interface PlanValidationResult {
   // true when the operator pinned the expected source snapshot hash out of
   // band (HISTORICAL_IMPORT_EXPECTED_SNAPSHOT_HASH); false => only shape-validated.
   snapshot_hash_pinned: boolean;
+  // True only when every external artifact hash referenced by the plan was
+  // recomputed from the configured server-side input and matched before any
+  // destination observation or mutation.
+  external_input_hashes_verified: boolean;
   // Fingerprint of the destination state observed for every target this plan
   // touches. The operator must echo it back on apply (state-divergence stop).
   destination_fingerprint: string;
@@ -208,6 +225,10 @@ export type MutationResult =
   | { status: 'blocked'; reason: string };
 
 export interface ImporterDeps {
+  // Hash of the exact external artifact snapshot already loaded into this deps
+  // instance. Production exposes the identity-map digest so validation proves
+  // the bytes that execution will actually use, closing a load/verify TOCTOU.
+  loadedExternalInputHash?(name: 'identity_map'): Promise<string | null>;
   // Fetch a target row by id (entity table read).
   fetchTarget(entityType: EntityType, targetId: string): Promise<Record<string, unknown> | null>;
   // Fetch provenance by source identity.
@@ -238,7 +259,10 @@ export interface ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
-  }): Promise<{ ok: true } | { ok: false; reason: string }>;
+  }): Promise<
+    | { ok: true; created?: boolean; target_id?: string }
+    | { ok: false; reason: string }
+  >;
   // Existing-row mutations share one adapter body in apply and dry-run. The
   // adapter owns the row lock, exact pre-image check, constrained update, and
   // provenance write/verification so they are one atomic decision.
@@ -353,6 +377,14 @@ function isValidHash(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
 }
 
+function claimIsOwn(
+  op: ImportOperation,
+  claim: Pick<ProvenanceRow, 'source_system' | 'source_id'>,
+  sourceSystem: string
+): boolean {
+  return claim.source_system === sourceSystem && claim.source_id === op.source_id;
+}
+
 function mutationFields(operation: Operation): readonly string[] | null {
   if (operation === 'correct') return COMMENT_CORRECTION_FIELDS;
   if (operation === 'enrich') return CARD_COVER_FIELDS;
@@ -437,6 +469,7 @@ export async function validatePlan(
     plan_hash: '',
     snapshot_hash: null,
     snapshot_hash_pinned: false,
+    external_input_hashes_verified: false,
     destination_fingerprint: '',
     operations_total: 0,
     errors,
@@ -511,6 +544,17 @@ export async function validatePlan(
   if (p.operations.length === 0) {
     warnings.push({ op_id: 'plan', code: 'plan-empty', message: 'plan has no operations' });
   }
+
+  // External inputs referenced by the plan are not assertions the plan may
+  // satisfy by declaration alone. Recompute each digest from the configured
+  // private server-side artifact. dry-run/apply call validatePlan first, so a
+  // missing/swapped/unreadable artifact stops the whole run before any write.
+  const externalInputs = await verifyExternalInputHashes(
+    p,
+    deps.loadedExternalInputHash?.bind(deps)
+  );
+  result.external_input_hashes_verified = externalInputs.verified;
+  errors.push(...externalInputs.errors);
 
   const seenOpIds = new Set<string>();
   const sourceKeyGroups = new Map<string, ImportOperation[]>();
@@ -865,6 +909,7 @@ export async function validatePlan(
       warnings: warnings.length,
       plan_id: p.plan_id,
       snapshot_hash_pinned: result.snapshot_hash_pinned,
+      external_input_hashes_verified: result.external_input_hashes_verified,
       destination_fingerprint: result.destination_fingerprint,
     },
   });
@@ -896,6 +941,30 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
   const pending = [...plan.operations];
   const appliedOrNoop = new Set<string>();
   const stoppedEarly = { value: false };
+
+  const reportCreateWithoutWrite = (
+    op: ImportOperation,
+    claimedTargetId: string,
+    plannedTargetId: string
+  ): void => {
+    if (claimedTargetId !== plannedTargetId) {
+      ctx.outcomes.push({
+        status: 'blocked',
+        op_id: op.op_id,
+        reason: `provenance conflict: source ${op.entity_type}:${op.source_id} is already claimed by target ${claimedTargetId} — plan declares ${plannedTargetId}`,
+      });
+      ctx.counts.blocked++;
+      return;
+    }
+    ctx.outcomes.push({
+      status: 'noop',
+      op_id: op.op_id,
+      reason: 'already imported by this source (nothing written — idempotent)',
+      target_id: claimedTargetId,
+    });
+    ctx.counts.noop++;
+    appliedOrNoop.add(op.op_id);
+  };
 
   const execOne = async (op: ImportOperation): Promise<void> => {
     // (0) unresolved dependencies
@@ -955,6 +1024,25 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
     // (1) existing provenance for this source => dedupe / idempotent re-run
     const existing = await deps.fetchProvenance(op.entity_type, op.source_id);
     if (existing) {
+      if (!claimIsOwn(op, existing, plan.source_system)) {
+        ctx.outcomes.push({
+          status: 'blocked',
+          op_id: op.op_id,
+          reason: `provenance conflict: source ${op.entity_type}:${op.source_id} is already claimed under ${existing.source_system}`,
+        });
+        ctx.counts.blocked++;
+        return;
+      }
+      const pinnedTarget = typeof op.target_id === 'string' && op.target_id.length > 0;
+      if (pinnedTarget && existing.target_id !== op.target_id) {
+        ctx.outcomes.push({
+          status: 'blocked',
+          op_id: op.op_id,
+          reason: `provenance conflict: source ${op.entity_type}:${op.source_id} is already claimed by target ${existing.target_id} — plan declares ${op.target_id}`,
+        });
+        ctx.counts.blocked++;
+        return;
+      }
       if (existing.import_plan_hash === planHash) {
         ctx.outcomes.push({
           status: 'noop',
@@ -1022,14 +1110,23 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       }
       const targetProv = await deps.fetchProvenanceByTarget(op.entity_type, targetId);
       if (targetProv) {
+        if (claimIsOwn(op, targetProv, plan.source_system)) {
+          ctx.outcomes.push({
+            status: 'noop',
+            op_id: op.op_id,
+            reason: `target already claimed by this source (${targetProv.source_system}:${targetProv.source_id})`,
+            target_id: targetId,
+          });
+          ctx.counts.noop++;
+          appliedOrNoop.add(op.op_id);
+          return;
+        }
         ctx.outcomes.push({
-          status: 'noop',
+          status: 'blocked',
           op_id: op.op_id,
-          reason: `target already claimed by ${targetProv.source_system}:${targetProv.source_id}`,
-          target_id: targetId,
+          reason: `provenance conflict: target ${op.entity_type}:${targetId} is already claimed by ${targetProv.source_system}:${targetProv.source_id} — one target cannot be claimed by two sources`,
         });
-        ctx.counts.noop++;
-        appliedOrNoop.add(op.op_id);
+        ctx.counts.blocked++;
         return;
       }
       // Fingerprint precondition — link is only allowed onto a target whose
@@ -1086,6 +1183,15 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       if (existingRow) {
         const claim = await deps.fetchProvenanceByTarget(op.entity_type, targetId);
         if (claim) {
+          if (!claimIsOwn(op, claim, plan.source_system)) {
+            ctx.outcomes.push({
+              status: 'blocked',
+              op_id: op.op_id,
+              reason: `provenance conflict: target ${op.entity_type}:${targetId} is already claimed by ${claim.source_system}:${claim.source_id} — one target cannot be claimed by two sources`,
+            });
+            ctx.counts.blocked++;
+            return;
+          }
           ctx.outcomes.push({
             status: 'noop',
             op_id: op.op_id,
@@ -1145,6 +1251,10 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
     };
     if (ctx.mode === 'apply') {
       const res = await deps.createWithProvenance(createInput);
+      if (!res.created) {
+        reportCreateWithoutWrite(op, res.target_id, newTargetId);
+        return;
+      }
       ctx.outcomes.push({ status: 'applied', op_id: op.op_id, target_id: res.target_id });
     } else {
       const preflight = await deps.preflightCreate(createInput);
@@ -1152,6 +1262,10 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
         // Let the common fail-fast handler emit the failed outcome and stop
         // scheduling, exactly as an apply-side INSERT error would.
         throw new Error(`dry-run preflight failed: ${preflight.reason}`);
+      }
+      if (preflight.created === false) {
+        reportCreateWithoutWrite(op, preflight.target_id ?? newTargetId, newTargetId);
+        return;
       }
       ctx.outcomes.push({ status: 'applied', op_id: op.op_id, target_id: newTargetId });
     }
@@ -1318,6 +1432,10 @@ export async function applyPlan(
     );
     if (snapshotError) {
       return { error: snapshotError.message, code: 'snapshot-divergence' };
+    }
+    const externalInputError = validation.errors.find((e) => e.code.startsWith('external-input-'));
+    if (externalInputError) {
+      return { error: externalInputError.message, code: 'external-input-divergence' };
     }
     return { error: 'plan failed validation', code: 'plan-invalid' };
   }
