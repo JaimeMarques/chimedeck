@@ -12,9 +12,11 @@ import { describe, expect, it } from 'bun:test';
 import {
   applyPlan,
   dryRunPlan,
+  observeDestination,
   resetPlan,
   validatePlan,
   type ImportPlan,
+  type ApplyGates,
 } from '../../../server/extensions/historicalImport/core/plan';
 import { hashPlanDocument } from '../../../server/extensions/historicalImport/core/fingerprint';
 import { MemoryImporterDeps } from './harness';
@@ -35,6 +37,21 @@ async function validatedPlanHash(plan: ImportPlan, deps: MemoryImporterDeps): Pr
   const v = await validatePlan(plan, deps, OPERATOR);
   expect(v.ok).toBe(true);
   return v.plan_hash;
+}
+
+// Apply now requires the destination-state witness returned by validate/
+// dry-run; the helper observes the same state the gate will compare against.
+async function applyGatesFor(
+  plan: ImportPlan,
+  deps: MemoryImporterDeps,
+  planHash: string,
+): Promise<ApplyGates> {
+  const observed = await observeDestination(plan, deps);
+  return {
+    applyEnabled: true,
+    confirmedPlanHash: planHash,
+    confirmedDestinationFingerprint: observed.fingerprint,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -176,8 +193,13 @@ describe('apply — explicit gates', () => {
   it('refuses when confirmed hash does not match the plan', async () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
-    await validatedPlanHash(plan, deps);
-    const res = await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: 'f'.repeat(64) }, deps, OPERATOR);
+    const hash = await validatedPlanHash(plan, deps);
+    const res = await applyPlan(
+      plan,
+      { ...(await applyGatesFor(plan, deps, hash)), confirmedPlanHash: 'f'.repeat(64) },
+      deps,
+      OPERATOR,
+    );
     expect('error' in res && res.code === 'plan-hash-mismatch').toBe(true);
     expect(deps.rows.size).toBe(1); // only the pre-seeded label
   });
@@ -186,7 +208,12 @@ describe('apply — explicit gates', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     plan.operations[0]!.op_id = ''; // invalid
-    const res = await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: 'a'.repeat(64) }, deps, OPERATOR);
+    const res = await applyPlan(
+      plan,
+      { applyEnabled: true, confirmedPlanHash: 'a'.repeat(64), confirmedDestinationFingerprint: 'a'.repeat(64) },
+      deps,
+      OPERATOR,
+    );
     expect('error' in res && res.code === 'plan-invalid').toBe(true);
   });
 });
@@ -200,7 +227,7 @@ describe('apply — historical fidelity', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    const res = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const res = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       operations_applied: number;
     };
     expect(res.operations_applied).toBe(6);
@@ -214,7 +241,7 @@ describe('apply — historical fidelity', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
     const comment = deps.rows.get('comment:cmt_synth_0001')!;
     expect(comment.user_id).toBe('usr_synth_alice'); // resolved historical author
     expect(comment.user_id).not.toBe(OPERATOR);
@@ -226,7 +253,7 @@ describe('apply — historical fidelity', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
     const applyAudit = deps.audit.find((a) => a.action === 'apply')!;
     expect(applyAudit.actor_user_id).toBe(OPERATOR);
     expect(applyAudit.import_plan_hash).toBe(hash);
@@ -239,7 +266,7 @@ describe('apply — historical fidelity', () => {
     (plan.operations[1] as ImportPlan['operations'][number] & { historical_author?: string }).historical_author =
       'm_synth_ghost';
     const hash = await validatedPlanHash(plan, deps);
-    const res = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const res = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       outcomes: Array<{ status: string; op_id: string; reason?: string }>;
     };
     const outcome = res.outcomes.find((o) => o.op_id === 'op-comment-1')!;
@@ -257,9 +284,9 @@ describe('dedupe and idempotency', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
 
-    const second = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const second = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       operations_applied: number;
       operations_noop: number;
     };
@@ -272,7 +299,7 @@ describe('dedupe and idempotency', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
     const res = await dryRunPlan(plan, deps, OPERATOR);
     expect(res.operations_noop).toBe(6);
     expect(res.operations_applied).toBe(0);
@@ -282,13 +309,13 @@ describe('dedupe and idempotency', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
 
     const planB = syntheticPlan();
     planB.plan_id = 'plan_synth_0002';
     planB.operations = planB.operations.slice(0, 1); // same card source id
     const hashB = await validatedPlanHash(planB, deps);
-    const res = (await applyPlan(planB, { applyEnabled: true, confirmedPlanHash: hashB }, deps, OPERATOR)) as {
+    const res = (await applyPlan(planB, await applyGatesFor(planB, deps, hashB), deps, OPERATOR)) as {
       outcomes: Array<{ status: string; reason?: string }>;
     };
     expect(res.outcomes[0]!.status).toBe('noop');
@@ -308,7 +335,7 @@ describe('overwrite prohibition', () => {
     const plan = syntheticPlan();
     plan.operations[0]!.target_id = SYNTH_EXISTING_CARD.id; // aim at the native card
     const hash = await validatedPlanHash(plan, deps);
-    const res = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const res = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       outcomes: Array<{ status: string; op_id: string; reason?: string }>;
     };
     const outcome = res.outcomes.find((o) => o.op_id === 'op-card-1')!;
@@ -329,7 +356,7 @@ describe('overwrite prohibition', () => {
     // drift the row after computing the fingerprint
     deps.rows.get(`card:${SYNTH_EXISTING_CARD.id}`)!.title = 'drifted by a user';
     const hash = await validatedPlanHash(plan, deps);
-    const res = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const res = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       outcomes: Array<{ status: string; reason?: string }>;
     };
     expect(res.outcomes[0]!.status).toBe('blocked');
@@ -345,7 +372,7 @@ describe('overwrite prohibition', () => {
     plan.operations[0]!.target_id = SYNTH_EXISTING_CARD.id;
     plan.operations[0]!.expected_target_fingerprint = existingCardFingerprint();
     const hash = await validatedPlanHash(plan, deps);
-    const res = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const res = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       outcomes: Array<{ status: string }>;
     };
     expect(res.outcomes[0]!.status).toBe('applied');
@@ -365,7 +392,7 @@ describe('failures and retries', () => {
     deps.failCreateFor.add('card:trello_card_synth_0001');
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    const res = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const res = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       operations_failed: number;
       stopped_early: boolean;
       outcomes: Array<{ status: string; op_id: string }>;
@@ -382,13 +409,13 @@ describe('failures and retries', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
 
     // Simulate a partial failure: reset provenance for the attachment only.
     deps.provenance = deps.provenance.filter((p) => p.source_id !== 'trello_attach_synth_0001');
     deps.rows.delete('attachment:att_synth_0001');
 
-    const retry = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const retry = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       operations_applied: number;
       operations_noop: number;
     };
@@ -408,18 +435,26 @@ describe('concurrency', () => {
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
     const [a, b] = await Promise.all([
-      applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR),
-      applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR),
+      applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR),
+      applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR),
     ]);
-    const resA = a as { operations_applied: number };
-    const resB = b as { operations_applied: number };
+    // Either run may lose the destination-state race and be refused (both
+    // observe the same pre-apply state, only one can be first past the gate) —
+    // the invariant that must hold is one materialisation, and at least one
+    // apply to have gone through.
+    const applied = (res: unknown): number =>
+      res && typeof res === 'object' && 'operations_applied' in res
+        ? ((res as { operations_applied: number }).operations_applied ?? 0)
+        : 0;
+    const resA = applied(a);
+    const resB = applied(b);
     // Both may report applied (read-before-write race) — the invariant that
     // must hold: exactly one row per source entity and one provenance each.
     const cards = [...deps.rows.keys()].filter((k) => k.startsWith('card:'));
     expect(cards.length).toBe(1);
     const cardProv = deps.provenance.filter((p) => p.entity_type === 'card');
     expect(cardProv.length).toBe(1);
-    expect(resA.operations_applied + resB.operations_applied).toBeGreaterThan(0);
+    expect(resA + resB).toBeGreaterThan(0);
   });
 });
 
@@ -432,7 +467,7 @@ describe('side-effect suppression', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
     expect(deps.dispatchedDomainEvents.length).toBe(0);
     // and the comment mention text is stored verbatim without notification rows
     expect(deps.rows.get('comment:cmt_synth_0001')!.content).toContain('@bob');
@@ -448,7 +483,7 @@ describe('reset', () => {
     const deps = freshDeps();
     const plan = syntheticPlan();
     const hash = await validatedPlanHash(plan, deps);
-    await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR);
+    await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR);
     const res = await resetPlan(hash, deps, OPERATOR);
     expect(res.cleared).toBe(6);
     expect(deps.provenance.length).toBe(0);
@@ -457,7 +492,7 @@ describe('reset', () => {
     // provenance — overwrite prohibition), only the link re-applies.
     // [why] Reset corrects provenance bookkeeping; it must never lead to
     // duplicate rows or silent overwrites on re-run.
-    const again = (await applyPlan(plan, { applyEnabled: true, confirmedPlanHash: hash }, deps, OPERATOR)) as {
+    const again = (await applyPlan(plan, await applyGatesFor(plan, deps, hash), deps, OPERATOR)) as {
       operations_applied: number;
       operations_blocked: number;
       outcomes: Array<{ status: string; op_id: string; reason?: string }>;

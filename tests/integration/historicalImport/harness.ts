@@ -5,8 +5,10 @@ import type {
   ImporterDeps,
   Operation,
   ProvenanceRow,
+  RecoveryReport,
 } from '../../../server/extensions/historicalImport/core/plan';
 import { randomUUID } from 'node:crypto';
+import { compositeKeyColumns, decodeCompositeTargetId, targetRef } from '../../../server/extensions/historicalImport/core/composite';
 import { SYNTH_PAYLOADS } from './fixtures';
 
 export interface StagedPayload {
@@ -85,10 +87,12 @@ export class MemoryImporterDeps implements ImporterDeps {
     }
     // payload resolution (mirrors adapters.resolveStagedPayload)
     const payload = input.payload_ref ? this.payloadStore.get(input.payload_ref) : undefined;
-    if (!payload) throw new Error(`no staged payload for ${key}`);
+    const keyColumns = compositeKeyColumns(input.entity_type);
+    const compositeKey = keyColumns ? decodeCompositeTargetId(input.entity_type, input.target_id) : null;
+    if (!payload && !compositeKey) throw new Error(`no staged payload for ${key}`);
 
     let authorUserId: string | null = null;
-    if (payload.historical_author) {
+    if (payload?.historical_author) {
       authorUserId = this.identityMap.get(payload.historical_author) ?? null;
       if (!authorUserId) throw new Error(`unresolved historical identity: ${payload.historical_author}`);
     }
@@ -98,13 +102,27 @@ export class MemoryImporterDeps implements ImporterDeps {
     );
     if (existing) return { target_id: existing.target_id, created: false };
 
-    const row: Record<string, unknown> = { id: input.target_id, ...payload.fields };
-    if (input.entity_type === 'comment') {
-      if (!authorUserId) throw new Error('comment payload requires a resolved historical_author');
-      row.user_id = authorUserId;
+    const fields = { ...(payload?.fields ?? {}) };
+    let row: Record<string, unknown>;
+    if (compositeKey && keyColumns) {
+      // Join rows: composite key columns only — never an `id`.
+      for (const column of keyColumns) {
+        const provided = fields[column];
+        if (provided !== undefined && String(provided) !== compositeKey[column]) {
+          throw new Error(`payload field ${column} disagrees with the target_id key`);
+        }
+      }
+      delete fields.id;
+      row = { ...fields, ...compositeKey };
+    } else {
+      row = { id: input.target_id, ...fields };
+      if (input.entity_type === 'comment') {
+        if (!authorUserId) throw new Error('comment payload requires a resolved historical_author');
+        row.user_id = authorUserId;
+      }
+      if (payload?.created_at) row.created_at = payload.created_at;
+      if (payload?.updated_at) row.updated_at = payload.updated_at;
     }
-    if (payload.created_at) row.created_at = payload.created_at;
-    if (payload.updated_at) row.updated_at = payload.updated_at;
     this.rows.set(`${input.entity_type}:${input.target_id}`, row);
 
     this.provenance.push({
@@ -113,7 +131,7 @@ export class MemoryImporterDeps implements ImporterDeps {
       entity_type: input.entity_type,
       source_id: input.source_id,
       target_id: input.target_id,
-      target_ref: `${input.entity_type}:${input.target_id}`,
+      target_ref: targetRef(input.entity_type, input.target_id),
       import_plan_hash: input.plan_hash,
       operation: input.operation,
     });
@@ -132,7 +150,7 @@ export class MemoryImporterDeps implements ImporterDeps {
       entity_type: input.entity_type,
       source_id: input.source_id,
       target_id: input.target_id,
-      target_ref: `${input.entity_type}:${input.target_id}`,
+      target_ref: targetRef(input.entity_type, input.target_id),
       import_plan_hash: input.plan_hash,
       operation: 'link',
     });
@@ -146,5 +164,49 @@ export class MemoryImporterDeps implements ImporterDeps {
     const before = this.provenance.length;
     this.provenance = this.provenance.filter((p) => p.import_plan_hash !== planHash);
     return before - this.provenance.length;
+  }
+
+  async listProvenanceByPlan(planHash: string): Promise<ProvenanceRow[]> {
+    return this.provenance.filter((p) => p.import_plan_hash === planHash);
+  }
+
+  // In-memory mirror of the knex recovery: deletes only rows this plan created
+  // (+ provenance), and refuses when a blocker is injected (the real adapter
+  // derives blockers from the live FK graph).
+  injectedRecoveryBlockers: Array<{ code: string; detail: string }> = [];
+
+  async recoverByPlan(planHash: string): Promise<RecoveryReport> {
+    if (this.injectedRecoveryBlockers.length > 0) {
+      return {
+        ok: false,
+        mode: 'recovery',
+        deleted: 0,
+        provenance_cleared: 0,
+        already_absent: 0,
+        blockers: this.injectedRecoveryBlockers,
+      };
+    }
+    const created = this.provenance.filter(
+      (p) => p.import_plan_hash === planHash && p.operation === 'create',
+    );
+    let deleted = 0;
+    let alreadyAbsent = 0;
+    const remaining = [...created];
+    // Children before parents: reverse manifest order (provenance is appended
+    // in execution order, which is already dependency-respecting).
+    for (const prov of remaining.reverse()) {
+      const key = `${prov.entity_type}:${prov.target_id}`;
+      if (this.rows.delete(key)) deleted++;
+      else alreadyAbsent++;
+    }
+    const cleared = await this.clearProvenanceByPlan(planHash);
+    return {
+      ok: true,
+      mode: 'recovery',
+      deleted,
+      provenance_cleared: cleared,
+      already_absent: alreadyAbsent,
+      blockers: [],
+    };
   }
 }

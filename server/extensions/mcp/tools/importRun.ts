@@ -30,7 +30,7 @@ export function registerImportDryRun(server: McpServer, token: string): void {
 export function registerImportReset(server: McpServer, token: string): void {
   server.tool(
     'historical_import_reset',
-    'Reset provenance rows recorded by a plan hash (entity rows are never deleted). Requires OWNER.',
+    'Reset provenance rows recorded by a plan hash (provenance-only: entity rows are never deleted here). Requires OWNER. Destructive recovery is REST-only (POST /reset with recovery=true + confirm_destructive=true and the HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED server gate).',
     { planHash: z.string().regex(/^[0-9a-f]{64}$/).describe('The 64-hex plan hash to reset.') },
     async ({ planHash }) => {
       const result = await apiCall<{ data: unknown }>({
