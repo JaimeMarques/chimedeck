@@ -66,6 +66,8 @@ function jsonReq(method: string, path: string, body?: unknown): Request {
 beforeEach(() => {
   authenticateMock.mockClear();
   ownerScenario = 'owner';
+  delete process.env['HISTORICAL_IMPORT_ENABLED'];
+  delete process.env['HISTORICAL_IMPORT_APPLY_ENABLED'];
   boardRows.length = 0;
   boardRows.push({ id: 'brd_synth_0001', workspace_id: 'ws_synth_0001' });
 });

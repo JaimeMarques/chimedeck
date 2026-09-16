@@ -71,6 +71,24 @@ export class MemoryImporterDeps implements ImporterDeps {
     return this.identityMap.get(sourceUserId) ?? null;
   }
 
+  async preflightCreate(input: {
+    entity_type: EntityType;
+    source_id: string;
+    target_id: string;
+    payload_ref: string | null;
+    plan_hash: string;
+    operation: Operation;
+  }): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const key = `${input.entity_type}:${input.source_id}`;
+    const payload = input.payload_ref ? this.payloadStore.get(input.payload_ref) : undefined;
+    if (!payload) return { ok: false, reason: `no staged payload for ${key}` };
+    if (payload.historical_author && !this.identityMap.has(payload.historical_author)) {
+      return { ok: false, reason: `unresolved historical identity: ${payload.historical_author}` };
+    }
+    if (this.failCreateFor.has(key)) return { ok: false, reason: `injected failure creating ${key}` };
+    return { ok: true };
+  }
+
   async createWithProvenance(input: {
     entity_type: EntityType;
     source_id: string;
