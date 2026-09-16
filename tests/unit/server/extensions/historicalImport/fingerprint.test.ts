@@ -31,21 +31,35 @@ describe('fingerprintJson / fingerprintFields', () => {
     const row = { title: 'a', description: 'b', position: 'p', archived: false, list_id: 'l1' };
     const drifted = { ...row, title: 'drifted' };
     expect(fingerprintFields(row, CARD_FINGERPRINT_FIELDS)).not.toBe(
-      fingerprintFields(drifted, CARD_FINGERPRINT_FIELDS),
+      fingerprintFields(drifted, CARD_FINGERPRINT_FIELDS)
     );
   });
 
   it('is independent of non-fingerprinted columns', () => {
-    const row = { title: 'a', description: 'b', position: 'p', archived: false, list_id: 'l1', noise: 'x' };
+    const row = {
+      title: 'a',
+      description: 'b',
+      position: 'p',
+      archived: false,
+      list_id: 'l1',
+      noise: 'x',
+    };
     const same = { ...row, noise: 'y' };
     expect(fingerprintFields(row, CARD_FINGERPRINT_FIELDS)).toBe(
-      fingerprintFields(same, CARD_FINGERPRINT_FIELDS),
+      fingerprintFields(same, CARD_FINGERPRINT_FIELDS)
     );
   });
 
   it('treats missing fields as null (canonical)', () => {
     expect(fingerprintFields({ title: 'a' }, ['title', 'description'])).toBe(
-      fingerprintFields({ title: 'a', description: null }, ['title', 'description']),
+      fingerprintFields({ title: 'a', description: null }, ['title', 'description'])
+    );
+  });
+
+  it('normalizes Postgres Date values to the staged ISO representation', () => {
+    const iso = '2026-01-01T00:00:00.000Z';
+    expect(fingerprintFields({ created_at: new Date(iso) }, ['created_at'])).toBe(
+      fingerprintFields({ created_at: iso }, ['created_at'])
     );
   });
 });

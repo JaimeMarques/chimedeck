@@ -33,7 +33,7 @@ Código novo — nada do upstream foi alterado exceto 2 linhas de montagem:
       "entity_type": "card|comment|comment_reaction|attachment|checklist|checklist_item|label|card_label|card_member|custom_field|custom_field_value|activity|mention|list|board",
       "source_id": "<id Trello>", // obrigatório
       "target_id": "<id destino opcional>", // OBRIGATÓRIO e composto para card_label/card_member (ver abaixo)
-      "operation": "create|link",
+      "operation": "create|link|correct|enrich",
       "provenance": {
         "source_system": "trello",
         "source_id": "<= source_id",
@@ -42,6 +42,9 @@ Código novo — nada do upstream foi alterado exceto 2 linhas de montagem:
       },
       "evidence_refs": ["trello-export:actions/..."], // ≥ 1 obrigatória
       "expected_target_fingerprint": "<sha256 64>|null",
+      "expected_target_fields": {
+        /* obrigatório e exacto para correct/enrich */
+      },
       "payload_ref": "file://<caminho privado no servidor>|null",
       "dependencies": ["op-..."], // acíclico, tem de existir
       "historical_author": "<id Trello do autor>", // opcional (extensão nossa); não resolvido => op BLOQUEADA
@@ -49,6 +52,13 @@ Código novo — nada do upstream foi alterado exceto 2 linhas de montagem:
   ],
 }
 ```
+
+### Operações mutáveis e objectos staged
+
+- `correct` só aceita `entity_type=comment`, `target_id`, `payload_ref`, `historical_author` resolvido e a pré-imagem exacta `expected_target_fields={user_id,content,created_at,updated_at,parent_id}`. O adapter bloqueia drift, comentários apagados e claims incompatíveis; actualiza apenas esses campos e grava/verifica provenance na mesma transação. Re-run com a pós-imagem exacta é `noop`.
+- `enrich` só aceita `entity_type=card` e uma pré-imagem de cover vazia `{cover_attachment_id:null,cover_color:null,cover_size:"SMALL"}`. O payload define exactamente uma cover (cor hex ou attachment `READY`, imagem, no mesmo cartão e import-owned) e `cover_size=SMALL|FULL`; nunca limpa nem substitui uma cover nativa.
+- Um payload `attachment` com `type=FILE` exige `object_precondition={bucket,key,byte_count,sha256}`. Bucket/key/size têm de coincidir com os campos da linha e o objecto é lido e SHA-256 verificado tanto no dry-run como no apply antes de qualquer linha/provenance.
+- Creates de `board` exigem `historical_author` igual ao `workspaces.owner_id`, membership `OWNER`, e criam `board_members(role=ADMIN)` atomicamente. Board/card/list/comment/attachment recebem `short_id` nativo único de 8 caracteres quando não fornecido.
 
 ### Join tables — chave composta (card_labels / card_members)
 

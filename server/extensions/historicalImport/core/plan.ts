@@ -27,6 +27,8 @@ import {
   fingerprintJson,
   CARD_FINGERPRINT_FIELDS,
   COMMENT_FINGERPRINT_FIELDS,
+  COMMENT_CORRECTION_FIELDS,
+  CARD_COVER_FIELDS,
   hashPlanDocument,
   sha256Hex,
   canonicalJson,
@@ -60,7 +62,7 @@ export const ENTITY_TYPES = [
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-export const OPERATIONS = ['create', 'link'] as const;
+export const OPERATIONS = ['create', 'link', 'correct', 'enrich'] as const;
 export type Operation = (typeof OPERATIONS)[number];
 
 export interface ImportProvenanceInfo {
@@ -82,8 +84,13 @@ export interface ImportOperation {
   provenance: ImportProvenanceInfo;
   evidence_refs: string[];
   expected_target_fingerprint: string | null;
+  // Required for mutating operations. The importer projects the live row onto
+  // its operation-specific allowlist and requires this exact pre-image as well
+  // as its fingerprint before changing anything.
+  expected_target_fields?: Record<string, unknown> | null;
   payload_ref: string | null; // private payload locator — validated shape only
   dependencies: string[]; // op_ids that must be applied before this one
+  historical_author?: string; // source-system user id, resolved fail-closed
 }
 
 export interface ImportPlan {
@@ -175,6 +182,24 @@ export interface ProvenanceRow {
   operation: string;
 }
 
+export interface MutationInput {
+  entity_type: EntityType;
+  source_system: string;
+  source_id: string;
+  target_id: string;
+  payload_ref: string;
+  plan_hash: string;
+  operation: 'correct' | 'enrich';
+  expected_target_fields: Record<string, unknown>;
+  expected_target_fingerprint: string;
+  historical_author?: string;
+}
+
+export type MutationResult =
+  | { status: 'applied'; target_id: string }
+  | { status: 'noop'; target_id: string; reason: string }
+  | { status: 'blocked'; reason: string };
+
 export interface ImporterDeps {
   // Fetch a target row by id (entity table read).
   fetchTarget(entityType: EntityType, targetId: string): Promise<Record<string, unknown> | null>;
@@ -207,6 +232,11 @@ export interface ImporterDeps {
     plan_hash: string;
     operation: Operation;
   }): Promise<{ ok: true } | { ok: false; reason: string }>;
+  // Existing-row mutations share one adapter body in apply and dry-run. The
+  // adapter owns the row lock, exact pre-image check, constrained update, and
+  // provenance write/verification so they are one atomic decision.
+  mutateWithProvenance(input: MutationInput): Promise<MutationResult>;
+  preflightMutation(input: MutationInput): Promise<MutationResult>;
   // Link an existing target row to a source identity (provenance insert only).
   linkProvenance(input: {
     entity_type: EntityType;
@@ -296,6 +326,24 @@ function isNonEmptyString(v: unknown): v is string {
 
 function isValidHash(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+}
+
+function mutationFields(operation: Operation): readonly string[] | null {
+  if (operation === 'correct') return COMMENT_CORRECTION_FIELDS;
+  if (operation === 'enrich') return CARD_COVER_FIELDS;
+  return null;
+}
+
+function hasExactFields(
+  value: unknown,
+  fields: readonly string[]
+): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const actual = Object.keys(value as Record<string, unknown>).sort();
+  const expected = [...fields].sort();
+  return (
+    actual.length === expected.length && actual.every((field, index) => field === expected[index])
+  );
 }
 
 export async function validatePlan(
@@ -469,6 +517,63 @@ export async function validatePlan(
           op_id: opId,
           code: 'fingerprint-invalid',
           message: `expected_target_fingerprint must be 64-hex sha256 (${FINGERPRINT_ALGORITHM}) or null`,
+        });
+      }
+    }
+
+    const mutationFieldSet = mutationFields(op.operation);
+    if (mutationFieldSet) {
+      const requiredEntity = op.operation === 'correct' ? 'comment' : 'card';
+      if (op.entity_type !== requiredEntity) {
+        errors.push({
+          op_id: opId,
+          code: 'mutation-entity-invalid',
+          message: `${op.operation} is supported only for ${requiredEntity}`,
+        });
+      }
+      if (!isNonEmptyString(op.target_id)) {
+        errors.push({
+          op_id: opId,
+          code: 'mutation-target-required',
+          message: `${op.operation} requires target_id`,
+        });
+      }
+      if (!isNonEmptyString(op.payload_ref)) {
+        errors.push({
+          op_id: opId,
+          code: 'mutation-payload-required',
+          message: `${op.operation} requires payload_ref`,
+        });
+      }
+      if (!isValidHash(op.expected_target_fingerprint)) {
+        errors.push({
+          op_id: opId,
+          code: 'mutation-fingerprint-required',
+          message: `${op.operation} requires expected_target_fingerprint`,
+        });
+      }
+      if (!hasExactFields(op.expected_target_fields, mutationFieldSet)) {
+        errors.push({
+          op_id: opId,
+          code: 'mutation-expected-fields-invalid',
+          message: `${op.operation} expected_target_fields must contain exactly ${mutationFieldSet.join(',')}`,
+        });
+      } else if (
+        isValidHash(op.expected_target_fingerprint) &&
+        fingerprintFields(op.expected_target_fields, mutationFieldSet) !==
+          op.expected_target_fingerprint
+      ) {
+        errors.push({
+          op_id: opId,
+          code: 'mutation-fingerprint-mismatch',
+          message: `${op.operation} expected_target_fingerprint does not match expected_target_fields`,
+        });
+      }
+      if (op.operation === 'correct' && !isNonEmptyString(op.historical_author)) {
+        errors.push({
+          op_id: opId,
+          code: 'historical-author-required',
+          message: 'correct requires historical_author',
         });
       }
     }
@@ -670,6 +775,47 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
         ctx.counts.blocked++;
         return;
       }
+    }
+
+    // Existing-row mutations are delegated as one adapter transaction. This
+    // branch must precede generic provenance dedupe: a rerun may already have
+    // the source claim and still needs a post-image no-op check.
+    if (op.operation === 'correct' || op.operation === 'enrich') {
+      const mutationInput: MutationInput = {
+        entity_type: op.entity_type,
+        source_system: plan.source_system,
+        source_id: op.source_id,
+        target_id: op.target_id as string,
+        payload_ref: op.payload_ref as string,
+        plan_hash: planHash,
+        operation: op.operation,
+        expected_target_fields: op.expected_target_fields as Record<string, unknown>,
+        expected_target_fingerprint: op.expected_target_fingerprint as string,
+        ...(op.historical_author ? { historical_author: op.historical_author } : {}),
+      };
+      const result =
+        ctx.mode === 'apply'
+          ? await deps.mutateWithProvenance(mutationInput)
+          : await deps.preflightMutation(mutationInput);
+      if (result.status === 'blocked') {
+        ctx.outcomes.push({ status: 'blocked', op_id: op.op_id, reason: result.reason });
+        ctx.counts.blocked++;
+        return;
+      }
+      if (result.status === 'noop') {
+        ctx.outcomes.push({
+          status: 'noop',
+          op_id: op.op_id,
+          reason: result.reason,
+          target_id: result.target_id,
+        });
+        ctx.counts.noop++;
+      } else {
+        ctx.outcomes.push({ status: 'applied', op_id: op.op_id, target_id: result.target_id });
+        ctx.counts.applied++;
+      }
+      appliedOrNoop.add(op.op_id);
+      return;
     }
 
     // (1) existing provenance for this source => dedupe / idempotent re-run

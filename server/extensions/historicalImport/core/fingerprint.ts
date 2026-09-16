@@ -49,19 +49,31 @@ export const CARD_FINGERPRINT_FIELDS = [
   'list_id',
 ] as const;
 
-export const COMMENT_FINGERPRINT_FIELDS = [
-  'card_id',
+export const COMMENT_FINGERPRINT_FIELDS = ['card_id', 'user_id', 'content', 'parent_id'] as const;
+
+// Existing-row mutation fingerprints intentionally use dedicated, immutable
+// field sets. Changing the legacy constants above would invalidate reviewed
+// link-plan fingerprints already in circulation.
+export const COMMENT_CORRECTION_FIELDS = [
   'user_id',
   'content',
+  'created_at',
+  'updated_at',
   'parent_id',
 ] as const;
+
+export const CARD_COVER_FIELDS = ['cover_attachment_id', 'cover_color', 'cover_size'] as const;
+
+function canonicalFieldValue(value: unknown): unknown {
+  return value instanceof Date ? value.toISOString() : value;
+}
 
 // Build a fingerprint over selected fields of a row.
 export function fingerprintFields(
   row: Record<string, unknown> | undefined | null,
-  fields: readonly string[],
+  fields: readonly string[]
 ): string {
   const subset: Record<string, unknown> = {};
-  for (const f of fields) subset[f] = row?.[f] ?? null;
+  for (const f of fields) subset[f] = canonicalFieldValue(row?.[f] ?? null);
   return fingerprintJson(subset);
 }

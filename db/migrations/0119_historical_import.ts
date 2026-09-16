@@ -24,7 +24,7 @@ export async function up(knex: Knex): Promise<void> {
     table.string('target_id').notNullable(); // ChimeDeck row ID
     table.string('target_ref').notNullable(); // `${entity_type}:${target_id}`
     table.string('import_plan_hash').notNullable();
-    table.string('operation').notNullable(); // 'create' | 'link'
+    table.string('operation').notNullable(); // 'create' | 'link' | 'correct' | 'enrich'
     table.timestamp('imported_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
     table.timestamp('last_verified_at', { useTz: true }).nullable();
 

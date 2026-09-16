@@ -28,8 +28,24 @@ import {
   targetRef,
   ID_PART_PATTERN,
 } from './composite';
-import type { EntityType, ImporterDeps, Operation, ProvenanceRow, RecoveryReport } from './plan';
+import type {
+  EntityType,
+  ImporterDeps,
+  MutationInput,
+  MutationResult,
+  Operation,
+  ProvenanceRow,
+  RecoveryReport,
+} from './plan';
 import { readVerifiedStagedPayload } from './payload';
+import { verifyAttachmentObjectPrecondition } from './objectPrecondition';
+import {
+  CARD_COVER_FIELDS,
+  COMMENT_CORRECTION_FIELDS,
+  canonicalJson,
+  fingerprintFields,
+} from './fingerprint';
+import { sanitizeRichText } from '../../../common/sanitize';
 
 export {
   PAYLOAD_STAGING_ROOT,
@@ -81,41 +97,47 @@ function generatedShortId(): string {
   return Array.from(bytes, (byte) => SHORT_ID_ALPHABET[byte % SHORT_ID_ALPHABET.length]).join('');
 }
 
-// Resolve cards.short_id before entering the INSERT. The deploy schema uses a
-// CHECK (short_id IS NOT NULL) and a partial unique index; imported Trello
-// shortLink is preserved where it has the native eight-character form and is
-// free, otherwise the importer allocates a collision-resistant native id.
-// The unique index remains the concurrency authority: a race causes the
-// transaction to roll back and is surfaced by the dry-run/apply equally.
-async function ensureCardShortId(
+const SHORT_ID_TABLES: Partial<Record<EntityType, string>> = {
+  board: 'boards',
+  card: 'cards',
+  list: 'lists',
+  comment: 'comments',
+  attachment: 'attachments',
+};
+
+// Resolve native short_id before entering the INSERT. The unique indexes remain
+// the concurrency authority: a race rolls the whole entity+provenance
+// transaction back and is surfaced identically by dry-run and apply.
+async function ensureNativeShortId(
   trx: Knex.Transaction,
+  entityType: EntityType,
   row: Record<string, unknown>
 ): Promise<void> {
+  const table = SHORT_ID_TABLES[entityType];
+  if (!table) return;
   const supplied = row.short_id;
   if (typeof supplied === 'string' && /^[A-Za-z0-9]{8}$/.test(supplied)) return;
   if (supplied !== undefined && supplied !== null) {
-    throw new Error('card payload short_id must be an 8-character alphanumeric string');
+    throw new Error(`${entityType} payload short_id must be an 8-character alphanumeric string`);
   }
 
-  const preferred = row.short_link;
+  const preferred = entityType === 'card' ? row.short_link : null;
   if (typeof preferred === 'string' && /^[A-Za-z0-9]{8}$/.test(preferred)) {
-    const existing = await trx('cards').where({ short_id: preferred }).first();
+    const existing = await trx(table).where({ short_id: preferred }).first();
     if (!existing) {
       row.short_id = preferred;
       return;
     }
   }
-  // A persisted collision between retries is extremely unlikely, but the
-  // explicit bounded retry prevents an unbounded import worker loop.
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const candidate = generatedShortId();
-    const existing = await trx('cards').where({ short_id: candidate }).first();
+    const existing = await trx(table).where({ short_id: candidate }).first();
     if (!existing) {
       row.short_id = candidate;
       return;
     }
   }
-  throw new Error('failed-to-generate-unique-short-id:cards');
+  throw new Error(`failed-to-generate-unique-short-id:${table}`);
 }
 
 export interface CreateWithProvenanceInput {
@@ -146,6 +168,15 @@ async function performCreate(
     throw new Error(
       `no staged payload resolved for ${entity_type}:${source_id} (payload_ref=${payload_ref})`
     );
+  }
+  if (payload && (payload.entity_type !== entity_type || payload.source_id !== source_id)) {
+    throw new Error('staged payload identity does not match create operation');
+  }
+  // FILE attachments are not representable until the exact staged object has
+  // been read back and proven. This runs in both preflight and apply before any
+  // row/provenance transaction begins.
+  if (entity_type === 'attachment' && payload?.fields.type === 'FILE') {
+    await verifyAttachmentObjectPrecondition(payload);
   }
 
   // Historical author must resolve to an existing user (if declared).
@@ -196,19 +227,52 @@ async function performCreate(
       row = { ...fields, ...compositeKey };
     } else {
       row = { id: target_id, ...(payload?.fields ?? {}) };
-      // Comments/attachments carry the historical author column directly;
-      // other entities keep the operator as creator in activity, authorship
-      // lives in provenance + payload (documented in capability matrix).
       if (entity_type === 'comment') {
         if (!authorUserId) throw new Error('comment payload requires a resolved historical_author');
         row.user_id = authorUserId;
       }
+      if (entity_type === 'attachment') {
+        if (row.type === 'FILE' && !authorUserId) {
+          throw new Error('FILE attachment payload requires a resolved historical_author');
+        }
+        if (authorUserId) row.uploaded_by = authorUserId;
+        if (row.type === 'FILE' && row.status !== 'READY') {
+          throw new Error('FILE attachment import requires status READY');
+        }
+      }
       if (payload?.created_at) row.created_at = payload.created_at;
       if (payload?.updated_at) row.updated_at = payload.updated_at;
-      if (entity_type === 'card') await ensureCardShortId(trx, row);
+      await ensureNativeShortId(trx, entity_type, row);
+
+      // A board imported through direct knex writes must have the same ownership
+      // invariant as native creation: the historical creator is the workspace's
+      // actual OWNER, has an OWNER membership, and becomes board ADMIN atomically.
+      if (entity_type === 'board') {
+        if (!authorUserId) throw new Error('board payload requires a resolved historical_author');
+        const workspaceId = row.workspace_id;
+        if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+          throw new Error('board payload requires workspace_id');
+        }
+        const workspace = await trx('workspaces').where({ id: workspaceId }).first();
+        if (!workspace || workspace.owner_id !== authorUserId) {
+          throw new Error('board historical_author must resolve to the workspace owner');
+        }
+        const membership = await trx('memberships')
+          .where({ workspace_id: workspaceId, user_id: authorUserId, role: 'OWNER' })
+          .first();
+        if (!membership) throw new Error('workspace owner is missing an OWNER membership');
+      }
     }
 
     await trx(table).insert(row);
+    if (entity_type === 'board') {
+      await trx('board_members').insert({
+        id: randomUUID(),
+        board_id: target_id,
+        user_id: authorUserId,
+        role: 'ADMIN',
+      });
+    }
     await trx('import_provenance').insert({
       id: randomUUID(),
       source_system: 'trello',
@@ -236,6 +300,227 @@ async function performCreate(
       const winner = await db('import_provenance').where({ entity_type, source_id }).first();
       if (winner) return { target_id: (winner as ProvenanceRow).target_id, created: false };
     }
+    throw err;
+  }
+}
+
+function sameProjectedFields(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+  fields: readonly string[]
+): boolean {
+  const project = (row: Record<string, unknown>) =>
+    Object.fromEntries(
+      fields.map((field) => {
+        const value = row[field];
+        return [field, value instanceof Date ? value.toISOString() : (value ?? null)];
+      })
+    );
+  return canonicalJson(project(left)) === canonicalJson(project(right));
+}
+
+async function performMutation(
+  input: MutationInput,
+  mode: 'apply' | 'dry-run',
+  identityMap: Map<string, string>
+): Promise<MutationResult> {
+  const payload = await readVerifiedStagedPayload(input.payload_ref);
+  if (!payload) throw new Error(`no staged payload resolved for mutation ${input.source_id}`);
+  if (payload.entity_type !== input.entity_type || payload.source_id !== input.source_id) {
+    throw new Error('staged payload identity does not match mutation operation');
+  }
+
+  const fields = input.operation === 'correct' ? COMMENT_CORRECTION_FIELDS : CARD_COVER_FIELDS;
+  if (
+    fingerprintFields(input.expected_target_fields, fields) !== input.expected_target_fingerprint
+  ) {
+    throw new Error('mutation expected fields do not match expected fingerprint');
+  }
+
+  const trx = await db.transaction();
+  try {
+    const table = ENTITY_TABLES[input.entity_type];
+    const current = (await trx(table).where({ id: input.target_id }).forUpdate().first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!current) {
+      await trx.rollback();
+      return {
+        status: 'blocked',
+        reason: `mutation target ${input.entity_type}:${input.target_id} not found`,
+      };
+    }
+
+    const sourceClaim = (await trx('import_provenance')
+      .where({
+        source_system: input.source_system,
+        entity_type: input.entity_type,
+        source_id: input.source_id,
+      })
+      .first()) as ProvenanceRow | undefined;
+    const targetClaim = (await trx('import_provenance')
+      .where({ target_ref: targetRef(input.entity_type, input.target_id) })
+      .first()) as ProvenanceRow | undefined;
+    if (sourceClaim && sourceClaim.target_id !== input.target_id) {
+      await trx.rollback();
+      return { status: 'blocked', reason: 'source is already claimed by another target' };
+    }
+    if (
+      targetClaim &&
+      (targetClaim.source_system !== input.source_system ||
+        targetClaim.source_id !== input.source_id)
+    ) {
+      await trx.rollback();
+      return { status: 'blocked', reason: 'target is already claimed by another source' };
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (input.operation === 'correct') {
+      if (input.entity_type !== 'comment')
+        throw new Error('correct is supported only for comments');
+      if (current.deleted === true) {
+        await trx.rollback();
+        return { status: 'blocked', reason: 'deleted comments cannot be corrected' };
+      }
+      if (!payload.historical_author || payload.historical_author !== input.historical_author) {
+        throw new Error('comment correction historical_author does not match its staged payload');
+      }
+      const authorUserId = identityMap.get(payload.historical_author);
+      if (!authorUserId)
+        throw new Error(`unresolved historical identity: ${payload.historical_author}`);
+      const user = await trx('users').where({ id: authorUserId }).first();
+      if (!user) throw new Error(`mapped user ${authorUserId} does not exist`);
+      const content = payload.fields.content;
+      if (typeof content !== 'string' || content.trim().length === 0) {
+        throw new Error('comment correction requires non-empty content');
+      }
+      const canonicalContent = sanitizeRichText(content.trim());
+      if (canonicalContent !== content) {
+        throw new Error('comment correction content must already be canonical sanitized rich text');
+      }
+      if (!payload.created_at || Number.isNaN(Date.parse(payload.created_at))) {
+        throw new Error('comment correction requires a valid created_at');
+      }
+      if (!payload.updated_at || Number.isNaN(Date.parse(payload.updated_at))) {
+        throw new Error('comment correction requires a valid updated_at');
+      }
+      const parentId = payload.fields.parent_id ?? null;
+      if (parentId !== null && typeof parentId !== 'string') {
+        throw new Error('comment correction parent_id must be a string or null');
+      }
+      if (parentId === input.target_id) throw new Error('comment cannot be its own parent');
+      if (parentId) {
+        const parent = await trx('comments').where({ id: parentId }).first();
+        if (!parent || parent.card_id !== current.card_id || parent.parent_id !== null) {
+          throw new Error(
+            'comment correction parent_id must reference a root comment on the same card'
+          );
+        }
+      }
+      Object.assign(patch, {
+        user_id: authorUserId,
+        content,
+        created_at: payload.created_at,
+        updated_at: payload.updated_at,
+        parent_id: parentId,
+      });
+    } else {
+      if (input.entity_type !== 'card') throw new Error('enrich is supported only for cards');
+      if (
+        input.expected_target_fields.cover_attachment_id !== null ||
+        input.expected_target_fields.cover_color !== null ||
+        input.expected_target_fields.cover_size !== 'SMALL'
+      ) {
+        throw new Error('card cover enrich requires an empty native cover pre-image');
+      }
+      const attachmentId = payload.fields.cover_attachment_id ?? null;
+      const color = payload.fields.cover_color ?? null;
+      const size = payload.fields.cover_size;
+      if ((attachmentId === null) === (color === null)) {
+        throw new Error(
+          'card cover enrich requires exactly one of cover_attachment_id or cover_color'
+        );
+      }
+      if (size !== 'SMALL' && size !== 'FULL') {
+        throw new Error('card cover enrich cover_size must be SMALL or FULL');
+      }
+      if (
+        color !== null &&
+        (typeof color !== 'string' || !/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color))
+      ) {
+        throw new Error('card cover enrich cover_color must be a hex color');
+      }
+      if (attachmentId !== null) {
+        if (typeof attachmentId !== 'string' || attachmentId.length === 0) {
+          throw new Error('card cover enrich cover_attachment_id must be a non-empty string');
+        }
+        const attachment = await trx('attachments')
+          .where({ id: attachmentId, card_id: input.target_id, type: 'FILE', status: 'READY' })
+          .first();
+        if (
+          !attachment ||
+          typeof attachment.mime_type !== 'string' ||
+          !attachment.mime_type.startsWith('image/')
+        ) {
+          throw new Error('card cover enrich attachment must be a READY image on the same card');
+        }
+        const attachmentClaim = await trx('import_provenance')
+          .where({
+            target_ref: targetRef('attachment', attachmentId),
+            source_system: input.source_system,
+          })
+          .first();
+        if (!attachmentClaim) throw new Error('card cover enrich attachment must be import-owned');
+      }
+      Object.assign(patch, {
+        cover_attachment_id: attachmentId,
+        cover_color: color,
+        cover_size: size,
+      });
+    }
+
+    const claim = sourceClaim ?? targetClaim;
+    if (sameProjectedFields(current, patch, fields) && claim) {
+      await trx.rollback();
+      return { status: 'noop', target_id: input.target_id, reason: 'mutation already applied' };
+    }
+    if (
+      fingerprintFields(current, fields) !== input.expected_target_fingerprint ||
+      !sameProjectedFields(current, input.expected_target_fields, fields)
+    ) {
+      await trx.rollback();
+      return { status: 'blocked', reason: 'target fingerprint drift — mutation prohibited' };
+    }
+
+    await trx(table).where({ id: input.target_id }).update(patch);
+    if (!claim) {
+      await trx('import_provenance').insert({
+        id: randomUUID(),
+        source_system: input.source_system,
+        entity_type: input.entity_type,
+        source_id: input.source_id,
+        target_id: input.target_id,
+        target_ref: targetRef(input.entity_type, input.target_id),
+        import_plan_hash: input.plan_hash,
+        operation: input.operation,
+      });
+    } else {
+      await trx('import_provenance')
+        .where({ id: claim.id })
+        .update({ last_verified_at: trx.fn.now() });
+    }
+    const after = (await trx(table).where({ id: input.target_id }).first()) as Record<
+      string,
+      unknown
+    >;
+    if (!sameProjectedFields(after, patch, fields))
+      throw new Error('mutation postcondition failed');
+
+    if (mode === 'dry-run') await trx.rollback();
+    else await trx.commit();
+    return { status: 'applied', target_id: input.target_id };
+  } catch (err) {
+    if (!trx.isCompleted()) await trx.rollback();
     throw err;
   }
 }
@@ -308,6 +593,14 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) } as const;
       }
+    },
+
+    mutateWithProvenance(input) {
+      return performMutation(input, 'apply', identityMap);
+    },
+
+    preflightMutation(input) {
+      return performMutation(input, 'dry-run', identityMap);
     },
 
     async linkProvenance({ entity_type, source_id, target_id, plan_hash }) {

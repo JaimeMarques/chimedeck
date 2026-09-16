@@ -6,6 +6,8 @@ import type {
   Operation,
   ProvenanceRow,
   RecoveryReport,
+  MutationInput,
+  MutationResult,
 } from '../../../server/extensions/historicalImport/core/plan';
 import { randomUUID } from 'node:crypto';
 import {
@@ -14,6 +16,11 @@ import {
   targetRef,
 } from '../../../server/extensions/historicalImport/core/composite';
 import { SYNTH_PAYLOADS } from './fixtures';
+import {
+  CARD_COVER_FIELDS,
+  COMMENT_CORRECTION_FIELDS,
+  fingerprintFields,
+} from '../../../server/extensions/historicalImport/core/fingerprint';
 
 export interface StagedPayload {
   entity_type: EntityType;
@@ -96,6 +103,92 @@ export class MemoryImporterDeps implements ImporterDeps {
     if (this.failCreateFor.has(key))
       return { ok: false, reason: `injected failure creating ${key}` };
     return { ok: true };
+  }
+
+  async preflightMutation(input: MutationInput): Promise<MutationResult> {
+    return this.performMutation(input, false);
+  }
+
+  async mutateWithProvenance(input: MutationInput): Promise<MutationResult> {
+    return this.performMutation(input, true);
+  }
+
+  private async performMutation(input: MutationInput, commit: boolean): Promise<MutationResult> {
+    const payload = this.payloadStore.get(input.payload_ref);
+    if (!payload) throw new Error(`no staged payload for ${input.entity_type}:${input.source_id}`);
+    if (payload.entity_type !== input.entity_type || payload.source_id !== input.source_id) {
+      throw new Error('staged payload identity does not match mutation operation');
+    }
+    const rowKey = `${input.entity_type}:${input.target_id}`;
+    const current = this.rows.get(rowKey);
+    if (!current) return { status: 'blocked', reason: `mutation target ${rowKey} not found` };
+
+    const sourceClaim = this.provenance.find(
+      (p) => p.entity_type === input.entity_type && p.source_id === input.source_id
+    );
+    const targetClaim = this.provenance.find(
+      (p) => p.target_ref === targetRef(input.entity_type, input.target_id)
+    );
+    if (sourceClaim && sourceClaim.target_id !== input.target_id) {
+      return { status: 'blocked', reason: 'source is already claimed by another target' };
+    }
+    if (targetClaim && targetClaim.source_id !== input.source_id) {
+      return { status: 'blocked', reason: 'target is already claimed by another source' };
+    }
+
+    const patch: Record<string, unknown> = {};
+    const fields = input.operation === 'correct' ? COMMENT_CORRECTION_FIELDS : CARD_COVER_FIELDS;
+    if (input.operation === 'correct') {
+      const author = payload.historical_author;
+      if (!author || author !== input.historical_author) {
+        throw new Error('comment correction historical_author does not match its staged payload');
+      }
+      const userId = this.identityMap.get(author);
+      if (!userId) throw new Error(`unresolved historical identity: ${author}`);
+      if (typeof payload.fields.content !== 'string' || payload.fields.content.trim() === '') {
+        throw new Error('comment correction requires non-empty content');
+      }
+      if (!payload.created_at || !payload.updated_at) {
+        throw new Error('comment correction requires created_at and updated_at');
+      }
+      Object.assign(patch, {
+        user_id: userId,
+        content: payload.fields.content,
+        parent_id: payload.fields.parent_id ?? null,
+        created_at: payload.created_at,
+        updated_at: payload.updated_at,
+      });
+    } else {
+      Object.assign(patch, {
+        cover_attachment_id: payload.fields.cover_attachment_id ?? null,
+        cover_color: payload.fields.cover_color ?? null,
+        cover_size: payload.fields.cover_size ?? 'SMALL',
+      });
+    }
+
+    if (fingerprintFields(current, fields) === fingerprintFields(patch, fields) && sourceClaim) {
+      return { status: 'noop', target_id: input.target_id, reason: 'mutation already applied' };
+    }
+    if (fingerprintFields(current, fields) !== input.expected_target_fingerprint) {
+      return { status: 'blocked', reason: 'target fingerprint drift — mutation prohibited' };
+    }
+
+    if (commit) {
+      this.rows.set(rowKey, { ...current, ...patch });
+      if (!sourceClaim) {
+        this.provenance.push({
+          id: randomUUID(),
+          source_system: input.source_system,
+          entity_type: input.entity_type,
+          source_id: input.source_id,
+          target_id: input.target_id,
+          target_ref: targetRef(input.entity_type, input.target_id),
+          import_plan_hash: input.plan_hash,
+          operation: input.operation,
+        });
+      }
+    }
+    return { status: 'applied', target_id: input.target_id };
   }
 
   async createWithProvenance(input: {

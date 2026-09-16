@@ -33,6 +33,12 @@ export interface StagedPayload {
   created_at?: string; // ISO
   updated_at?: string; // ISO
   fields: Record<string, unknown>; // entity column => value
+  object_precondition?: {
+    bucket: string;
+    key: string;
+    byte_count: number;
+    sha256: string;
+  };
 }
 
 export function sha256Hex(bytes: string | Uint8Array): string {
