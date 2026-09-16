@@ -15,11 +15,15 @@ import {
 } from '../../../middlewares/permissionManager';
 import type { AuthenticatedRequest } from '../../auth/middlewares/authentication';
 
-export const HISTORICAL_IMPORT_ENABLED = Bun.env['HISTORICAL_IMPORT_ENABLED'] === 'true';
-export const HISTORICAL_IMPORT_APPLY_ENABLED = Bun.env['HISTORICAL_IMPORT_APPLY_ENABLED'] === 'true';
+// Resolve enablement per request. Process environments are captured only at
+// process launch in many deployment managers; evaluating here keeps the
+// router's documented request-time gate semantics accurate for the runtime.
+export function historicalImportEnabled(): boolean {
+  return Bun.env['HISTORICAL_IMPORT_ENABLED'] === 'true';
+}
 
 export function importDisabledResponse(): Response | null {
-  if (HISTORICAL_IMPORT_ENABLED) return null;
+  if (historicalImportEnabled()) return null;
   return Response.json(
     {
       error: {

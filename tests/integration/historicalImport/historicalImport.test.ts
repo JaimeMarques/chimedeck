@@ -150,6 +150,57 @@ describe('dry-run — default mode, zero entity writes', () => {
     expect(deps.audit.filter((a) => a.action === 'dry_run').length).toBe(1);
   });
 
+  it('fails closed in dry-run when a staged payload is missing, with no writes', async () => {
+    const deps = freshDeps();
+    const plan = syntheticPlan();
+    plan.operations[0]!.payload_ref = 'file:///payloads/plan_synth_0001/missing.json';
+
+    const result = await dryRunPlan(plan, deps, OPERATOR);
+
+    expect(result.operations_applied).toBe(0);
+    expect(result.operations_failed).toBe(1);
+    expect(result.stopped_early).toBe(true);
+    expect(result.outcomes.find((outcome) => outcome.op_id === 'op-card-1')).toMatchObject({
+      status: 'failed',
+      reason: expect.stringContaining('no staged payload'),
+    });
+    expect(deps.rows.size).toBe(1);
+    expect(deps.provenance).toHaveLength(0);
+  });
+
+  it('fails closed in dry-run for an author unresolved only in the staged payload', async () => {
+    const deps = freshDeps();
+    const plan = syntheticPlan();
+    const payloadRef = plan.operations[0]!.payload_ref!;
+    const payload = structuredClone(deps.payloadStore.get(payloadRef)!);
+    payload.historical_author = 'm_synth_ghost';
+    deps.payloadStore.set(payloadRef, payload);
+
+    const result = await dryRunPlan(plan, deps, OPERATOR);
+
+    expect(result.operations_failed).toBe(1);
+    expect(result.outcomes.find((outcome) => outcome.op_id === 'op-card-1')).toMatchObject({
+      status: 'failed',
+      reason: expect.stringContaining('unresolved historical identity'),
+    });
+    expect(deps.rows.size).toBe(1);
+    expect(deps.provenance).toHaveLength(0);
+  });
+
+  it('preflights the same injected create failure as apply', async () => {
+    const deps = freshDeps();
+    const plan = syntheticPlan();
+    deps.failCreateFor.add('card:trello_card_synth_0001');
+
+    const result = await dryRunPlan(plan, deps, OPERATOR);
+
+    expect(result.operations_failed).toBe(1);
+    expect(result.stopped_early).toBe(true);
+    expect(result.operations_blocked).toBe(5); // all unscheduled ops are fail-fast blocked
+    expect(deps.rows.size).toBe(1);
+    expect(deps.provenance).toHaveLength(0);
+  });
+
   it('returns 422-shaped validation errors for an invalid plan', async () => {
     const deps = freshDeps();
     const plan = syntheticPlan();

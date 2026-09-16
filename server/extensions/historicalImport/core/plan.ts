@@ -146,7 +146,7 @@ export interface ImporterDeps {
   // Resolve a historical author identity to a ChimeDeck user id.
   // Must return null for unresolved identities (=> op blocked).
   resolveIdentity(sourceSystem: string, sourceUserId: string): Promise<string | null>;
-  // Atomically (transaction): create the row + provenance, or no-op if
+  // Apply-only creation: atomically create the row + provenance, or no-op if
   // provenance already exists. Returns the resulting target id.
   createWithProvenance(input: {
     entity_type: EntityType;
@@ -156,6 +156,18 @@ export interface ImporterDeps {
     plan_hash: string;
     operation: Operation;
   }): Promise<{ target_id: string; created: boolean }>;
+  // Dry-run creation preflight. Implementations MUST resolve the same payload
+  // source and validate the same identity/schema/constraint path as apply,
+  // without committing entity or provenance rows. A false result is reported
+  // as a dry-run failed outcome; this keeps rehearsal and apply parity.
+  preflightCreate(input: {
+    entity_type: EntityType;
+    source_id: string;
+    target_id: string;
+    payload_ref: string | null;
+    plan_hash: string;
+    operation: Operation;
+  }): Promise<{ ok: true } | { ok: false; reason: string }>;
   // Link an existing target row to a source identity (provenance insert only).
   linkProvenance(input: {
     entity_type: EntityType;
@@ -626,19 +638,29 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       }
     }
 
-    // (4) create
+    // (4) create. Dry-run preflight resolves the staged payload, verifies its
+    // configured SHA-256 manifest entry, resolves its historical author, and
+    // runs the exact INSERTs in a rolled-back DB transaction. This makes a
+    // green rehearsal evidence that apply reaches the same constraints.
     const newTargetId = targetId ?? `hi_${randomUUID()}`;
+    const createInput = {
+      entity_type: op.entity_type,
+      source_id: op.source_id,
+      target_id: newTargetId,
+      payload_ref: op.payload_ref ?? null,
+      plan_hash: planHash,
+      operation: op.operation,
+    };
     if (ctx.mode === 'apply') {
-      const res = await deps.createWithProvenance({
-        entity_type: op.entity_type,
-        source_id: op.source_id,
-        target_id: newTargetId,
-        payload_ref: op.payload_ref ?? null,
-        plan_hash: planHash,
-        operation: op.operation,
-      });
+      const res = await deps.createWithProvenance(createInput);
       ctx.outcomes.push({ status: 'applied', op_id: op.op_id, target_id: res.target_id });
     } else {
+      const preflight = await deps.preflightCreate(createInput);
+      if (!preflight.ok) {
+        // Let the common fail-fast handler emit the failed outcome and stop
+        // scheduling, exactly as an apply-side INSERT error would.
+        throw new Error(`dry-run preflight failed: ${preflight.reason}`);
+      }
       ctx.outcomes.push({ status: 'applied', op_id: op.op_id, target_id: newTargetId });
     }
     ctx.counts.applied++;
@@ -648,7 +670,7 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
   // Simple multi-pass scheduler honoring dependencies and manifest order.
   let progressed = true;
   let blockedRound = new Set<string>();
-  while (pending.length > 0 && progressed) {
+  while (pending.length > 0 && progressed && !stoppedEarly.value) {
     progressed = false;
     blockedRound = new Set();
     for (let i = 0; i < pending.length; ) {

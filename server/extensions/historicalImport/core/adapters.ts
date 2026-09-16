@@ -7,13 +7,30 @@
 // never receives payloads through the API — the operator stages them on the
 // server host and grants access via filesystem. This keeps payloads out of
 // logs, proxies and the tool transport entirely.
-import { randomUUID } from 'node:crypto';
+// [why parity] The dry-run preflight and the real apply share ONE body
+// (`performCreate`): the only difference is commit vs rollback. A dry-run
+// therefore fails exactly where an apply would fail, with the same error
+// message — payload unreadable/absent, payload/manifest SHA-256 mismatch,
+// unresolved historical identity, column/constraint/FK violation, or a
+// provenance uniqueness conflict. Drift between rehearsal and apply is
+// structural, not merely tested.
+//
+// Payload resolution lives in ./payload.ts (staging-root containment +
+// manifest SHA-256 verification) and is re-exported here for callers that
+// used to import it from this module.
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Knex } from 'knex';
 import { db } from '../../../common/db';
 import type { EntityType, ImporterDeps, Operation, ProvenanceRow } from './plan';
+import { readVerifiedStagedPayload } from './payload';
 
-export const PAYLOAD_STAGING_ROOT = Bun.env['HISTORICAL_IMPORT_PAYLOAD_ROOT'] ?? '';
+export {
+  PAYLOAD_STAGING_ROOT,
+  PAYLOAD_MANIFEST_PATH,
+  resolveStagedPayload,
+  type StagedPayload,
+} from './payload';
 
 // Identity map: Trello member id -> ChimeDeck user id. Loaded from a JSON
 // artifact on the server host (operator-staged, private). Identities absent
@@ -50,36 +67,130 @@ const ENTITY_TABLES: Record<EntityType, string> = {
   mention: 'mentions',
 };
 
-// Payload staged-file shape. The staged file carries the historical author
-// and timestamps; the API/manifest only carries the reference.
-export interface StagedPayload {
-  entity_type: EntityType;
-  source_id: string;
-  historical_author?: string; // Trello member id
-  created_at?: string; // ISO
-  updated_at?: string; // ISO
-  fields: Record<string, unknown>; // entity column => value
+const SHORT_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const SHORT_ID_LENGTH = 8;
+
+function generatedShortId(): string {
+  const bytes = randomBytes(SHORT_ID_LENGTH);
+  return Array.from(bytes, (byte) => SHORT_ID_ALPHABET[byte % SHORT_ID_ALPHABET.length]).join('');
 }
 
-export async function resolveStagedPayload(payloadRef: string | null): Promise<StagedPayload | null> {
-  if (!payloadRef) return null;
-  if (!PAYLOAD_STAGING_ROOT) {
-    throw new Error('HISTORICAL_IMPORT_PAYLOAD_ROOT is not configured on the server');
+// Resolve cards.short_id before entering the INSERT. The deploy schema uses a
+// CHECK (short_id IS NOT NULL) and a partial unique index; imported Trello
+// shortLink is preserved where it has the native eight-character form and is
+// free, otherwise the importer allocates a collision-resistant native id.
+// The unique index remains the concurrency authority: a race causes the
+// transaction to roll back and is surfaced by the dry-run/apply equally.
+async function ensureCardShortId(trx: Knex.Transaction, row: Record<string, unknown>): Promise<void> {
+  const supplied = row.short_id;
+  if (typeof supplied === 'string' && /^[A-Za-z0-9]{8}$/.test(supplied)) return;
+  if (supplied !== undefined && supplied !== null) {
+    throw new Error('card payload short_id must be an 8-character alphanumeric string');
   }
-  // Only file: refs under the configured staging root are allowed — no
-  // arbitrary filesystem reads.
-  if (!payloadRef.startsWith('file://')) {
-    throw new Error(`unsupported payload_ref scheme: ${payloadRef.split(':')[0]}`);
+
+  const preferred = row.short_link;
+  if (typeof preferred === 'string' && /^[A-Za-z0-9]{8}$/.test(preferred)) {
+    const existing = await trx('cards').where({ short_id: preferred }).first();
+    if (!existing) {
+      row.short_id = preferred;
+      return;
+    }
   }
-  const rawPath = payloadRef.slice('file://'.length);
-  const { resolve, sep } = await import('node:path');
-  const stagingRoot = resolve(PAYLOAD_STAGING_ROOT);
-  const absPath = resolve(rawPath);
-  if (absPath !== stagingRoot && !absPath.startsWith(stagingRoot + sep)) {
-    throw new Error('payload_ref escapes the configured staging root');
+  // A persisted collision between retries is extremely unlikely, but the
+  // explicit bounded retry prevents an unbounded import worker loop.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = generatedShortId();
+    const existing = await trx('cards').where({ short_id: candidate }).first();
+    if (!existing) {
+      row.short_id = candidate;
+      return;
+    }
   }
-  const text = await readFile(absPath, 'utf8');
-  return JSON.parse(text) as StagedPayload;
+  throw new Error('failed-to-generate-unique-short-id:cards');
+}
+
+export interface CreateWithProvenanceInput {
+  entity_type: EntityType;
+  source_id: string;
+  target_id: string;
+  payload_ref: string | null;
+  plan_hash: string;
+  operation: Operation;
+}
+
+// Shared create body: resolve + verify the staged payload, resolve the
+// historical author, then (in one transaction) insert the entity row and its
+// provenance row. `mode: 'dry-run'` rolls the transaction back instead of
+// committing, so nothing durable is written.
+async function performCreate(
+  input: CreateWithProvenanceInput,
+  mode: 'apply' | 'dry-run',
+  identityMap: Map<string, string>,
+): Promise<{ target_id: string; created: boolean }> {
+  const { entity_type, source_id, target_id, payload_ref, plan_hash, operation } = input;
+  const payload = await readVerifiedStagedPayload(payload_ref);
+  if (!payload) {
+    throw new Error(`no staged payload resolved for ${entity_type}:${source_id} (payload_ref=${payload_ref})`);
+  }
+  const table = ENTITY_TABLES[entity_type];
+
+  // Historical author must resolve to an existing user (if declared).
+  let authorUserId: string | null = null;
+  if (payload.historical_author) {
+    authorUserId = identityMap.get(payload.historical_author) ?? null;
+    if (!authorUserId) {
+      throw new Error(`unresolved historical identity: ${payload.historical_author}`);
+    }
+    const user = await db('users').where({ id: authorUserId }).first();
+    if (!user) throw new Error(`mapped user ${authorUserId} does not exist`);
+  }
+
+  const trx = await db.transaction();
+  try {
+    const existingProv = await trx('import_provenance').where({ entity_type, source_id }).first();
+    if (existingProv) {
+      await trx.rollback();
+      return { target_id: existingProv.target_id, created: false };
+    }
+
+    const row: Record<string, unknown> = {
+      id: target_id,
+      ...payload.fields,
+    };
+    // Comments/attachments carry the historical author column directly;
+    // other entities keep the operator as creator in activity, authorship
+    // lives in provenance + payload (documented in capability matrix).
+    if (entity_type === 'comment') {
+      if (!authorUserId) throw new Error('comment payload requires a resolved historical_author');
+      row.user_id = authorUserId;
+    }
+    if (payload.created_at) row.created_at = payload.created_at;
+    if (payload.updated_at) row.updated_at = payload.updated_at;
+    if (entity_type === 'card') await ensureCardShortId(trx, row);
+
+    await trx(table).insert(row);
+    await trx('import_provenance').insert({
+      id: randomUUID(),
+      source_system: 'trello',
+      entity_type,
+      source_id,
+      target_id,
+      target_ref: `${entity_type}:${target_id}`,
+      import_plan_hash: plan_hash,
+      operation,
+    });
+    if (mode === 'dry-run') {
+      // Rehearsal: the write path above is validated by the real schema
+      // (NOT NULL/CHECK/FK/unique), then discarded.
+      await trx.rollback();
+      return { target_id, created: false };
+    }
+    await trx.commit();
+    return { target_id, created: true };
+  } catch (err) {
+    await trx.rollback();
+    throw err;
+  }
 }
 
 export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
@@ -113,64 +224,18 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
       return Promise.resolve(identityMap.get(sourceUserId) ?? null);
     },
 
-    async createWithProvenance({ entity_type, source_id, target_id, payload_ref, plan_hash, operation }) {
-      const payload = await resolveStagedPayload(payload_ref);
-      if (!payload) {
-        throw new Error(`no staged payload resolved for ${entity_type}:${source_id} (payload_ref=${payload_ref})`);
-      }
-      const table = ENTITY_TABLES[entity_type];
+    createWithProvenance(input) {
+      return performCreate(input, 'apply', identityMap);
+    },
 
-      // Historical author must resolve to an existing user (if declared).
-      let authorUserId: string | null = null;
-      if (payload.historical_author) {
-        authorUserId = identityMap.get(payload.historical_author) ?? null;
-        if (!authorUserId) {
-          throw new Error(`unresolved historical identity: ${payload.historical_author}`);
-        }
-        const user = await db('users').where({ id: authorUserId }).first();
-        if (!user) throw new Error(`mapped user ${authorUserId} does not exist`);
-      }
-
-      const trx = await trxOf();
+    // Dry-run preflight: same body, rolled back. Never throws — the engine
+    // turns a failure into the `failed` outcome a real apply would produce.
+    async preflightCreate(input) {
       try {
-        const existingProv = await trx('import_provenance')
-          .where({ entity_type, source_id })
-          .first();
-        if (existingProv) {
-          await trx.rollback();
-          return { target_id: existingProv.target_id, created: false };
-        }
-
-        const row: Record<string, unknown> = {
-          id: target_id,
-          ...payload.fields,
-        };
-        // Comments/attachments carry the historical author column directly;
-        // other entities keep the operator as creator in activity, authorship
-        // lives in provenance + payload (documented in capability matrix).
-        if (entity_type === 'comment') {
-          if (!authorUserId) throw new Error('comment payload requires a resolved historical_author');
-          row.user_id = authorUserId;
-        }
-        if (payload.created_at) row.created_at = payload.created_at;
-        if (payload.updated_at) row.updated_at = payload.updated_at;
-
-        await trx(table).insert(row);
-        await trx('import_provenance').insert({
-          id: randomUUID(),
-          source_system: 'trello',
-          entity_type,
-          source_id,
-          target_id,
-          target_ref: `${entity_type}:${target_id}`,
-          import_plan_hash: plan_hash,
-          operation,
-        });
-        await trx.commit();
-        return { target_id, created: true };
+        await performCreate(input, 'dry-run', identityMap);
+        return { ok: true } as const;
       } catch (err) {
-        await trx.rollback();
-        throw err;
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) } as const;
       }
     },
 
