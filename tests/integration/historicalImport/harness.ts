@@ -312,6 +312,13 @@ export class MemoryImporterDeps implements ImporterDeps {
       if (canonicalJson(existing.source_references ?? []) !== canonicalJson(sourceReferences)) {
         throw new Error('detached source references do not match stored provenance');
       }
+      if (
+        payload?.historical_author &&
+        (existing.historical_source_actor_id !== payload.historical_author ||
+          existing.historical_target_actor_id !== authorUserId)
+      ) {
+        throw new Error('historical actor provenance does not match the staged payload mapping');
+      }
       return { target_id: existing.target_id, created: false };
     }
 
@@ -374,6 +381,8 @@ export class MemoryImporterDeps implements ImporterDeps {
       import_plan_hash: input.plan_hash,
       operation: input.operation,
       source_references: structuredClone(sourceReferences),
+      historical_source_actor_id: payload?.historical_author ?? null,
+      historical_target_actor_id: authorUserId,
     });
     return { target_id: input.target_id, created: true };
   }
@@ -383,6 +392,8 @@ export class MemoryImporterDeps implements ImporterDeps {
     source_id: string;
     target_id: string;
     plan_hash: string;
+    historical_source_actor_id?: string;
+    historical_target_actor_id?: string;
   }): Promise<void> {
     // Mirror the knex adapter: the claim is visible only inside the rehearsal
     // scope and endDryRunScope restores the exact pre-run state.
@@ -394,6 +405,8 @@ export class MemoryImporterDeps implements ImporterDeps {
     source_id: string;
     target_id: string;
     plan_hash: string;
+    historical_source_actor_id?: string;
+    historical_target_actor_id?: string;
   }): Promise<void> {
     this.provenance.push({
       id: randomUUID(),
@@ -404,6 +417,8 @@ export class MemoryImporterDeps implements ImporterDeps {
       target_ref: targetRef(input.entity_type, input.target_id),
       import_plan_hash: input.plan_hash,
       operation: 'link',
+      historical_source_actor_id: input.historical_source_actor_id ?? null,
+      historical_target_actor_id: input.historical_target_actor_id ?? null,
     });
   }
 

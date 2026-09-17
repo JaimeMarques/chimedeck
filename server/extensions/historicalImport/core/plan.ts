@@ -205,6 +205,11 @@ export interface ProvenanceRow {
   import_plan_hash: string;
   operation: string;
   source_references?: unknown[];
+  // Historical actor identity is immutable import evidence. The source-system
+  // id and its reviewed destination mapping are deliberately stored separately
+  // from native author/uploader columns, which link operations never overwrite.
+  historical_source_actor_id?: string | null;
+  historical_target_actor_id?: string | null;
 }
 
 export interface MutationInput {
@@ -295,12 +300,16 @@ export interface ImporterDeps {
     source_id: string;
     target_id: string;
     plan_hash: string;
+    historical_source_actor_id?: string;
+    historical_target_actor_id?: string;
   }): Promise<void>;
   preflightLink(input: {
     entity_type: EntityType;
     source_id: string;
     target_id: string;
     plan_hash: string;
+    historical_source_actor_id?: string;
+    historical_target_actor_id?: string;
   }): Promise<void>;
   // Append an audit entry (never throws into the engine path).
   writeAudit(entry: {
@@ -1030,6 +1039,29 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       return;
     }
 
+    // Resolve the plan-declared historical actor before provenance dedupe so an
+    // idempotent rerun proves the immutable source id and reviewed target mapping
+    // still match. This evidence is separate from native author/uploader columns.
+    const declaredHistoricalActor = isNonEmptyString(op.historical_author)
+      ? op.historical_author
+      : null;
+    let resolvedHistoricalActor: string | null = null;
+    if (declaredHistoricalActor) {
+      resolvedHistoricalActor = await deps.resolveIdentity(
+        plan.source_system,
+        declaredHistoricalActor
+      );
+      if (!resolvedHistoricalActor) {
+        ctx.outcomes.push({
+          status: 'blocked',
+          op_id: op.op_id,
+          reason: `unresolved historical identity ${declaredHistoricalActor}`,
+        });
+        ctx.counts.blocked++;
+        return;
+      }
+    }
+
     // (1) existing provenance for this source => dedupe / idempotent re-run
     // Activity creates always re-enter the verified payload adapter on rerun so
     // immutable detached source references can be compared with stored
@@ -1043,6 +1075,19 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
           status: 'blocked',
           op_id: op.op_id,
           reason: `provenance conflict: source ${op.entity_type}:${op.source_id} is already claimed under ${existing.source_system}`,
+        });
+        ctx.counts.blocked++;
+        return;
+      }
+      if (
+        declaredHistoricalActor &&
+        (existing.historical_source_actor_id !== declaredHistoricalActor ||
+          existing.historical_target_actor_id !== resolvedHistoricalActor)
+      ) {
+        ctx.outcomes.push({
+          status: 'blocked',
+          op_id: op.op_id,
+          reason: 'stored historical actor provenance does not match the reviewed plan mapping',
         });
         ctx.counts.blocked++;
         return;
@@ -1077,29 +1122,7 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       return;
     }
 
-    // (2) identity resolution gate — every provenance claim references an
-    // author; unresolved identity blocks the operation.
-    if (op.provenance && isNonEmptyString(op.provenance.source_system)) {
-      // author identity rides in evidence convention: provenance.source_id is
-      // the entity; the author identity map is consulted by adapters via
-      // payload_ref. Here we resolve the plan's declared author when present.
-      const declaredAuthor = (op as ImportOperation & { historical_author?: string })
-        .historical_author;
-      if (isNonEmptyString(declaredAuthor)) {
-        const resolved = await deps.resolveIdentity(plan.source_system, declaredAuthor);
-        if (!resolved) {
-          ctx.outcomes.push({
-            status: 'blocked',
-            op_id: op.op_id,
-            reason: `unresolved historical identity ${declaredAuthor}`,
-          });
-          ctx.counts.blocked++;
-          return;
-        }
-      }
-    }
-
-    // (3) target resolution
+    // (2) target resolution
     const targetId = op.target_id ?? null;
 
     if (op.operation === 'link') {
@@ -1168,6 +1191,12 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
         source_id: op.source_id,
         target_id: targetId,
         plan_hash: planHash,
+        ...(declaredHistoricalActor && resolvedHistoricalActor
+          ? {
+              historical_source_actor_id: declaredHistoricalActor,
+              historical_target_actor_id: resolvedHistoricalActor,
+            }
+          : {}),
       };
       if (ctx.mode === 'apply') await deps.linkProvenance(linkInput);
       else await deps.preflightLink(linkInput);

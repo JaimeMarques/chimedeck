@@ -291,6 +291,13 @@ async function performCreate(
       ) {
         throw new Error('detached source references do not match stored provenance');
       }
+      if (
+        payload?.historical_author &&
+        (existingProv.historical_source_actor_id !== payload.historical_author ||
+          existingProv.historical_target_actor_id !== authorUserId)
+      ) {
+        throw new Error('historical actor provenance does not match the staged payload mapping');
+      }
       await trx.rollback();
       return { target_id: existingProv.target_id, created: false };
     }
@@ -398,6 +405,8 @@ async function performCreate(
       import_plan_hash: plan_hash,
       operation,
       source_references: JSON.stringify(sourceReferences),
+      historical_source_actor_id: payload?.historical_author ?? null,
+      historical_target_actor_id: authorUserId,
     });
     if (mode === 'dry-run') {
       // Rehearsal: the write path above is validated by the real schema
@@ -448,6 +457,8 @@ interface LinkProvenanceInput {
   source_id: string;
   target_id: string;
   plan_hash: string;
+  historical_source_actor_id?: string;
+  historical_target_actor_id?: string;
 }
 
 // Shared link body: dry-run and apply execute the same provenance INSERT. In a
@@ -473,6 +484,8 @@ async function performLink(
       target_ref: targetRef(input.entity_type, input.target_id),
       import_plan_hash: input.plan_hash,
       operation: 'link' satisfies Operation,
+      historical_source_actor_id: input.historical_source_actor_id ?? null,
+      historical_target_actor_id: input.historical_target_actor_id ?? null,
     });
     if (mode === 'dry-run' && !opened.nested) await trx.rollback();
     else await trx.commit();
