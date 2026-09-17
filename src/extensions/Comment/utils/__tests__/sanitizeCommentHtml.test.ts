@@ -102,6 +102,21 @@ describe('createCommentHtmlSanitizer', () => {
     expect(sanitize('<a href="tel:+123">call</a>')).toContain('href="tel:+123"');
   });
 
+  it('keeps data: URIs only on image-like tags, where script cannot run', () => {
+    // Pins the DOMPurify DATA_URI_TAGS exception documented next to COMMENT_ALLOWED_URI_REGEXP so a
+    // future config edit that widens it to non-image tags fails loudly.
+    const image = sanitize('<img src="data:image/svg+xml;base64,PHN2Zy8+">');
+
+    expect(image).toContain('src="data:image/svg+xml;base64,PHN2Zy8+"');
+    expect(image).not.toContain('onload');
+
+    const link = sanitize(
+      '<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">x</a>'
+    );
+    expect(link).not.toContain('data:');
+    expect(link).toContain('<a>x</a>');
+  });
+
   it('keeps the Markdown rendering surface that comments rely on', () => {
     const out = sanitize(
       '<h2>Title</h2><p>text <strong>bold</strong> <em>it</em> <del>gone</del> <code>code</code></p>' +

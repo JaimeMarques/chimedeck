@@ -154,7 +154,11 @@ export const COMMENT_FORBID_ATTR: string[] = [
 /**
  * Mirrors the backend scheme allow-list (server/common/sanitize.ts) plus tel:, and keeps relative
  * URLs working so attachment proxy paths such as /api/attachments/<id>/view still resolve.
- * Everything else — javascript:, vbscript:, data:, file:, blob: — is dropped by DOMPurify.
+ * javascript:, vbscript:, file: and blob: URLs are dropped everywhere.
+ *
+ * [why] DOMPurify additionally keeps `data:` URIs on image-like tags (its DATA_URI_TAGS allow-list:
+ * img/source/video/audio/track) because script cannot run in an image-loading context; every other
+ * tag, <a> included, follows this regexp and loses a `data:` URL.
  */
 export const COMMENT_ALLOWED_URI_REGEXP =
   /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
