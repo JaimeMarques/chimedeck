@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
+import { canonicalJson } from './fingerprint';
 
 // Exported for compatibility with existing callers. Internal reads use the
 // per-call helpers below so tests and long-running workers observe env changes.
@@ -36,6 +37,18 @@ function configuredManifestPath(): string {
 
 // Payload staged-file shape. The staged file carries the historical author
 // and timestamps; the API/manifest only carries the reference.
+export interface StagedSourceReference {
+  source_system: string;
+  entity_type: string;
+  source_id: string;
+  relationship: string;
+  source_path: string;
+  snapshot: Record<string, unknown>;
+  snapshot_sha256: string;
+  source_snapshot_sha256: string;
+  evidence_ref: string;
+}
+
 export interface StagedPayload {
   entity_type: string;
   source_id: string;
@@ -43,12 +56,111 @@ export interface StagedPayload {
   created_at?: string; // ISO
   updated_at?: string; // ISO
   fields: Record<string, unknown>; // entity column => value
+  // Detached source entities whose historical identity must survive without a
+  // live destination FK. These bytes are validated against the raw action and
+  // persisted on import_provenance, where a DB trigger makes them immutable.
+  source_references?: StagedSourceReference[];
   object_precondition?: {
     bucket: string;
     key: string;
     byte_count: number;
     sha256: string;
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`detached source reference requires ${label}`);
+  }
+  return value;
+}
+
+/**
+ * Validate the only detached-reference shape currently authorized: a Trello
+ * list that no longer exists in the source's current list collection but is
+ * named verbatim by a frozen deleteList/moveListToBoard action.
+ */
+export function validateStagedSourceReferences(payload: StagedPayload): StagedSourceReference[] {
+  const references = payload.source_references ?? [];
+  if (!Array.isArray(references)) {
+    throw new Error('staged payload source_references must be an array');
+  }
+  if (references.length === 0) return [];
+  if (payload.entity_type !== 'activity' || references.length !== 1) {
+    throw new Error('detached source references are supported only one-at-a-time on activities');
+  }
+
+  const reference = references[0] as StagedSourceReference;
+  if (
+    requiredString(reference.source_system, 'source_system') !== 'trello' ||
+    requiredString(reference.entity_type, 'entity_type') !== 'list' ||
+    requiredString(reference.relationship, 'relationship') !== 'subject' ||
+    requiredString(reference.source_path, 'source_path') !== '/data/list'
+  ) {
+    throw new Error('detached source reference is not an authorized Trello list subject');
+  }
+  const sourceId = requiredString(reference.source_id, 'source_id');
+  requiredString(reference.evidence_ref, 'evidence_ref');
+  if (
+    !/^[0-9a-f]{64}$/.test(
+      requiredString(reference.source_snapshot_sha256, 'source_snapshot_sha256')
+    )
+  ) {
+    throw new Error('detached source reference source_snapshot_sha256 must be lowercase SHA-256');
+  }
+
+  const snapshot = asRecord(reference.snapshot);
+  if (!snapshot || snapshot.id !== sourceId || typeof snapshot.name !== 'string') {
+    throw new Error('detached source reference snapshot must carry the exact source list id/name');
+  }
+  const expectedSnapshotHash = sha256Hex(canonicalJson(snapshot));
+  if (reference.snapshot_sha256 !== expectedSnapshotHash) {
+    throw new Error(
+      'detached source reference snapshot_sha256 does not match its canonical snapshot'
+    );
+  }
+
+  const fields = asRecord(payload.fields);
+  const activityPayload = asRecord(fields?.payload);
+  const rawAction = asRecord(activityPayload?.historical_source_action);
+  const rawData = asRecord(rawAction?.data);
+  const rawList = asRecord(rawData?.list);
+  const detachedList = asRecord(activityPayload?.detached_historical_list_reference);
+  if (!fields || fields.entity_type !== 'board' || fields.entity_id !== fields.board_id) {
+    throw new Error('detached list activity requires one exact destination board anchor');
+  }
+  if (!rawAction || rawAction.id !== payload.source_id) {
+    throw new Error('detached source action identity does not match the staged activity');
+  }
+  const expectedAction =
+    rawAction.type === 'deleteList'
+      ? 'legacy.trello.list_deleted'
+      : rawAction.type === 'moveListToBoard'
+        ? 'legacy.trello.list_moved_to_board'
+        : null;
+  if (!expectedAction || fields.action !== expectedAction) {
+    throw new Error('detached source action type does not match the staged activity action');
+  }
+  if (
+    !rawList ||
+    rawList.id !== sourceId ||
+    rawList.name !== snapshot.name ||
+    canonicalJson(detachedList) !== canonicalJson(snapshot)
+  ) {
+    throw new Error(
+      'detached source list evidence does not match the immutable reference snapshot'
+    );
+  }
+  if (payload.historical_author && rawAction.idMemberCreator !== payload.historical_author) {
+    throw new Error('detached source action author does not match historical_author');
+  }
+  return references;
 }
 
 // Historical comments are preserved exactly as staged rather than passed through
@@ -174,7 +286,9 @@ export async function resolveStagedPayload(
 ): Promise<StagedPayload | null> {
   if (!payloadRef) return null;
   const { bytes } = await readStagedFile(payloadRef);
-  return JSON.parse(bytes.toString('utf8')) as StagedPayload;
+  const parsed = JSON.parse(bytes.toString('utf8')) as StagedPayload;
+  validateStagedSourceReferences(parsed);
+  return parsed;
 }
 
 // Read a staged payload and verify it against the configured manifest.
@@ -196,5 +310,7 @@ export async function readVerifiedStagedPayload(
       `payload sha256 mismatch for ${payloadRef}: expected ${expected.slice(0, 12)}, found ${actual.slice(0, 12)}`
     );
   }
-  return JSON.parse(bytes.toString('utf8')) as StagedPayload;
+  const parsed = JSON.parse(bytes.toString('utf8')) as StagedPayload;
+  validateStagedSourceReferences(parsed);
+  return parsed;
 }

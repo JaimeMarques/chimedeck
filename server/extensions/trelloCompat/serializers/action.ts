@@ -18,6 +18,8 @@ export const EVENT_TYPE_MAP: Record<string, TrelloActionType> = {
   list_created: 'createList',
   card_label_added: 'addLabelToCard',
   card_label_removed: 'removeLabelFromCard',
+  'legacy.trello.list_deleted': 'deleteList',
+  'legacy.trello.list_moved_to_board': 'moveListToBoard',
 };
 
 type BasicMember = {
@@ -37,11 +39,19 @@ function toRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function normalizeDataLabels(data: Record<string, unknown>, fallbackBoardId = ''): Record<string, unknown> {
+function normalizeDataLabels(
+  data: Record<string, unknown>,
+  fallbackBoardId = ''
+): Record<string, unknown> {
   const normalized = { ...data };
 
   const label = normalized['label'];
-  if (label && typeof label === 'object' && !Array.isArray(label) && typeof (label as { id?: unknown }).id === 'string') {
+  if (
+    label &&
+    typeof label === 'object' &&
+    !Array.isArray(label) &&
+    typeof (label as { id?: unknown }).id === 'string'
+  ) {
     const source = label as {
       id: string;
       board_id?: string | null;
@@ -55,19 +65,25 @@ function normalizeDataLabels(data: Record<string, unknown>, fallbackBoardId = ''
   const labels = normalized['labels'];
   if (Array.isArray(labels)) {
     normalized['labels'] = labels
-      .filter((entry): entry is Record<string, unknown> => (
-        !!entry
-        && typeof entry === 'object'
-        && !Array.isArray(entry)
-        && typeof (entry as { id?: unknown }).id === 'string'
-      ))
-      .map((entry) => serializeEmbeddedLabel(entry as {
-        id: string;
-        board_id?: string | null;
-        idBoard?: string | null;
-        name?: string | null;
-        color?: string | null;
-      }, fallbackBoardId));
+      .filter(
+        (entry): entry is Record<string, unknown> =>
+          !!entry &&
+          typeof entry === 'object' &&
+          !Array.isArray(entry) &&
+          typeof (entry as { id?: unknown }).id === 'string'
+      )
+      .map((entry) =>
+        serializeEmbeddedLabel(
+          entry as {
+            id: string;
+            board_id?: string | null;
+            idBoard?: string | null;
+            name?: string | null;
+            color?: string | null;
+          },
+          fallbackBoardId
+        )
+      );
   }
 
   return normalized;
@@ -127,15 +143,26 @@ export function serializeActivityAction(event: {
   memberCreator: TrelloMember | BasicMember;
 }): TrelloAction {
   const trelloType = EVENT_TYPE_MAP[event.type] ?? 'updateCard';
-  const payload = normalizeDataLabels(toRecord(event.payload), event.board_id ?? '');
+  const storedPayload = toRecord(event.payload);
+  const historicalSourceAction = toRecord(storedPayload['historical_source_action']);
+  const historicalData = toRecord(historicalSourceAction['data']);
+  const detachedHistoricalListAction =
+    event.type === 'legacy.trello.list_deleted' ||
+    event.type === 'legacy.trello.list_moved_to_board';
+  const payload = normalizeDataLabels(
+    detachedHistoricalListAction ? historicalData : storedPayload,
+    event.board_id ?? ''
+  );
   return {
     id: event.id,
     idMemberCreator: event.user_id,
-    data: {
-      ...payload,
-      ...(event.card_id ? { card: { id: event.card_id } } : {}),
-      ...(event.board_id ? { board: { id: event.board_id } } : {}),
-    },
+    data: detachedHistoricalListAction
+      ? payload
+      : {
+          ...payload,
+          ...(event.card_id ? { card: { id: event.card_id } } : {}),
+          ...(event.board_id ? { board: { id: event.board_id } } : {}),
+        },
     appCreator: null,
     type: trelloType,
     date: toIso(event.created_at),

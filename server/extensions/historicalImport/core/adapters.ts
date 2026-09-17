@@ -48,7 +48,11 @@ import type {
   ProvenanceRow,
   RecoveryReport,
 } from './plan';
-import { exactHistoricalCommentContent, readVerifiedStagedPayload } from './payload';
+import {
+  exactHistoricalCommentContent,
+  readVerifiedStagedPayload,
+  validateStagedSourceReferences,
+} from './payload';
 import {
   applyHistoricalTimestamps,
   createCachedColumnProbe,
@@ -165,6 +169,7 @@ export interface CreateWithProvenanceInput {
   payload_ref: string | null;
   plan_hash: string;
   operation: Operation;
+  board_id?: string;
 }
 
 // A rehearsal (dry-run) runs every operation inside ONE transaction: each
@@ -197,6 +202,15 @@ export interface CreateTimestampProjection {
   }): void;
 }
 
+function storedSourceReferences(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) return parsed;
+  }
+  return [];
+}
+
 async function performCreate(
   input: CreateWithProvenanceInput,
   mode: 'apply' | 'dry-run',
@@ -204,11 +218,12 @@ async function performCreate(
   projection: CreateTimestampProjection,
   openTrx?: OpenOperationTransaction
 ): Promise<{ target_id: string; created: boolean }> {
-  const { entity_type, source_id, target_id, payload_ref, plan_hash, operation } = input;
+  const { entity_type, source_id, target_id, payload_ref, plan_hash, operation, board_id } = input;
   const table = ENTITY_TABLES[entity_type];
   const keyColumns = compositeKeyColumns(entity_type);
   const compositeKey = keyColumns ? decodeCompositeTargetId(entity_type, target_id) : null;
   const payload = await readVerifiedStagedPayload(payload_ref);
+  const sourceReferences = payload ? validateStagedSourceReferences(payload) : [];
   if (!payload && !compositeKey) {
     throw new Error(
       `no staged payload resolved for ${entity_type}:${source_id} (payload_ref=${payload_ref})`
@@ -240,14 +255,42 @@ async function performCreate(
     const user = await db('users').where({ id: authorUserId }).first();
     if (!user) throw new Error(`mapped user ${authorUserId} does not exist`);
   }
+  if (sourceReferences.length > 0) {
+    if (entity_type !== 'activity' || !payload || !authorUserId) {
+      throw new Error('detached source references require an attributed activity create');
+    }
+    if (
+      typeof board_id !== 'string' ||
+      payload.fields.board_id !== board_id ||
+      payload.fields.entity_id !== board_id
+    ) {
+      throw new Error('detached list activity board anchor does not match operation provenance');
+    }
+    if (payload.fields.actor_id !== authorUserId) {
+      throw new Error('detached list activity actor_id does not match resolved historical_author');
+    }
+  }
 
   const opened: OperationTransaction = openTrx
     ? await openTrx()
     : { trx: await db.transaction(), nested: false };
   const trx = opened.trx;
   try {
-    const existingProv = await trx('import_provenance').where({ entity_type, source_id }).first();
+    const existingProv = (await trx('import_provenance')
+      .where({ entity_type, source_id })
+      .first()) as ProvenanceRow | undefined;
     if (existingProv) {
+      if (existingProv.target_id !== target_id) {
+        throw new Error(
+          `provenance conflict: source ${entity_type}:${source_id} is already claimed by target ${existingProv.target_id} — create declares ${target_id}`
+        );
+      }
+      if (
+        canonicalJson(storedSourceReferences(existingProv.source_references)) !==
+        canonicalJson(sourceReferences)
+      ) {
+        throw new Error('detached source references do not match stored provenance');
+      }
       await trx.rollback();
       return { target_id: existingProv.target_id, created: false };
     }
@@ -293,6 +336,16 @@ async function performCreate(
         if (row.type === 'FILE' && row.status !== 'READY') {
           throw new Error('FILE attachment import requires status READY');
         }
+      }
+      if (entity_type === 'activity' && sourceReferences.length > 0) {
+        const anchor = (await trx('boards').where({ id: board_id }).first()) as
+          | { id: string }
+          | undefined;
+        if (!anchor) throw new Error('detached list activity destination board does not exist');
+        row.entity_type = 'board';
+        row.entity_id = board_id;
+        row.board_id = board_id;
+        row.actor_id = authorUserId;
       }
       const timestamps = await applyHistoricalTimestamps(
         projection.probe,
@@ -344,6 +397,7 @@ async function performCreate(
       target_ref: targetRef(entity_type, target_id),
       import_plan_hash: plan_hash,
       operation,
+      source_references: JSON.stringify(sourceReferences),
     });
     if (mode === 'dry-run') {
       // Rehearsal: the write path above is validated by the real schema

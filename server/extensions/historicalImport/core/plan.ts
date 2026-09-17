@@ -204,6 +204,7 @@ export interface ProvenanceRow {
   target_ref: string;
   import_plan_hash: string;
   operation: string;
+  source_references?: unknown[];
 }
 
 export interface MutationInput {
@@ -247,6 +248,7 @@ export interface ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
+    board_id?: string;
   }): Promise<{ target_id: string; created: boolean }>;
   // Dry-run creation preflight. Implementations MUST resolve the same payload
   // source and validate the same identity/schema/constraint path as apply,
@@ -259,6 +261,7 @@ export interface ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
+    board_id?: string;
   }): Promise<{ ok: true; created?: boolean; target_id?: string } | { ok: false; reason: string }>;
   // Existing-row mutations share one adapter body in apply and dry-run. The
   // adapter owns the row lock, exact pre-image check, constrained update, and
@@ -1028,8 +1031,13 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
     }
 
     // (1) existing provenance for this source => dedupe / idempotent re-run
+    // Activity creates always re-enter the verified payload adapter on rerun so
+    // immutable detached source references can be compared with stored
+    // provenance. Other create/link operations retain the fast provenance path.
+    const verifyActivitySourceReferences =
+      op.operation === 'create' && op.entity_type === 'activity';
     const existing = await deps.fetchProvenance(op.entity_type, op.source_id);
-    if (existing) {
+    if (existing && !verifyActivitySourceReferences) {
       if (!claimIsOwn(op, existing, plan.source_system)) {
         ctx.outcomes.push({
           status: 'blocked',
@@ -1198,23 +1206,26 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
             ctx.counts.blocked++;
             return;
           }
+          if (!verifyActivitySourceReferences) {
+            ctx.outcomes.push({
+              status: 'noop',
+              op_id: op.op_id,
+              reason: `target ${targetId} already imported as ${claim.source_system}:${claim.source_id}`,
+              target_id: targetId,
+            });
+            ctx.counts.noop++;
+            appliedOrNoop.add(op.op_id);
+            return;
+          }
+        } else {
           ctx.outcomes.push({
-            status: 'noop',
+            status: 'blocked',
             op_id: op.op_id,
-            reason: `target ${targetId} already imported as ${claim.source_system}:${claim.source_id}`,
-            target_id: targetId,
+            reason: `target ${op.entity_type}:${targetId} already exists without provenance (native or drifted content) — overwrite prohibited`,
           });
-          ctx.counts.noop++;
-          appliedOrNoop.add(op.op_id);
+          ctx.counts.blocked++;
           return;
         }
-        ctx.outcomes.push({
-          status: 'blocked',
-          op_id: op.op_id,
-          reason: `target ${op.entity_type}:${targetId} already exists without provenance (native or drifted content) — overwrite prohibited`,
-        });
-        ctx.counts.blocked++;
-        return;
       }
     }
 
@@ -1254,6 +1265,7 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
       payload_ref: op.payload_ref ?? null,
       plan_hash: planHash,
       operation: op.operation,
+      ...(op.provenance.board_id ? { board_id: op.provenance.board_id } : {}),
     };
     if (ctx.mode === 'apply') {
       const res = await deps.createWithProvenance(createInput);

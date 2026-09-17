@@ -19,18 +19,16 @@ import { SYNTH_PAYLOADS } from './fixtures';
 import {
   CARD_COVER_FIELDS,
   COMMENT_CORRECTION_FIELDS,
+  canonicalJson,
   fingerprintFields,
 } from '../../../server/extensions/historicalImport/core/fingerprint';
-import { exactHistoricalCommentContent } from '../../../server/extensions/historicalImport/core/payload';
+import {
+  exactHistoricalCommentContent,
+  validateStagedSourceReferences,
+  type StagedPayload as CoreStagedPayload,
+} from '../../../server/extensions/historicalImport/core/payload';
 
-export interface StagedPayload {
-  entity_type: EntityType;
-  source_id: string;
-  historical_author?: string;
-  created_at?: string;
-  updated_at?: string;
-  fields: Record<string, unknown>;
-}
+export type StagedPayload = CoreStagedPayload;
 
 export interface AuditEntry {
   actor_user_id: string;
@@ -141,6 +139,7 @@ export class MemoryImporterDeps implements ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
+    board_id?: string;
   }): Promise<{ ok: true; created?: boolean; target_id?: string } | { ok: false; reason: string }> {
     const key = `${input.entity_type}:${input.source_id}`;
     const payload = input.payload_ref ? this.payloadStore.get(input.payload_ref) : undefined;
@@ -276,6 +275,7 @@ export class MemoryImporterDeps implements ImporterDeps {
     payload_ref: string | null;
     plan_hash: string;
     operation: Operation;
+    board_id?: string;
   }): Promise<{ target_id: string; created: boolean }> {
     const key = `${input.entity_type}:${input.source_id}`;
     if (this.failCreateFor.has(key)) {
@@ -288,6 +288,7 @@ export class MemoryImporterDeps implements ImporterDeps {
       ? decodeCompositeTargetId(input.entity_type, input.target_id)
       : null;
     if (!payload && !compositeKey) throw new Error(`no staged payload for ${key}`);
+    const sourceReferences = payload ? validateStagedSourceReferences(payload) : [];
     if (input.entity_type === 'comment' && payload) {
       exactHistoricalCommentContent(payload.fields);
     }
@@ -302,7 +303,17 @@ export class MemoryImporterDeps implements ImporterDeps {
     const existing = this.provenance.find(
       (p) => p.entity_type === input.entity_type && p.source_id === input.source_id
     );
-    if (existing) return { target_id: existing.target_id, created: false };
+    if (existing) {
+      if (existing.target_id !== input.target_id) {
+        throw new Error(
+          `provenance conflict: source ${key} is already claimed by target ${existing.target_id}`
+        );
+      }
+      if (canonicalJson(existing.source_references ?? []) !== canonicalJson(sourceReferences)) {
+        throw new Error('detached source references do not match stored provenance');
+      }
+      return { target_id: existing.target_id, created: false };
+    }
 
     const fields = { ...(payload?.fields ?? {}) };
     let row: Record<string, unknown>;
@@ -332,6 +343,25 @@ export class MemoryImporterDeps implements ImporterDeps {
       if (payload?.created_at) row.created_at = payload.created_at;
       if (payload?.updated_at) row.updated_at = payload.updated_at;
     }
+    if (input.entity_type === 'activity' && sourceReferences.length > 0) {
+      if (!payload || !authorUserId || typeof input.board_id !== 'string') {
+        throw new Error('detached source references require an attributed board activity');
+      }
+      if (!this.rows.has(`board:${input.board_id}`)) {
+        throw new Error('detached list activity destination board does not exist');
+      }
+      if (
+        payload.fields.board_id !== input.board_id ||
+        payload.fields.entity_id !== input.board_id ||
+        payload.fields.actor_id !== authorUserId
+      ) {
+        throw new Error('detached list activity board/actor does not match verified provenance');
+      }
+      row.entity_type = 'board';
+      row.entity_id = input.board_id;
+      row.board_id = input.board_id;
+      row.actor_id = authorUserId;
+    }
     this.rows.set(`${input.entity_type}:${input.target_id}`, row);
 
     this.provenance.push({
@@ -343,6 +373,7 @@ export class MemoryImporterDeps implements ImporterDeps {
       target_ref: targetRef(input.entity_type, input.target_id),
       import_plan_hash: input.plan_hash,
       operation: input.operation,
+      source_references: structuredClone(sourceReferences),
     });
     return { target_id: input.target_id, created: true };
   }

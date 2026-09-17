@@ -45,7 +45,12 @@
 // OPERATOR; historical authors are recorded in import_provenance + payload.
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
-import { importDisabledResponse, planAuthorizationWitnesses, requireImportOperator, resolvePlanWorkspace } from './authorize';
+import {
+  importDisabledResponse,
+  planAuthorizationWitnesses,
+  requireImportOperator,
+  resolvePlanWorkspace,
+} from './authorize';
 import {
   applyPlan,
   dryRunPlan,
@@ -350,9 +355,14 @@ async function resolveBoardForEntity(entityType: string, targetId: string): Prom
           .first()) as { board_id?: string } | undefined;
         return row?.board_id ?? null;
       }
+      case 'activity': {
+        const row = (await db('activities').where({ id: targetId }).first()) as
+          | { board_id?: string }
+          | undefined;
+        return row?.board_id ?? null;
+      }
       case 'comment_reaction':
       case 'mention':
-      case 'activity':
       default:
         return null;
     }
