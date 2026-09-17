@@ -18,11 +18,15 @@ import {
 import { SYNTH_PAYLOADS } from './fixtures';
 import {
   CARD_COVER_FIELDS,
+  CARD_DESCRIPTION_FIELDS,
   COMMENT_CORRECTION_FIELDS,
   canonicalJson,
   fingerprintFields,
+  fingerprintRow,
+  sha256Hex,
 } from '../../../server/extensions/historicalImport/core/fingerprint';
 import {
+  exactHistoricalCardDescriptionCorrection,
   exactHistoricalCommentContent,
   validateStagedSourceReferences,
   type StagedPayload as CoreStagedPayload,
@@ -47,10 +51,23 @@ export class MemoryImporterDeps implements ImporterDeps {
   audit: AuditEntry[] = [];
   identityMap: Map<string, string>;
   payloadStore: Map<string, StagedPayload>;
+  cardDescriptionAuthorization: {
+    canonical_sha256: string;
+    decision_sha256: string;
+    entries: Map<
+      string,
+      {
+        source_id: string;
+        target_id: string;
+        source_description_sha256: string;
+        target_description_sha256: string;
+      }
+    >;
+  } | null = null;
   // failure injection
   failCreateFor = new Set<string>(); // source keys that throw on create
   dispatchedDomainEvents: string[] = []; // must stay empty (suppression proof)
-  concurrencyOverwrite: 'none' | 'provenance-race' = 'none';
+  concurrencyOverwrite: 'none' | 'provenance-race' | 'row-drift' = 'none';
 
   // Authorization witness fixture for board creates: board source_id => the
   // workspace proven from the staged board payload + destination owner gate.
@@ -99,11 +116,34 @@ export class MemoryImporterDeps implements ImporterDeps {
     return { workspace_id: workspaceId };
   }
 
-  constructor(identityMap: Record<string, string>, payloads?: Record<string, unknown>) {
+  constructor(
+    identityMap: Record<string, string>,
+    payloads?: Record<string, unknown>,
+    authorization?: {
+      decision_sha256: string;
+      entries: Array<{
+        authorization_id: string;
+        source_id: string;
+        target_id: string;
+        source_description_sha256: string;
+        target_description_sha256: string;
+      }>;
+      [key: string]: unknown;
+    }
+  ) {
     this.identityMap = new Map(Object.entries(identityMap));
     this.payloadStore = new Map(
       Object.entries(payloads ?? SYNTH_PAYLOADS).map(([ref, p]) => [ref, p as StagedPayload])
     );
+    if (authorization) {
+      this.cardDescriptionAuthorization = {
+        canonical_sha256: sha256Hex(canonicalJson(authorization)),
+        decision_sha256: authorization.decision_sha256,
+        entries: new Map(
+          authorization.entries.map((entry) => [entry.authorization_id, { ...entry }])
+        ),
+      };
+    }
     // Pre-seeded destination state: a label row that already exists natively
     // (e.g. created by hand) which the plan links to its Trello source.
     this.rows.set('label:lbl_synth_0001', {
@@ -112,6 +152,32 @@ export class MemoryImporterDeps implements ImporterDeps {
       name: 'Synth Label',
       color: '#61BD4F',
     });
+  }
+
+  loadedExternalInputHash(
+    name: 'identity_map' | 'card_description_authorization'
+  ): Promise<string | null> {
+    if (name === 'identity_map') {
+      return Promise.resolve(sha256Hex(canonicalJson(Object.fromEntries(this.identityMap))));
+    }
+    return Promise.resolve(this.cardDescriptionAuthorization?.canonical_sha256 ?? null);
+  }
+
+  authorizeCardDescriptionCorrection(input: {
+    authorization_id: string;
+    source_id: string;
+    target_id: string;
+    source_description_sha256: string;
+    target_description_sha256: string;
+  }): Promise<boolean> {
+    const entry = this.cardDescriptionAuthorization?.entries.get(input.authorization_id);
+    return Promise.resolve(
+      entry !== undefined &&
+        entry.source_id === input.source_id &&
+        entry.target_id === input.target_id &&
+        entry.source_description_sha256 === input.source_description_sha256 &&
+        entry.target_description_sha256 === input.target_description_sha256
+    );
   }
 
   async fetchTarget(entityType: EntityType, targetId: string) {
@@ -178,11 +244,19 @@ export class MemoryImporterDeps implements ImporterDeps {
       throw new Error('staged payload identity does not match mutation operation');
     }
     const rowKey = `${input.entity_type}:${input.target_id}`;
+    if (this.concurrencyOverwrite === 'row-drift') {
+      const raced = this.rows.get(rowKey);
+      if (raced) this.rows.set(rowKey, { ...raced, title: 'concurrent native edit' });
+      this.concurrencyOverwrite = 'none';
+    }
     const current = this.rows.get(rowKey);
     if (!current) return { status: 'blocked', reason: `mutation target ${rowKey} not found` };
 
     const sourceClaim = this.provenance.find(
-      (p) => p.entity_type === input.entity_type && p.source_id === input.source_id
+      (p) =>
+        p.source_system === input.source_system &&
+        p.entity_type === input.entity_type &&
+        p.source_id === input.source_id
     );
     const targetClaim = this.provenance.find(
       (p) => p.target_ref === targetRef(input.entity_type, input.target_id)
@@ -190,12 +264,21 @@ export class MemoryImporterDeps implements ImporterDeps {
     if (sourceClaim && sourceClaim.target_id !== input.target_id) {
       return { status: 'blocked', reason: 'source is already claimed by another target' };
     }
-    if (targetClaim && targetClaim.source_id !== input.source_id) {
+    if (
+      targetClaim &&
+      (targetClaim.source_system !== input.source_system ||
+        targetClaim.source_id !== input.source_id)
+    ) {
       return { status: 'blocked', reason: 'target is already claimed by another source' };
     }
 
     const patch: Record<string, unknown> = {};
-    const fields = input.operation === 'correct' ? COMMENT_CORRECTION_FIELDS : CARD_COVER_FIELDS;
+    const fields =
+      input.operation === 'correct'
+        ? COMMENT_CORRECTION_FIELDS
+        : input.operation === 'correct_card_description'
+          ? CARD_DESCRIPTION_FIELDS
+          : CARD_COVER_FIELDS;
     if (input.operation === 'correct') {
       const author = payload.historical_author;
       if (!author || author !== input.historical_author) {
@@ -214,6 +297,37 @@ export class MemoryImporterDeps implements ImporterDeps {
         created_at: payload.created_at,
         updated_at: payload.updated_at,
       });
+    } else if (input.operation === 'correct_card_description') {
+      const authorization = input.card_description_authorization;
+      if (!authorization || !input.expected_target_row_fingerprint) {
+        throw new Error('card description correction authorization/fingerprint is missing');
+      }
+      const correction = exactHistoricalCardDescriptionCorrection(
+        payload,
+        input.expected_target_fields.description
+      );
+      const evidence = correction.evidence;
+      if (
+        evidence.authorization_id !== authorization.authorization_id ||
+        evidence.authorization_sha256 !== authorization.authorization_sha256 ||
+        evidence.decision_sha256 !== authorization.decision_sha256 ||
+        evidence.target_id !== input.target_id ||
+        evidence.source_description_sha256 !== authorization.source_description_sha256 ||
+        evidence.target_description_sha256 !== authorization.target_description_sha256 ||
+        this.cardDescriptionAuthorization?.canonical_sha256 !==
+          authorization.authorization_sha256 ||
+        this.cardDescriptionAuthorization?.decision_sha256 !== authorization.decision_sha256 ||
+        !(await this.authorizeCardDescriptionCorrection({
+          authorization_id: authorization.authorization_id,
+          source_id: input.source_id,
+          target_id: input.target_id,
+          source_description_sha256: authorization.source_description_sha256,
+          target_description_sha256: authorization.target_description_sha256,
+        }))
+      ) {
+        throw new Error('card description correction authorization mismatch');
+      }
+      Object.assign(patch, { description: correction.description });
     } else {
       const attachmentId = payload.fields.cover_attachment_id ?? null;
       const color = payload.fields.cover_color ?? null;
@@ -246,8 +360,16 @@ export class MemoryImporterDeps implements ImporterDeps {
     if (fingerprintFields(current, fields) === fingerprintFields(patch, fields) && sourceClaim) {
       return { status: 'noop', target_id: input.target_id, reason: 'mutation already applied' };
     }
-    if (fingerprintFields(current, fields) !== input.expected_target_fingerprint) {
-      return { status: 'blocked', reason: 'target fingerprint drift — mutation prohibited' };
+    const fullRowDrift =
+      input.operation === 'correct_card_description' &&
+      fingerprintRow(current) !== input.expected_target_row_fingerprint;
+    if (fullRowDrift || fingerprintFields(current, fields) !== input.expected_target_fingerprint) {
+      return {
+        status: 'blocked',
+        reason: fullRowDrift
+          ? 'target full-row fingerprint drift — mutation prohibited'
+          : 'target fingerprint drift — mutation prohibited',
+      };
     }
 
     if (commit) {

@@ -49,6 +49,7 @@ import type {
   RecoveryReport,
 } from './plan';
 import {
+  exactHistoricalCardDescriptionCorrection,
   exactHistoricalCommentContent,
   readVerifiedStagedPayload,
   validateStagedSourceReferences,
@@ -63,11 +64,17 @@ import {
 import { verifyAttachmentObjectPrecondition } from './objectPrecondition';
 import {
   CARD_COVER_FIELDS,
+  CARD_DESCRIPTION_FIELDS,
   COMMENT_CORRECTION_FIELDS,
   canonicalJson,
   fingerprintFields,
+  fingerprintRow,
   sha256Hex,
 } from './fingerprint';
+import {
+  cardDescriptionAuthorizationMatches,
+  type LoadedCardDescriptionAuthorization,
+} from './cardDescriptionAuthorization';
 
 export {
   PAYLOAD_STAGING_ROOT,
@@ -519,6 +526,7 @@ async function performMutation(
   input: MutationInput,
   mode: 'apply' | 'dry-run',
   identityMap: Map<string, string>,
+  cardDescriptionAuthorization: LoadedCardDescriptionAuthorization | null,
   openTrx?: OpenOperationTransaction
 ): Promise<MutationResult> {
   const payload = await readVerifiedStagedPayload(input.payload_ref);
@@ -527,11 +535,62 @@ async function performMutation(
     throw new Error('staged payload identity does not match mutation operation');
   }
 
-  const fields = input.operation === 'correct' ? COMMENT_CORRECTION_FIELDS : CARD_COVER_FIELDS;
+  const fields =
+    input.operation === 'correct'
+      ? COMMENT_CORRECTION_FIELDS
+      : input.operation === 'correct_card_description'
+        ? CARD_DESCRIPTION_FIELDS
+        : CARD_COVER_FIELDS;
   if (
     fingerprintFields(input.expected_target_fields, fields) !== input.expected_target_fingerprint
   ) {
     throw new Error('mutation expected fields do not match expected fingerprint');
+  }
+
+  let cardDescription: string | null = null;
+  if (input.operation === 'correct_card_description') {
+    if (input.entity_type !== 'card') {
+      throw new Error('correct_card_description is supported only for cards');
+    }
+    if (!input.expected_target_row_fingerprint) {
+      throw new Error('card description correction requires a full target row fingerprint');
+    }
+    const authorization = input.card_description_authorization;
+    if (!authorization) throw new Error('card description correction authorization is missing');
+    const correction = exactHistoricalCardDescriptionCorrection(
+      payload,
+      input.expected_target_fields.description
+    );
+    const evidence = correction.evidence;
+    if (
+      evidence.authorization_id !== authorization.authorization_id ||
+      evidence.authorization_sha256 !== authorization.authorization_sha256 ||
+      evidence.decision_sha256 !== authorization.decision_sha256 ||
+      evidence.target_id !== input.target_id ||
+      evidence.source_description_sha256 !== authorization.source_description_sha256 ||
+      evidence.target_description_sha256 !== authorization.target_description_sha256
+    ) {
+      throw new Error(
+        'card description correction staged evidence does not match the operation authorization'
+      );
+    }
+    if (
+      !cardDescriptionAuthorization ||
+      cardDescriptionAuthorization.canonical_sha256 !== authorization.authorization_sha256 ||
+      cardDescriptionAuthorization.decision_sha256 !== authorization.decision_sha256 ||
+      !cardDescriptionAuthorizationMatches(cardDescriptionAuthorization, {
+        authorization_id: authorization.authorization_id,
+        source_id: input.source_id,
+        target_id: input.target_id,
+        source_description_sha256: authorization.source_description_sha256,
+        target_description_sha256: authorization.target_description_sha256,
+      })
+    ) {
+      throw new Error(
+        'card description correction pair is absent from the immutable authorization allowlist'
+      );
+    }
+    cardDescription = correction.description;
   }
 
   const opened: OperationTransaction = openTrx
@@ -617,6 +676,11 @@ async function performMutation(
         updated_at: payload.updated_at,
         parent_id: parentId,
       });
+    } else if (input.operation === 'correct_card_description') {
+      if (cardDescription === null) {
+        throw new Error('card description correction payload was not verified');
+      }
+      Object.assign(patch, { description: cardDescription });
     } else {
       if (input.entity_type !== 'card') throw new Error('enrich is supported only for cards');
       if (
@@ -677,12 +741,21 @@ async function performMutation(
       await trx.rollback();
       return { status: 'noop', target_id: input.target_id, reason: 'mutation already applied' };
     }
+    const fullRowDrift =
+      input.operation === 'correct_card_description' &&
+      fingerprintRow(current) !== input.expected_target_row_fingerprint;
     if (
+      fullRowDrift ||
       fingerprintFields(current, fields) !== input.expected_target_fingerprint ||
       !sameProjectedFields(current, input.expected_target_fields, fields)
     ) {
       await trx.rollback();
-      return { status: 'blocked', reason: 'target fingerprint drift — mutation prohibited' };
+      return {
+        status: 'blocked',
+        reason: fullRowDrift
+          ? 'target full-row fingerprint drift — mutation prohibited'
+          : 'target fingerprint drift — mutation prohibited',
+      };
     }
 
     await trx(table).where({ id: input.target_id }).update(patch);
@@ -738,7 +811,10 @@ const COMPOSITE_REFERENCES: Record<string, ReadonlyArray<{ column: string; table
 
 // Valid id charset for composite parts (shared with the composite encoder).
 
-export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
+export function createKnexDeps(
+  identityMap: Map<string, string>,
+  cardDescriptionAuthorization: LoadedCardDescriptionAuthorization | null = null
+): ImporterDeps {
   const trxOf = async (): Promise<Knex.Transaction> => db.transaction();
   // Dry-run rehearsal scope: ONE transaction shared by every operation of a
   // rehearsal. Each operation runs inside a savepoint so a failing operation can
@@ -776,8 +852,19 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
 
   return {
     loadedExternalInputHash(name) {
-      if (name !== 'identity_map') return Promise.resolve(null);
-      return Promise.resolve(sha256Hex(canonicalJson(Object.fromEntries(identityMap))));
+      if (name === 'identity_map') {
+        return Promise.resolve(sha256Hex(canonicalJson(Object.fromEntries(identityMap))));
+      }
+      if (name === 'card_description_authorization') {
+        return Promise.resolve(cardDescriptionAuthorization?.canonical_sha256 ?? null);
+      }
+      return Promise.resolve(null);
+    },
+
+    authorizeCardDescriptionCorrection(input) {
+      return Promise.resolve(
+        cardDescriptionAuthorizationMatches(cardDescriptionAuthorization, input)
+      );
     },
 
     async beginDryRunScope() {
@@ -894,11 +981,23 @@ export function createKnexDeps(identityMap: Map<string, string>): ImporterDeps {
     },
 
     mutateWithProvenance(input) {
-      return performMutation(input, 'apply', identityMap, beginOperation);
+      return performMutation(
+        input,
+        'apply',
+        identityMap,
+        cardDescriptionAuthorization,
+        beginOperation
+      );
     },
 
     preflightMutation(input) {
-      return performMutation(input, 'dry-run', identityMap, beginOperation);
+      return performMutation(
+        input,
+        'dry-run',
+        identityMap,
+        cardDescriptionAuthorization,
+        beginOperation
+      );
     },
 
     linkProvenance(input) {

@@ -1,6 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { canonicalJson, sha256Hex } from './fingerprint';
 import { reloadPayloadManifest } from './payload';
+import {
+  CARD_DESCRIPTION_AUTHORIZATION_ENV,
+  parseCardDescriptionAuthorization,
+} from './cardDescriptionAuthorization';
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -8,7 +12,8 @@ export type ExternalInputName =
   | 'payload_manifest'
   | 'identity_map'
   | 'attachment_object_manifest'
-  | 'destination_row_source';
+  | 'destination_row_source'
+  | 'card_description_authorization';
 
 export interface ExternalInputIssue {
   op_id: 'plan';
@@ -30,6 +35,10 @@ interface InputPreconditions {
     bytes?: unknown;
   };
   destination_row_source?: { rows_sha256?: unknown };
+  card_description_authorization?: {
+    canonical_sha256?: unknown;
+    decision_sha256?: unknown;
+  };
 }
 
 interface PlanWithInputs {
@@ -42,6 +51,7 @@ const ENV_BY_INPUT: Record<ExternalInputName, string> = {
   identity_map: 'HISTORICAL_IMPORT_IDENTITY_MAP',
   attachment_object_manifest: 'HISTORICAL_IMPORT_ATTACHMENT_OBJECT_MANIFEST',
   destination_row_source: 'HISTORICAL_IMPORT_DESTINATION_ROW_SOURCE',
+  card_description_authorization: CARD_DESCRIPTION_AUTHORIZATION_ENV,
 };
 
 function digest(value: unknown): string {
@@ -235,7 +245,9 @@ function validateAttachmentManifest(
 
 export async function verifyExternalInputHashes(
   plan: PlanWithInputs,
-  loadedExternalInputHash?: (name: 'identity_map') => Promise<string | null>
+  loadedExternalInputHash?: (
+    name: 'identity_map' | 'card_description_authorization'
+  ) => Promise<string | null>
 ): Promise<{
   referenced: number;
   verified: boolean;
@@ -250,6 +262,7 @@ export async function verifyExternalInputHashes(
     ['identity_map', pins.identity_map],
     ['attachment_object_manifest', pins.attachment_object_manifest],
     ['destination_row_source', pins.destination_row_source],
+    ['card_description_authorization', pins.card_description_authorization],
   ];
   const entries = candidates.filter(([, pin]) => pin !== undefined && pin !== null);
 
@@ -277,6 +290,22 @@ export async function verifyExternalInputHashes(
       let actual: string | null;
       if (name === 'payload_manifest' || name === 'attachment_object_manifest') {
         actual = digest(withoutField(document, 'manifest_sha256'));
+      } else if (name === 'card_description_authorization') {
+        const loaded = parseCardDescriptionAuthorization(document);
+        actual = loaded.canonical_sha256;
+        const expectedDecision = (pin as { decision_sha256?: unknown }).decision_sha256;
+        if (
+          typeof expectedDecision !== 'string' ||
+          !HASH_PATTERN.test(expectedDecision) ||
+          expectedDecision !== loaded.decision_sha256
+        ) {
+          errors.push(
+            issue(
+              'external-input-invalid',
+              'card_description_authorization decision_sha256 does not match the pinned decision'
+            )
+          );
+        }
       } else if (name === 'destination_row_source') {
         actual = rowSourceDigest(document);
         if (!actual) {
@@ -305,15 +334,18 @@ export async function verifyExternalInputHashes(
           )
         );
       }
-      if (name === 'identity_map' && loadedExternalInputHash) {
-        const loadedHash = await loadedExternalInputHash('identity_map');
+      if (
+        (name === 'identity_map' || name === 'card_description_authorization') &&
+        loadedExternalInputHash
+      ) {
+        const loadedHash = await loadedExternalInputHash(name);
         if (!loadedHash || loadedHash !== expected) {
           errors.push(
             issue(
               'external-input-hash-mismatch',
               loadedHash
-                ? `identity_map loaded for execution diverges from the plan pin: expected ${expected.slice(0, 12)}…, found ${loadedHash.slice(0, 12)}…`
-                : 'identity_map loaded for execution has no verifiable digest'
+                ? `${name} loaded for execution diverges from the plan pin: expected ${expected.slice(0, 12)}…, found ${loadedHash.slice(0, 12)}…`
+                : `${name} loaded for execution has no verifiable digest`
             )
           );
         }

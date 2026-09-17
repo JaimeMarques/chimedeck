@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
+import { decodeHTML } from 'entities';
 import { canonicalJson } from './fingerprint';
 
 // Exported for compatibility with existing callers. Internal reads use the
@@ -49,6 +50,15 @@ export interface StagedSourceReference {
   evidence_ref: string;
 }
 
+export interface CardDescriptionCorrectionEvidence {
+  authorization_id: string;
+  authorization_sha256: string;
+  decision_sha256: string;
+  target_id: string;
+  source_description_sha256: string;
+  target_description_sha256: string;
+}
+
 export interface StagedPayload {
   entity_type: string;
   source_id: string;
@@ -56,6 +66,10 @@ export interface StagedPayload {
   created_at?: string; // ISO
   updated_at?: string; // ISO
   fields: Record<string, unknown>; // entity column => value
+  // Present only for the id-bounded card-description correction category. The
+  // operation and immutable server-side authorization artifact must agree with
+  // every field; this payload block cannot authorize itself.
+  card_description_correction?: CardDescriptionCorrectionEvidence;
   // Detached source entities whose historical identity must survive without a
   // live destination FK. These bytes are validated against the raw action and
   // persisted on import_provenance, where a DB trigger makes them immutable.
@@ -163,6 +177,32 @@ export function validateStagedSourceReferences(payload: StagedPayload): StagedSo
   return references;
 }
 
+function exactPostgresText(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new Error(`${label} must be a string`);
+  if (value.includes('\u0000')) {
+    throw new Error(`${label} is not representable by PostgreSQL text: contains U+0000`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      throw new Error(
+        `${label} is not representable by PostgreSQL text: contains an unpaired UTF-16 surrogate`
+      );
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new Error(
+        `${label} is not representable by PostgreSQL text: contains an unpaired UTF-16 surrogate`
+      );
+    }
+  }
+  return value;
+}
+
 // Historical comments are preserved exactly as staged rather than passed through
 // the normal user-input sanitizer. PostgreSQL TEXT stores every valid Unicode
 // string without a length limit, but it cannot represent U+0000 or unpaired
@@ -176,30 +216,84 @@ export function exactHistoricalCommentContent(fields: unknown): string {
   if (typeof content !== 'string') {
     throw new Error('historical comment payload requires string content');
   }
-  if (content.includes('\u0000')) {
+  return exactPostgresText(content, 'historical comment content');
+}
+
+const CARD_CORRECTION_PAYLOAD_KEYS = [
+  'card_description_correction',
+  'entity_type',
+  'fields',
+  'source_id',
+] as const;
+const CARD_CORRECTION_EVIDENCE_KEYS = [
+  'authorization_id',
+  'authorization_sha256',
+  'decision_sha256',
+  'source_description_sha256',
+  'target_description_sha256',
+  'target_id',
+] as const;
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+export function exactHistoricalCardDescriptionCorrection(
+  payload: StagedPayload,
+  targetRawDescription: unknown
+): { description: string; evidence: CardDescriptionCorrectionEvidence } {
+  if (!hasExactKeys(payload as unknown as Record<string, unknown>, CARD_CORRECTION_PAYLOAD_KEYS)) {
     throw new Error(
-      'historical comment content is not representable by PostgreSQL text: contains U+0000'
+      `card description correction payload must contain exactly ${CARD_CORRECTION_PAYLOAD_KEYS.join(',')}`
     );
   }
-  for (let index = 0; index < content.length; index += 1) {
-    const codeUnit = content.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      const next = content.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        index += 1;
-        continue;
-      }
-      throw new Error(
-        'historical comment content is not representable by PostgreSQL text: contains an unpaired UTF-16 surrogate'
-      );
-    }
-    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      throw new Error(
-        'historical comment content is not representable by PostgreSQL text: contains an unpaired UTF-16 surrogate'
-      );
+  if (!hasExactKeys(payload.fields, ['description'])) {
+    throw new Error('card description correction fields must contain exactly description');
+  }
+  const description = exactPostgresText(payload.fields.description, 'historical card description');
+  const targetDescription = exactPostgresText(
+    targetRawDescription,
+    'frozen target card description'
+  );
+  const evidence = payload.card_description_correction;
+  if (
+    !evidence ||
+    typeof evidence !== 'object' ||
+    !hasExactKeys(evidence as unknown as Record<string, unknown>, CARD_CORRECTION_EVIDENCE_KEYS)
+  ) {
+    throw new Error(
+      `card description correction evidence must contain exactly ${CARD_CORRECTION_EVIDENCE_KEYS.join(',')}`
+    );
+  }
+  for (const key of ['authorization_id', 'target_id'] as const) {
+    if (typeof evidence[key] !== 'string' || evidence[key].length === 0) {
+      throw new Error(`card description correction ${key} must be a non-empty string`);
     }
   }
-  return content;
+  for (const key of [
+    'authorization_sha256',
+    'decision_sha256',
+    'source_description_sha256',
+    'target_description_sha256',
+  ] as const) {
+    if (typeof evidence[key] !== 'string' || !/^[0-9a-f]{64}$/.test(evidence[key])) {
+      throw new Error(`card description correction ${key} must be a lowercase SHA-256`);
+    }
+  }
+  if (sha256Hex(description) !== evidence.source_description_sha256) {
+    throw new Error('card description correction source raw SHA-256 mismatch');
+  }
+  if (sha256Hex(targetDescription) !== evidence.target_description_sha256) {
+    throw new Error('card description correction target raw SHA-256 mismatch');
+  }
+  if (description === targetDescription || decodeHTML(targetDescription) !== description) {
+    throw new Error(
+      'card description correction raw/entity-decoded descriptions do not match exactly'
+    );
+  }
+  return { description, evidence };
 }
 
 export function sha256Hex(bytes: string | Uint8Array): string {

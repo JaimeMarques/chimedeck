@@ -29,6 +29,7 @@ import {
   COMMENT_FINGERPRINT_FIELDS,
   COMMENT_CORRECTION_FIELDS,
   CARD_COVER_FIELDS,
+  CARD_DESCRIPTION_FIELDS,
   hashPlanDocument,
   sha256Hex,
   canonicalJson,
@@ -63,7 +64,13 @@ export const ENTITY_TYPES = [
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-export const OPERATIONS = ['create', 'link', 'correct', 'enrich'] as const;
+export const OPERATIONS = [
+  'create',
+  'link',
+  'correct',
+  'enrich',
+  'correct_card_description',
+] as const;
 export type Operation = (typeof OPERATIONS)[number];
 
 export interface ImportProvenanceInfo {
@@ -83,6 +90,13 @@ export interface ImportProvenanceInfo {
   workspace_id?: string;
 }
 
+export interface CardDescriptionAuthorizationEvidence {
+  authorization_id: string;
+  decision_sha256: string;
+  source_description_sha256: string;
+  target_description_sha256: string;
+}
+
 export interface ImportOperation {
   op_id: string; // stable within plan, e.g. 'op-001'
   entity_type: EntityType;
@@ -92,6 +106,11 @@ export interface ImportOperation {
   provenance: ImportProvenanceInfo;
   evidence_refs: string[];
   expected_target_fingerprint: string | null;
+  // Required by correct_card_description in addition to the exact description
+  // pre-image. It binds every target column so a native edit anywhere on the row
+  // blocks before the administrative update.
+  expected_target_row_fingerprint?: string | null;
+  card_description_authorization?: CardDescriptionAuthorizationEvidence;
   // Required for mutating operations. The importer projects the live row onto
   // its operation-specific allowlist and requires this exact pre-image as well
   // as its fingerprint before changing anything.
@@ -110,6 +129,10 @@ export interface ExternalInputPreconditions {
     bytes?: number;
   };
   destination_row_source?: { rows_sha256: string };
+  card_description_authorization?: {
+    canonical_sha256: string;
+    decision_sha256: string;
+  };
 }
 
 export interface ImportPlan {
@@ -219,9 +242,13 @@ export interface MutationInput {
   target_id: string;
   payload_ref: string;
   plan_hash: string;
-  operation: 'correct' | 'enrich';
+  operation: 'correct' | 'enrich' | 'correct_card_description';
   expected_target_fields: Record<string, unknown>;
   expected_target_fingerprint: string;
+  expected_target_row_fingerprint?: string;
+  card_description_authorization?: CardDescriptionAuthorizationEvidence & {
+    authorization_sha256: string;
+  };
   historical_author?: string;
 }
 
@@ -234,7 +261,18 @@ export interface ImporterDeps {
   // Hash of the exact external artifact snapshot already loaded into this deps
   // instance. Production exposes the identity-map digest so validation proves
   // the bytes that execution will actually use, closing a load/verify TOCTOU.
-  loadedExternalInputHash?(name: 'identity_map'): Promise<string | null>;
+  loadedExternalInputHash?(
+    name: 'identity_map' | 'card_description_authorization'
+  ): Promise<string | null>;
+  // The immutable server-loaded allowlist is the authority for raw card
+  // description corrections. A caller/plan assertion alone is never enough.
+  authorizeCardDescriptionCorrection?(input: {
+    authorization_id: string;
+    source_id: string;
+    target_id: string;
+    source_description_sha256: string;
+    target_description_sha256: string;
+  }): Promise<boolean>;
   // Fetch a target row by id (entity table read).
   fetchTarget(entityType: EntityType, targetId: string): Promise<Record<string, unknown> | null>;
   // Fetch provenance by source identity.
@@ -406,6 +444,7 @@ function claimIsOwn(
 function mutationFields(operation: Operation): readonly string[] | null {
   if (operation === 'correct') return COMMENT_CORRECTION_FIELDS;
   if (operation === 'enrich') return CARD_COVER_FIELDS;
+  if (operation === 'correct_card_description') return CARD_DESCRIPTION_FIELDS;
   return null;
 }
 
@@ -716,6 +755,83 @@ export async function validatePlan(
           message: 'correct requires historical_author',
         });
       }
+      if (op.operation === 'correct_card_description') {
+        const authorizationFields = [
+          'authorization_id',
+          'decision_sha256',
+          'source_description_sha256',
+          'target_description_sha256',
+        ] as const;
+        const authorization = op.card_description_authorization;
+        const authorizationPin = p.input_preconditions?.card_description_authorization;
+        if (!isValidHash(op.expected_target_row_fingerprint)) {
+          errors.push({
+            op_id: opId,
+            code: 'card-description-row-fingerprint-required',
+            message: 'correct_card_description requires expected_target_row_fingerprint',
+          });
+        }
+        if (!hasExactFields(authorization, authorizationFields)) {
+          errors.push({
+            op_id: opId,
+            code: 'card-description-authorization-invalid',
+            message: `correct_card_description card_description_authorization must contain exactly ${authorizationFields.join(',')}`,
+          });
+        } else if (
+          !isNonEmptyString(authorization.authorization_id) ||
+          !isValidHash(authorization.decision_sha256) ||
+          !isValidHash(authorization.source_description_sha256) ||
+          !isValidHash(authorization.target_description_sha256)
+        ) {
+          errors.push({
+            op_id: opId,
+            code: 'card-description-authorization-invalid',
+            message: 'correct_card_description authorization ids/hashes are malformed',
+          });
+        } else {
+          const expectedDescription = op.expected_target_fields?.description;
+          if (
+            typeof expectedDescription !== 'string' ||
+            sha256Hex(expectedDescription) !== authorization.target_description_sha256
+          ) {
+            errors.push({
+              op_id: opId,
+              code: 'card-description-target-hash-mismatch',
+              message:
+                'correct_card_description target_description_sha256 does not match the exact target pre-image',
+            });
+          }
+          if (
+            !authorizationPin ||
+            !isValidHash(authorizationPin.canonical_sha256) ||
+            !isValidHash(authorizationPin.decision_sha256) ||
+            authorizationPin.decision_sha256 !== authorization.decision_sha256
+          ) {
+            errors.push({
+              op_id: opId,
+              code: 'card-description-authorization-pin-required',
+              message:
+                'correct_card_description requires a matching immutable input_preconditions.card_description_authorization pin',
+            });
+          } else {
+            const authorized = await deps.authorizeCardDescriptionCorrection?.({
+              authorization_id: authorization.authorization_id,
+              source_id: op.source_id,
+              target_id: op.target_id as string,
+              source_description_sha256: authorization.source_description_sha256,
+              target_description_sha256: authorization.target_description_sha256,
+            });
+            if (authorized !== true) {
+              errors.push({
+                op_id: opId,
+                code: 'card-description-pair-unauthorized',
+                message:
+                  'correct_card_description source/target/raw hashes are absent from the immutable authorization allowlist',
+              });
+            }
+          }
+        }
+      }
     }
 
     // A board the plan creates does not exist yet, so its workspace cannot be
@@ -1001,7 +1117,11 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
     // Existing-row mutations are delegated as one adapter transaction. This
     // branch must precede generic provenance dedupe: a rerun may already have
     // the source claim and still needs a post-image no-op check.
-    if (op.operation === 'correct' || op.operation === 'enrich') {
+    if (
+      op.operation === 'correct' ||
+      op.operation === 'enrich' ||
+      op.operation === 'correct_card_description'
+    ) {
       const mutationInput: MutationInput = {
         entity_type: op.entity_type,
         source_system: plan.source_system,
@@ -1012,6 +1132,19 @@ async function executePlan(ctx: ExecutionContext): Promise<PlanApplyResult> {
         operation: op.operation,
         expected_target_fields: op.expected_target_fields as Record<string, unknown>,
         expected_target_fingerprint: op.expected_target_fingerprint as string,
+        ...(op.expected_target_row_fingerprint
+          ? { expected_target_row_fingerprint: op.expected_target_row_fingerprint }
+          : {}),
+        ...(op.card_description_authorization &&
+        plan.input_preconditions?.card_description_authorization
+          ? {
+              card_description_authorization: {
+                ...op.card_description_authorization,
+                authorization_sha256:
+                  plan.input_preconditions.card_description_authorization.canonical_sha256,
+              },
+            }
+          : {}),
         ...(op.historical_author ? { historical_author: op.historical_author } : {}),
       };
       const result =

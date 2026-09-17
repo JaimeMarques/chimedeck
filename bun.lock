@@ -44,6 +44,7 @@
         "class-variance-authority": "^0.7",
         "clsx": "^2",
         "dompurify": "^3.4.15",
+        "entities": "^8.1.0",
         "handlebars": "^4.7.9",
         "idb": "^8.0.3",
         "ioredis": "^5.10.0",

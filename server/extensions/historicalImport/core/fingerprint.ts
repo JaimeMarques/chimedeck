@@ -63,9 +63,20 @@ export const COMMENT_CORRECTION_FIELDS = [
 ] as const;
 
 export const CARD_COVER_FIELDS = ['cover_attachment_id', 'cover_color', 'cover_size'] as const;
+export const CARD_DESCRIPTION_FIELDS = ['description'] as const;
 
 function canonicalFieldValue(value: unknown): unknown {
   return value instanceof Date ? value.toISOString() : value;
+}
+
+// Full destination-row fingerprint used by destructive-in-place administrative
+// corrections. PostgreSQL timestamp values arrive as Date objects while frozen
+// JSON artifacts carry ISO strings; normalize only that representation before
+// canonical hashing so both sides reproduce one exact row witness.
+export function fingerprintRow(row: Record<string, unknown>): string {
+  return fingerprintJson(
+    Object.fromEntries(Object.entries(row).map(([key, value]) => [key, canonicalFieldValue(value)]))
+  );
 }
 
 // Build a fingerprint over selected fields of a row.

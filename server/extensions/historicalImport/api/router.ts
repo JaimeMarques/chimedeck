@@ -62,6 +62,7 @@ import {
   type PlanExpectations,
 } from '../core/plan';
 import { createKnexDeps, loadIdentityMap } from '../core/adapters';
+import { loadCardDescriptionAuthorization } from '../core/cardDescriptionAuthorization';
 import { decodeCompositeTargetId } from '../core/composite';
 
 function badRequest(message: string): Response {
@@ -313,8 +314,11 @@ export async function historicalImportRouter(
 }
 
 async function createDeps() {
-  const identityMap = await loadIdentityMap();
-  return createKnexDeps(identityMap);
+  const [identityMap, cardDescriptionAuthorization] = await Promise.all([
+    loadIdentityMap(),
+    loadCardDescriptionAuthorization(),
+  ]);
+  return createKnexDeps(identityMap, cardDescriptionAuthorization);
 }
 
 // Resolve a board id for an entity type/target so reset can authorize.
