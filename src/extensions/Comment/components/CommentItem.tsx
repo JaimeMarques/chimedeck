@@ -9,6 +9,7 @@ import {
   resolveAttachmentMarkdownUrl,
   stripCommentAttachmentPlaceholders,
 } from '~/extensions/Comment/utils/attachmentMarkdown';
+import { sanitizeCommentHtml } from '~/extensions/Comment/utils/sanitizeCommentHtml';
 import Button from '~/common/components/Button';
 import CommentEditor from './CommentEditor';
 import CommentDeletedItem from './CommentDeletedItem';
@@ -330,8 +331,14 @@ function relativeTime(iso: string): string {
   return `${day}, ${time}`;
 }
 
-/** Parse markdown and highlight @mention chips inside comment text. Returns safe HTML string. */
-function renderContent(text: string, attachments: Attachment[]): string {
+/**
+ * Parse markdown and highlight @mention chips inside comment text. Returns safe HTML string.
+ *
+ * Exported for tests: the safety guarantee of this module is that the returned string is safe to
+ * pass to dangerouslySetInnerHTML, including for comment content imported verbatim from a source
+ * system (see utils/sanitizeCommentHtml.ts).
+ */
+export function renderCommentContentHtml(text: string, attachments: Attachment[]): string {
   const hydrated = attachments.length > 0
     ? hydrateCommentAttachmentMarkdown(text, attachments)
     : stripCommentAttachmentPlaceholders(text);
@@ -354,7 +361,10 @@ function renderContent(text: string, attachments: Attachment[]): string {
   );
   // [why] Ensure all links open in a new tab so the user is never navigated away
   // from the board view.
-  return addLinkTargetBlank(normalizeRenderedLinkHtml(withMentions));
+  // [why] Sanitize last: this is the only string that reaches dangerouslySetInnerHTML, so the
+  // defence must cover every transformation above it, including raw HTML that historical imports
+  // stored byte-for-byte. Storage is untouched — only the rendered DOM is constrained.
+  return sanitizeCommentHtml(addLinkTargetBlank(normalizeRenderedLinkHtml(withMentions)));
 }
 
 const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
@@ -547,8 +557,11 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
                 setPreviewImage({ src, alt: image.getAttribute('alt') ?? 'Comment image' });
               }}
               // [why] dangerouslySetInnerHTML — content is user-authored markdown parsed by marked.
-              // Input is from authenticated users only (internal tool), so XSS risk is accepted.
-              dangerouslySetInnerHTML={{ __html: renderContent(comment.content, attachments) }}
+              // Historical imports may also store raw source HTML verbatim, so the string is
+              // sanitized (allow-list) in renderCommentContentHtml before it reaches the DOM.
+              dangerouslySetInnerHTML={{
+                __html: renderCommentContentHtml(comment.content, attachments),
+              }}
             />
           </div>
         )}
