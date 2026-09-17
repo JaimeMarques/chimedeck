@@ -1,0 +1,49 @@
+name: Historical Import CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  historical-import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun test tests/integration/historicalImport tests/unit/server/extensions/historicalImport
+      # [why] Imported historical comment content is persisted verbatim, so the render-time
+      # sanitizer (src/extensions/Comment/utils/sanitizeCommentHtml.ts) is the defence that keeps
+      # raw source HTML out of the DOM. Run its tests on the same push.
+      - name: Run comment render sanitizer tests
+        run: bun test src/extensions/Comment
+
+  release-focused:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Run cross-board move API, UI, MCP, and CLI tests
+        run: >-
+          bun test
+          server/extensions/card/api/move.test.ts
+          src/extensions/Card/components/__tests__/MoveCardModal.test.tsx
+          server/extensions/mcp/tools/moveCard.test.ts
+          cli/commands/moveCard.test.ts
+      - name: Run self-hosted S3 and Unicode Content-Disposition tests
+        run: >-
+          bun test
+          server/extensions/attachment/common/config/s3.test.ts
+          server/extensions/attachment/common/contentDisposition.test.ts
+      - name: Build production client assets
+        run: bun run build:client
+      - name: Verify cross-board feature strings and route in built assets
+        run: |
+          grep -R -q 'Select destination' dist/assets
+          grep -R -q 'targetListId' dist/assets
+          grep -R -q '/move' dist/assets

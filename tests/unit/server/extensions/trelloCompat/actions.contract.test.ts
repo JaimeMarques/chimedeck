@@ -26,8 +26,40 @@ describe('trelloCompat actions contract smoke tests', () => {
     expect(payload.type).toBe('updateCard');
   });
 
+  it('renders detached historical list activities from their immutable raw source action', () => {
+    const memberCreator = createActivityActionFixture().memberCreator;
+    const list = { id: 'list-deleted', name: 'Complete' };
+    const sourceAction = {
+      id: 'action-delete-list',
+      type: 'deleteList',
+      data: {
+        board: { id: 'source-board', name: 'Phoenix' },
+        list,
+      },
+    };
+    const payload = serializeActivityAction({
+      id: 'activity-detached-list',
+      type: 'legacy.trello.list_deleted',
+      board_id: 'target-board',
+      user_id: memberCreator.id,
+      payload: {
+        detached_historical_list_reference: list,
+        historical_source_action: sourceAction,
+      },
+      created_at: '2026-04-14T19:35:20.000Z',
+      memberCreator,
+    });
+
+    expect(() => assertTrelloShape('action-activity', payload)).not.toThrow();
+    expect(payload.type).toBe('deleteList');
+    expect(payload.data).toEqual(sourceAction.data);
+    expect(payload.data).not.toHaveProperty('historical_source_action');
+  });
+
   it('PUT /actions/{id} response shape remains Trello-compatible for comment actions', () => {
-    const payload = serializeCommentAction(createCommentActionFixture({ content: 'Updated comment text' }));
+    const payload = serializeCommentAction(
+      createCommentActionFixture({ content: 'Updated comment text' })
+    );
 
     expect(() => assertTrelloShape('action-comment', payload)).not.toThrow();
     expect(payload.data.text).toBe('Updated comment text');

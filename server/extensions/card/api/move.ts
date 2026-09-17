@@ -9,6 +9,7 @@ import {
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { requireCardWritable, type CardScopedRequest } from '../middlewares/requireCardWritable';
+import { applyBoardVisibility } from '../../../middlewares/boardVisibility';
 import { between, HIGH_SENTINEL, generatePositions } from '../../list/mods/fractional';
 import { recordConflict } from '../../realtime/mods/conflictHandler';
 import { emitCardMoved } from '../../activity/mods/createActivityEvent';
@@ -29,7 +30,14 @@ type ListRow = {
   id: string;
   board_id: string;
   title?: string | null;
+  archived?: boolean;
   [key: string]: unknown;
+};
+
+type BoardRow = {
+  id: string;
+  workspace_id: string;
+  state: 'ACTIVE' | 'ARCHIVED';
 };
 
 async function parseMoveBody(req: Request): Promise<MoveBody | Response> {
@@ -57,7 +65,7 @@ async function validateMoveLists({
   card: { list_id: string };
   targetListId: string;
 }): Promise<{ targetList: ListRow; sourceList: ListRow } | Response> {
-  const targetList = (await db('lists').where({ id: targetListId }).first()) as ListRow | undefined;
+  const targetList = await db<ListRow>('lists').where({ id: targetListId }).first();
   if (!targetList) {
     return Response.json(
       { error: { code: 'target-list-not-found', message: 'Target list not found' } },
@@ -65,7 +73,7 @@ async function validateMoveLists({
     );
   }
 
-  const sourceList = (await db('lists').where({ id: card.list_id }).first()) as ListRow | undefined;
+  const sourceList = await db<ListRow>('lists').where({ id: card.list_id }).first();
   if (!sourceList) {
     return Response.json(
       { error: { code: 'source-list-not-found', message: 'Source list not found' } },
@@ -123,8 +131,10 @@ async function rebalanceAndMoveCard({
   await db.transaction(async (trx) => {
     await Promise.all(
       orderedIds.map((id, idx) => {
+        const nextPosition = newPositions[idx];
+        if (!nextPosition) throw new Error('Failed to generate card position');
         const updateData: { position: string; updated_at: string; list_id?: string } = {
-          position: newPositions[idx]!,
+          position: nextPosition,
           updated_at: now,
         };
         if (id === cardId) {
@@ -135,8 +145,8 @@ async function rebalanceAndMoveCard({
     );
   });
 
-  const refreshed = await db('cards').where({ id: cardId }).first();
-  return (refreshed as CardRow | undefined) ?? null;
+  const refreshed = await db<CardRow>('cards').where({ id: cardId }).first();
+  return refreshed ?? null;
 }
 
 async function persistMove({
@@ -158,10 +168,10 @@ async function persistMove({
     return rebalanceAndMoveCard({ cardId, targetListId, insertIndex, targetCards, now });
   }
 
-  const updated = await db('cards')
+  const updated = (await db<CardRow>('cards')
     .where({ id: cardId })
-    .update({ list_id: targetListId, position, updated_at: now }, ['*']);
-  return (updated[0] as CardRow | undefined) ?? null;
+    .update({ list_id: targetListId, position, updated_at: now }, ['*'])) as CardRow[];
+  return updated[0] ?? null;
 }
 
 export async function handleMoveCard(req: Request, cardId: string): Promise<Response> {
@@ -172,8 +182,9 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
   const writableError = await requireCardWritable(cardReq, cardId);
   if (writableError) return writableError;
 
-  const card = cardReq.card!;
-  const board = cardReq.board!;
+  const writableCardReq = cardReq as CardScopedRequest & { card: CardRow; board: BoardRow };
+  const card = writableCardReq.card;
+  const board = writableCardReq.board;
 
   const scopedReq = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
@@ -189,6 +200,45 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
   const listsOrError = await validateMoveLists({ card, targetListId: body.targetListId });
   if (listsOrError instanceof Response) return listsOrError;
   const { targetList, sourceList } = listsOrError;
+
+  // For cross-board moves, verify the caller has write access on the target board before
+  // evaluating state-transition rules so an inaccessible destination cannot leak list metadata.
+  const isCrossBoard = sourceList.board_id !== targetList.board_id;
+  if (isCrossBoard) {
+    const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
+    if (!targetBoard) {
+      return Response.json({ error: { name: 'target-board-not-found' } }, { status: 404 });
+    }
+    if (targetBoard.workspace_id !== board.workspace_id) {
+      return Response.json(
+        {
+          error: {
+            code: 'cross-workspace-move-forbidden',
+            message: 'Cards can only be moved between boards in the same workspace',
+          },
+        },
+        { status: 403 },
+      );
+    }
+    const targetVisibilityError = await applyBoardVisibility(req, targetBoard.id);
+    if (targetVisibilityError) return targetVisibilityError;
+    if (targetBoard.state === 'ARCHIVED') {
+      return Response.json(
+        { error: { code: 'board-is-archived', message: 'The target board is archived and cannot be modified' } },
+        { status: 403 },
+      );
+    }
+    const targetScopedReq = req as WorkspaceScopedRequest;
+    const targetRoleError = await requireMemberOrBoardGuestMember(targetScopedReq, targetBoard.id);
+    if (targetRoleError) return targetRoleError;
+  }
+
+  if (targetList.archived) {
+    return Response.json(
+      { error: { code: 'target-list-archived', message: 'The target list is archived' } },
+      { status: 403 },
+    );
+  }
 
   try {
     await validateCardMove({
@@ -220,25 +270,11 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
     throw error;
   }
 
-  // For cross-board moves, verify the caller has write access on the target board too.
-  const isCrossBoard = sourceList.board_id !== targetList.board_id;
-  if (isCrossBoard) {
-    const targetBoard = await db('boards').where({ id: targetList.board_id }).first();
-    if (!targetBoard) {
-      return Response.json({ error: { name: 'target-board-not-found' } }, { status: 404 });
-    }
-    const targetScopedReq = req as WorkspaceScopedRequest;
-    const targetMembershipError = await requireWorkspaceMembership(targetScopedReq, targetBoard.workspace_id);
-    if (targetMembershipError) return targetMembershipError;
-    const targetRoleError = await requireMemberOrBoardGuestMember(targetScopedReq, targetBoard.id);
-    if (targetRoleError) return targetRoleError;
-  }
-
   // Compute new position within target list
-  const targetCards = (await db('cards')
+  const targetCards = await db<CardRow>('cards')
     .where({ list_id: body.targetListId, archived: false })
     .whereNot({ id: cardId }) // exclude the card being moved
-    .orderBy('position', 'asc')) as CardRow[];
+    .orderBy('position', 'asc');
 
   const insertIndex = resolveInsertIndex({ afterCardId: body.afterCardId, targetCards });
   if (insertIndex === null) {
@@ -258,7 +294,7 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
       .select('id');
     const currentIndex = currentListCardIds.findIndex((entry: { id: string }) => entry.id === cardId);
     if (currentIndex === insertIndex) {
-      const unchangedCard = await db('cards').where({ id: cardId }).first();
+      const unchangedCard = await db<CardRow>('cards').where({ id: cardId }).first();
       if (!unchangedCard) {
         return Response.json(
           { error: { code: 'card-not-found', message: 'Card not found after move' } },
@@ -274,7 +310,7 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
     ? targetCards[insertIndex]?.position ?? HIGH_SENTINEL
     : HIGH_SENTINEL;
 
-  let position = computeStrictPositionBetween({ left, right });
+  const position = computeStrictPositionBetween({ left, right });
 
   const now = new Date().toISOString();
   // Boundary fallback: if no strict lexicographic slot exists (e.g. prepend
@@ -293,15 +329,15 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
       { status: 404 },
     );
   }
-  position = updatedCard.position;
+  const updatedPosition = updatedCard.position;
 
   // Detect position collision: if another card already occupies the computed position
   // (concurrent move race), record it as a conflict before broadcasting the resolution.
-  const collision = await db('cards')
-    .where({ list_id: body.targetListId, position, archived: false })
+  const collision = await db<CardRow>('cards')
+    .where({ list_id: body.targetListId, position: updatedPosition, archived: false })
     .whereNot({ id: cardId })
     .first();
-  collision && recordConflict({ boardId: board.id, entityType: 'card' });
+  if (collision) recordConflict({ boardId: board.id, entityType: 'card' });
 
   // Client expects { card, fromListId } to update both card slice and board slice
   const fromListId = card.list_id;
@@ -315,7 +351,7 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
         cardId,
         cardTitle: updatedCard.title,
         fromListId,
-        fromListName: sourceList!.title ?? null,
+        fromListName: sourceList.title ?? null,
         toListId: updatedCard.list_id,
         toListName: targetList.title ?? null,
         boardId: board.id,

@@ -42,6 +42,7 @@ import { webhooksRouter } from './extensions/webhooks/api/index';
 import { mcpHttpHandler } from './extensions/mcp/http/index';
 import { healthCheckExtensionRouter } from './extensions/healthCheck/index';
 import { trelloCompatRouter } from './extensions/trelloCompat';
+import { historicalImportRouter } from './extensions/historicalImport';
 // Register all automation trigger handlers at startup.
 import './extensions/automation/engine/triggers/index';
 import { startAutomationScheduler } from './extensions/automation/scheduler/index';
@@ -204,6 +205,9 @@ async function router(req: Request): Promise<Response> {
   const trelloCompatResponse = await trelloCompatRouter(req, path);
   if (trelloCompatResponse) return trelloCompatResponse;
 
+  const historicalImportResponse = await historicalImportRouter(req, path);
+  if (historicalImportResponse) return historicalImportResponse;
+
   const mcpResponse = await mcpHttpHandler(req);
   if (mcpResponse) return mcpResponse;
 
@@ -311,4 +315,4 @@ Bun.serve({
   websocket: wsHandlers,
 });
 
-console.info(`[server] Listening on http://localhost:${appConfig.port}`);
+console.info(`[server] Listening on http://localhost:${String(appConfig.port)}`);
