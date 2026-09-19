@@ -11,6 +11,7 @@ import {
   type Role,
 } from '../../../../middlewares/permissionManager';
 import { writeEvent } from '../../../../mods/events/index';
+import { wouldRemoveLastBoardAdmin } from '../../../board/api/members/lastAdmin';
 
 const VALID_ROLES = new Set<Role>(['OWNER', 'ADMIN', 'MEMBER', 'VIEWER']);
 
@@ -78,24 +79,43 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
           .where({ workspace_id: workspaceId, user_id: user.id })
           .update({ role });
 
-        const boards = await trx('boards')
+        const boards = (await trx('boards')
           .where({ workspace_id: workspaceId })
-          .select('id');
+          .select('id')) as Array<{ id: string }>;
 
         if (boards.length > 0) {
-          await trx('board_members')
-            .insert(
-              boards.map((board) => ({
-                id: randomUUID(),
-                board_id: board.id,
-                user_id: user.id,
-                role: boardRole,
-                created_at: now,
-                updated_at: now,
-              })),
-            )
-            .onConflict(['board_id', 'user_id'])
-            .merge({ role: boardRole, updated_at: now });
+          // [deny-first] This upsert rewrites the user's role on every board in
+          // the workspace, so a GUEST promoted to MEMBER would be downgraded to
+          // board MEMBER even on a board where they are the only ADMIN. Lock
+          // each board and skip the ones where that would empty the admin set;
+          // the promotion itself still goes through.
+          const boardIds = boards.map((board) => board.id).sort();
+          for (const boardId of boardIds) {
+            await trx.raw('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [boardId]);
+          }
+
+          const allowed: string[] = [];
+          for (const boardId of boardIds) {
+            if (!(await wouldRemoveLastBoardAdmin(boardId, user.id, boardRole, trx))) {
+              allowed.push(boardId);
+            }
+          }
+
+          if (allowed.length > 0) {
+            await trx('board_members')
+              .insert(
+                allowed.map((boardId) => ({
+                  id: randomUUID(),
+                  board_id: boardId,
+                  user_id: user.id,
+                  role: boardRole,
+                  created_at: now,
+                  updated_at: now,
+                })),
+              )
+              .onConflict(['board_id', 'user_id'])
+              .merge({ role: boardRole, updated_at: now });
+          }
         }
 
         await trx('board_guest_access')

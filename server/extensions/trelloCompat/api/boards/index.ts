@@ -11,6 +11,11 @@ import {
 } from '../../common/errors';
 import { serializeBoard } from '../../serializers/board';
 import { serializeCard as serializeTrelloCard } from '../../serializers/card';
+import {
+  enforceLastBoardAdmin,
+  LAST_BOARD_ADMIN_DEMOTE_MESSAGE,
+  LAST_BOARD_ADMIN_REMOVE_MESSAGE,
+} from '../../../board/api/members/lastAdmin';
 import { serializeLabel } from '../../serializers/label';
 import { serializeList } from '../../serializers/list';
 import { serializeMember } from '../../serializers/member';
@@ -22,6 +27,8 @@ type TrelloAuthUser = {
   name?: string;
   avatar_url?: string | null;
 };
+
+type BoardMemberRow = { id: string; board_id: string; user_id: string; role: string };
 
 type BoardRow = {
   id: string;
@@ -530,29 +537,40 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
     if (!workspaceRole) return TRELLO_PERMISSION_DENIED();
 
     const boardRole = memberType === 'admin' ? 'ADMIN' : 'MEMBER';
-    const existingBoardMembership = await db('board_members')
-      .where({ board_id: board.id, user_id: idMember })
-      .first();
-
-    if (existingBoardMembership) {
-      await db('board_members')
+    // [deny-first] A board must always keep at least one ADMIN. The guard and
+    // the write share a transaction under a per-board lock, so concurrent
+    // demotions cannot both observe a safe admin count.
+    const written = await enforceLastBoardAdmin(board.id, idMember, boardRole, async (trx) => {
+      const existingBoardMembership = await trx('board_members')
         .where({ board_id: board.id, user_id: idMember })
-        .update({ role: boardRole, updated_at: new Date().toISOString() });
-    } else {
-      await db('board_members').insert({
-        id: randomUUID(),
-        board_id: board.id,
-        user_id: idMember,
-        role: boardRole,
-      });
+        .first();
+
+      if (existingBoardMembership) {
+        await trx('board_members')
+          .where({ board_id: board.id, user_id: idMember })
+          .update({ role: boardRole, updated_at: new Date().toISOString() });
+      } else {
+        await trx('board_members').insert({
+          id: randomUUID(),
+          board_id: board.id,
+          user_id: idMember,
+          role: boardRole,
+        });
+      }
+
+      return trx('board_members')
+        .where({ board_id: board.id, user_id: idMember })
+        .first<BoardMemberRow | undefined>();
+    });
+
+    if (written === null) {
+      return trelloError(LAST_BOARD_ADMIN_DEMOTE_MESSAGE, 409);
     }
 
-    const saved = await db('board_members')
-      .where({ board_id: board.id, user_id: idMember })
-      .first();
+    const saved = written;
 
     return Response.json({
-      id: (saved?.id as string) ?? randomUUID(),
+      id: saved?.id ?? randomUUID(),
       idMember: idMember,
       memberType: boardRole === 'ADMIN' ? 'admin' : 'normal',
       unconfirmed: false,
@@ -568,8 +586,18 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
     const guest = await db('board_guest_access').where({ board_id: board.id, user_id: idMember }).first();
     if (!existing && !guest) return TRELLO_NOT_FOUND();
 
-    await db('board_members').where({ board_id: board.id, user_id: idMember }).delete();
-    await db('board_guest_access').where({ board_id: board.id, user_id: idMember }).delete();
+    // [deny-first] A board must always keep at least one ADMIN. Guard and
+    // deletes share a transaction under a per-board lock.
+    const removed = await enforceLastBoardAdmin(board.id, idMember, null, async (trx) => {
+      await trx('board_members').where({ board_id: board.id, user_id: idMember }).delete();
+      await trx('board_guest_access').where({ board_id: board.id, user_id: idMember }).delete();
+      return true;
+    });
+
+    if (removed === null) {
+      return trelloError(LAST_BOARD_ADMIN_REMOVE_MESSAGE, 409);
+    }
+
     return Response.json({});
   }
 

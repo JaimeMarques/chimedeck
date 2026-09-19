@@ -10,6 +10,7 @@ import {
 } from '../../../../middlewares/permissionManager';
 import { writeEvent } from '../../../../mods/events/index';
 import type { AuthenticatedRequest } from '../../../auth/middlewares/authentication';
+import { enforceLastBoardAdmin, LAST_BOARD_ADMIN_DEMOTE_MESSAGE } from './lastAdmin';
 
 type BoardMemberRole = 'ADMIN' | 'MEMBER';
 type BoardMemberRow = { board_id: string; user_id: string; role: string };
@@ -71,25 +72,22 @@ export async function handleUpdateBoardMember(
     );
   }
 
-  // [deny-first] Prevent demoting the last ADMIN — board must always have at least one.
-  if (existing.role === 'ADMIN' && newRole !== 'ADMIN') {
-    const adminCount = await db('board_members')
-      .where({ board_id: boardId, role: 'ADMIN' })
-      .count('id as count')
-      .first();
+  // [deny-first] Prevent demoting the last ADMIN — board must always have at
+  // least one. The guard and the write share a transaction under a per-board
+  // lock, so two concurrent demotions cannot both see a safe count.
+  const updated = await enforceLastBoardAdmin(boardId, userId, newRole, async (trx) => {
+    await trx('board_members')
+      .where({ board_id: boardId, user_id: userId })
+      .update({ role: newRole, updated_at: new Date().toISOString() });
+    return true;
+  });
 
-    const count = Number((adminCount as { count: string | number } | undefined)?.count ?? 0);
-    if (count <= 1) {
-      return Response.json(
-        { name: 'last-board-admin', data: { message: 'Cannot demote the last board admin. Promote another member first.' } },
-        { status: 409 },
-      );
-    }
+  if (updated === null) {
+    return Response.json(
+      { name: 'last-board-admin', data: { message: LAST_BOARD_ADMIN_DEMOTE_MESSAGE } },
+      { status: 409 },
+    );
   }
-
-  await db('board_members')
-    .where({ board_id: boardId, user_id: userId })
-    .update({ role: newRole, updated_at: new Date().toISOString() });
 
   const member = await db('board_members as bm')
     .join('users as u', 'bm.user_id', 'u.id')

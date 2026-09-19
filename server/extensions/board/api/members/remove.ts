@@ -9,6 +9,7 @@ import {
   type WorkspaceScopedRequest,
 } from '../../../../middlewares/permissionManager';
 import { writeEvent } from '../../../../mods/events/index';
+import { enforceLastBoardAdmin, LAST_BOARD_ADMIN_REMOVE_MESSAGE } from './lastAdmin';
 
 export async function handleRemoveBoardMember(
   req: Request,
@@ -28,23 +29,19 @@ export async function handleRemoveBoardMember(
     );
   }
 
-  // [deny-first] Prevent removing the last ADMIN — board must always have at least one.
-  if (existing.role === 'ADMIN') {
-    const adminCount = await db('board_members')
-      .where({ board_id: boardId, role: 'ADMIN' })
-      .count('id as count')
-      .first();
+  // [deny-first] Prevent removing the last ADMIN — board must always have at
+  // least one. Guard and delete share a transaction under a per-board lock.
+  const removed = await enforceLastBoardAdmin(boardId, userId, null, async (trx) => {
+    await trx('board_members').where({ board_id: boardId, user_id: userId }).delete();
+    return true;
+  });
 
-    const count = Number((adminCount as { count: string | number } | undefined)?.count ?? 0);
-    if (count <= 1) {
-      return Response.json(
-        { name: 'last-board-admin', data: { message: 'Cannot remove the last board admin. Promote another member to ADMIN first.' } },
-        { status: 409 },
-      );
-    }
+  if (removed === null) {
+    return Response.json(
+      { name: 'last-board-admin', data: { message: LAST_BOARD_ADMIN_REMOVE_MESSAGE } },
+      { status: 409 },
+    );
   }
-
-  await db('board_members').where({ board_id: boardId, user_id: userId }).delete();
 
   writeEvent({
     type: 'board_member_removed',
