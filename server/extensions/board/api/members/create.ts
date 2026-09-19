@@ -92,8 +92,23 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
 
   // Adding an existing member is a conflict — changing a role goes through
   // PATCH /boards/:id/members/:userId, which enforces the last-ADMIN invariant.
-  const existing = await db('board_members').where({ board_id: boardId, user_id: userId }).first();
-  if (existing) {
+  //
+  // The insert is the authority, not a preceding read: board_members carries
+  // UNIQUE (board_id, user_id) (migration 0040), so two concurrent adds would
+  // both pass a read-then-insert check and one would surface 23505 as a 500.
+  // ignore() turns the losing insert into zero rows, which we report as 409.
+  const inserted = await db('board_members')
+    .insert({
+      id: randomUUID(),
+      board_id: boardId,
+      user_id: userId,
+      role,
+    })
+    .onConflict(['board_id', 'user_id'])
+    .ignore()
+    .returning('id');
+
+  if (inserted.length === 0) {
     return Response.json(
       {
         name: 'board-member-exists',
@@ -105,13 +120,6 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
       { status: 409 },
     );
   }
-
-  await db('board_members').insert({
-    id: randomUUID(),
-    board_id: boardId,
-    user_id: userId,
-    role,
-  });
 
   const member = await db('board_members as bm')
     .join('users as u', 'bm.user_id', 'u.id')

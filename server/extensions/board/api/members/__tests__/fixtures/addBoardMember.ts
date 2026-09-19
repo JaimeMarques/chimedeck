@@ -44,9 +44,26 @@ function dbStub(table: string) {
     select: () => builder,
     first: () => Promise.resolve(rows()[0]),
     insert(row: Row) {
-      inserted.push(row);
-      boardMembers.push(row);
-      return Promise.resolve([row]);
+      // Model the real UNIQUE (board_id, user_id) constraint so the handler's
+      // onConflict(...).ignore() path is exercised rather than stubbed away:
+      // a conflicting insert writes nothing and returns no rows.
+      const conflict = boardMembers.some(
+        (r) => r['board_id'] === row['board_id'] && r['user_id'] === row['user_id'],
+      );
+      const commit = (): Row[] => {
+        if (conflict) return [];
+        inserted.push(row);
+        boardMembers.push(row);
+        return [row];
+      };
+      const chain = {
+        onConflict: () => chain,
+        ignore: () => chain,
+        merge: () => chain,
+        returning: () => Promise.resolve(commit().map((r) => ({ id: r['id'] }))),
+        then: (resolve: (value: Row[]) => unknown) => Promise.resolve(commit()).then(resolve),
+      };
+      return chain;
     },
     update(patch: Row) {
       updated.push({ ...state.where, ...patch });

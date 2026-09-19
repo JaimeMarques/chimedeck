@@ -55,22 +55,30 @@ test.describe('Board member API flows', () => {
     expect(body.data.some((m: any) => m.userId === 'user-2')).toBe(true);
   });
 
-  test('POST /boards/:id/members adds/updates member idempotently', async ({ request }) => {
+  test('POST /boards/:id/members rejects a duplicate add; PATCH changes the role', async ({ request }) => {
     const { token } = await registerAndLogin(request, 'post');
     const wsId = await createWorkspace(request, token);
     const boardId = await createBoard(request, token, wsId);
     // Add member
-    await request.post(`${BASE_URL}/api/v1/boards/${boardId}/members`, {
+    const created = await request.post(`${BASE_URL}/api/v1/boards/${boardId}/members`, {
       headers: { Authorization: `Bearer ${token}` },
       data: { userId: 'user-3', role: 'MEMBER' },
     });
-    // Update role idempotently
-    const res = await request.post(`${BASE_URL}/api/v1/boards/${boardId}/members`, {
+    expect(created.status()).toBe(201);
+    // Re-adding is a conflict, not a role change — it must not rewrite the role,
+    // which is how a board's last ADMIN could previously be demoted.
+    const duplicate = await request.post(`${BASE_URL}/api/v1/boards/${boardId}/members`, {
       headers: { Authorization: `Bearer ${token}` },
       data: { userId: 'user-3', role: 'ADMIN' },
     });
-    expect(res.status()).toBe(200);
-    const body = await res.json();
+    expect(duplicate.status()).toBe(409);
+    // Role changes go through PATCH, which the caller above is authorized for.
+    const patched = await request.patch(`${BASE_URL}/api/v1/boards/${boardId}/members/user-3`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { role: 'ADMIN' },
+    });
+    expect(patched.status()).toBe(200);
+    const body = await patched.json();
     expect(body.data.role).toBe('ADMIN');
   });
 

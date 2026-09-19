@@ -12,6 +12,7 @@ import { writeEvent } from '../../../../mods/events/index';
 import type { AuthenticatedRequest } from '../../../auth/middlewares/authentication';
 
 type BoardMemberRole = 'ADMIN' | 'MEMBER';
+type BoardMemberRow = { board_id: string; user_id: string; role: string };
 const VALID_ROLES = new Set<BoardMemberRole>(['ADMIN', 'MEMBER']);
 
 export async function handleUpdateBoardMember(
@@ -20,9 +21,28 @@ export async function handleUpdateBoardMember(
   userId: string,
 ): Promise<Response> {
   const scopedReq = req as BoardVisibilityScopedRequest;
+  const currentUserId = (req as AuthenticatedRequest).currentUser?.id;
 
+  if (!currentUserId) {
+    return Response.json(
+      { name: 'unauthorized', data: { message: 'Authentication required' } },
+      { status: 401 },
+    );
+  }
+
+  // Board membership can be managed by workspace ADMIN+ or explicit board
+  // ADMIN/OWNER — the same policy POST /boards/:id/members applies. This route
+  // is where callers are sent to change a role, so it must not be stricter
+  // than the route that refers them here.
   const roleError = requireRole(scopedReq as WorkspaceScopedRequest, 'ADMIN');
-  if (roleError) return roleError;
+  if (roleError) {
+    const actingBoardMember = await db<BoardMemberRow>('board_members')
+      .where({ board_id: boardId, user_id: currentUserId })
+      .first();
+    const actingBoardRole = actingBoardMember?.role;
+    const isBoardAdmin = actingBoardRole === 'ADMIN' || actingBoardRole === 'OWNER';
+    if (!isBoardAdmin) return roleError;
+  }
 
   let body: { role?: string };
   try {
