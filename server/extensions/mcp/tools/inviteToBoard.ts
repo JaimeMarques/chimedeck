@@ -10,7 +10,7 @@ export function registerInviteToBoard(server: McpServer, token: string): void {
       boardId: z.string().describe('ID of the board to invite the user to'),
       email: z.string().email().describe('Email address of the user to invite'),
       role: z
-        .enum(['member', 'observer'])
+        .enum(['member', 'admin'])
         .optional()
         .describe('Role to assign; defaults to "member"'),
     },

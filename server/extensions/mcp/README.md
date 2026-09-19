@@ -307,7 +307,7 @@ The existing list API enforces board writable-member permission checks.
 |---|---|---|---|
 | `boardId` | string | ✅ | ID of the board |
 | `email` | string | ✅ | Email address of the user to invite |
-| `role` | `"member"` \| `"observer"` | No | Role to assign (defaults to `"member"`) |
+| `role` | `"member"` \| `"admin"` | No | Role to assign (defaults to `"member"`) |
 
 > **Note:** `invite_to_board` requires the token holder to be a board admin. If they are not, the tool returns a structured error (`current-user-is-not-admin`) instead of crashing.
 

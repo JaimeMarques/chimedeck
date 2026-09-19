@@ -720,7 +720,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                   rowId: 'itb-role',
                   cells: [
                     { key: 'param', content: <Code>role</Code> },
-                    { key: 'type', content: '"member" | "observer"' },
+                    { key: 'type', content: '"member" | "admin"' },
                     { key: 'req', content: 'No' },
                     { key: 'desc', content: 'Role to assign (defaults to "member")' },
                   ],
