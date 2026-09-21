@@ -66,25 +66,56 @@ async function seed(): Promise<void> {
 try {
   await seed();
 
-  // Fire both adds together so they race between the uniqueness check and the
-  // write. Exactly one must win with 201; the other must be a clean 409.
-  const responses = await Promise.all([
-    handleAddBoardMember(addRequest('MEMBER'), boardId),
-    handleAddBoardMember(addRequest('ADMIN'), boardId),
-  ]);
+  // SHARE permits SELECT but blocks INSERT's RowExclusiveLock. Hold it until
+  // both writers are visibly waiting in PostgreSQL: any old read-then-insert
+  // implementation must therefore finish BOTH absence checks before either
+  // insert can run. Promise.all alone does not guarantee that interleaving.
+  const barrier = await db.transaction();
+  let pending: Promise<PromiseSettledResult<Response>[]> | undefined;
+  let outcomes: PromiseSettledResult<Response>[] = [];
+  try {
+    await barrier.raw('LOCK TABLE board_members IN SHARE MODE');
+    pending = Promise.allSettled([
+      handleAddBoardMember(addRequest('MEMBER'), boardId),
+      handleAddBoardMember(addRequest('ADMIN'), boardId),
+    ]);
+    const deadline = Date.now() + 10000;
+    let waitingCount = 0;
+    for (;;) {
+      const waiting = await barrier.raw<{ rows: Array<{ count: string }> }>(`
+        SELECT count(*) FROM pg_locks
+        WHERE relation = 'board_members'::regclass
+          AND mode = 'RowExclusiveLock' AND NOT granted
+          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+      `);
+      waitingCount = Number(waiting.rows[0]?.count);
+      if (waitingCount === 2) break;
+      if (Date.now() >= deadline) throw new Error('Both inserts did not reach the database barrier');
+      await Bun.sleep(20);
+    }
+    check('both inserts reached the barrier', waitingCount, 2);
+  } finally {
+    await barrier.rollback();
+    // Drain both requests even if orchestration fails, before deleting fixtures.
+    if (pending) outcomes = await pending;
+  }
+  const responses = outcomes.map((outcome) => {
+    if (outcome.status === 'rejected') throw outcome.reason;
+    return outcome.value;
+  });
 
   const statuses = responses.map((r) => r.status).sort((a, b) => a - b);
   check('one add succeeds', statuses[0], 201);
   check('the other is a conflict, not a 500', statuses[1], 409);
 
-  const rows = await db('board_members').where({ board_id: boardId, user_id: targetId });
+  const rows = await db<{ role: string }>('board_members').where({ board_id: boardId, user_id: targetId });
   check('exactly one membership row exists', rows.length, 1);
 
   // A second, strictly sequential duplicate must behave the same way.
-  const sequential = await handleAddBoardMember(addRequest('ADMIN'), boardId);
+  const sequential = await handleAddBoardMember(addRequest(rows[0]?.role === 'ADMIN' ? 'MEMBER' : 'ADMIN'), boardId);
   check('sequential duplicate -> 409', sequential.status, 409);
 
-  const after = await db('board_members').where({ board_id: boardId, user_id: targetId }).first();
+  const after = await db<{ role: string }>('board_members').where({ board_id: boardId, user_id: targetId }).first();
   check('the duplicate did not rewrite the role', after?.role, rows[0]?.role);
 } finally {
   await db('board_members').where({ board_id: boardId }).delete();
@@ -95,5 +126,5 @@ try {
   await db.destroy();
 }
 
-console.info(failures === 0 ? '\nALL CONCURRENCY CHECKS PASSED' : `\n${failures} CONCURRENCY CHECK(S) FAILED`);
+console.info(failures === 0 ? '\nALL CONCURRENCY CHECKS PASSED' : `\n${String(failures)} CONCURRENCY CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
