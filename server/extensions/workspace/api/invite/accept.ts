@@ -10,6 +10,12 @@ export async function handleAcceptInvite(req: Request, token: string): Promise<R
   if (authError) return authError;
 
   const { currentUser } = req as AuthenticatedRequest;
+  if (!currentUser) {
+    return Response.json(
+      { error: { code: 'unauthorized', message: 'Authentication required' } },
+      { status: 401 },
+    );
+  }
 
   const result = await validateInvite({ token });
 
@@ -36,26 +42,38 @@ export async function handleAcceptInvite(req: Request, token: string): Promise<R
 
   const { invite } = result as Extract<typeof result, { ok: true }>;
 
-  await consumeInvite({ invite, userId: currentUser!.id });
+  if (invite.invited_email.trim().toLowerCase() !== currentUser.email.trim().toLowerCase()) {
+    return Response.json(
+      { error: { code: 'invite-email-mismatch', message: 'This invite belongs to another email address' } },
+      { status: 403 },
+    );
+  }
+
+  const consumed = await consumeInvite({ invite, userId: currentUser.id });
+  if (!consumed) {
+    return Response.json(
+      { error: { code: 'invite-already-used', message: 'Invite has already been used or expired' } },
+      { status: 409 },
+    );
+  }
 
   // Emit real-time event so connected clients learn about the new workspace member (§8).
   // Resolve displayName from the users table since the JWT only carries id + email.
-  db('users').where({ id: currentUser!.id }).first().then((user) => {
-    const displayName = (user?.name as string | undefined) ?? currentUser!.email;
-    return writeEvent({
-      type: 'member_joined',
-      boardId: null,
-      entityId: invite.workspace_id,
-      actorId: currentUser!.id,
-      payload: {
-        scope: 'workspace',
-        userId: currentUser!.id,
-        displayName,
-        role: invite.role,
-        joinedAt: new Date().toISOString(),
-      },
-    });
-  }).catch(() => {});
+  const user = await db('users').where({ id: currentUser.id }).first();
+  const displayName = (user?.name as string | undefined) ?? currentUser.email;
+  await writeEvent({
+    type: 'member_joined',
+    boardId: null,
+    entityId: invite.workspace_id,
+    actorId: currentUser.id,
+    payload: {
+      scope: 'workspace',
+      userId: currentUser.id,
+      displayName,
+      role: invite.role,
+      joinedAt: new Date().toISOString(),
+    },
+  });
 
   return Response.json({
     data: {

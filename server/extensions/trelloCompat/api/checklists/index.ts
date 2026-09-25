@@ -148,7 +148,7 @@ async function canMutateBoard(userId: string, board: BoardRow): Promise<boolean>
   if (!role) return false;
   if (role === 'OWNER' || role === 'ADMIN') return true;
   if (role === 'VIEWER') return false;
-  if (role === 'GUEST') return hasGuestAccess(userId, board.id);
+  if (role === 'GUEST') return false;
   const boardRole = await getBoardMemberRole(userId, board.id);
   return boardRole === 'ADMIN' || boardRole === 'MEMBER';
 }

@@ -9,6 +9,7 @@ import { env } from '../../../config/env';
 import { getActiveWebhooksForEvent } from '../../webhooks/mods/registry';
 import { dispatchWebhook } from '../../webhooks/mods/dispatch';
 import type { WebhookEventType } from '../../webhooks/common/eventTypes';
+import { canUserReceiveBoardWebhook, type BoardAccessRow } from '../../board/access';
 
 // [why] extracted helper — card member events go through writeActivity (not dispatchEvent)
 // so webhooks must be fired here rather than in the central dispatch hook.
@@ -26,8 +27,13 @@ async function fireCardMemberWebhook({
   payload: Record<string, unknown>;
 }): Promise<void> {
   if (!env.WEBHOOKS_ENABLED) return;
+  const board = (await db('boards').where({ id: boardId }).first()) as
+    | BoardAccessRow
+    | undefined;
+  if (!board) return;
   const webhooks = await getActiveWebhooksForEvent({ knex: db, eventType });
   for (const wh of webhooks) {
+    if (!(await canUserReceiveBoardWebhook(wh.created_by, board, db))) continue;
     dispatchWebhook({
       endpoint: wh.endpoint_url,
       signingSecret: wh.signing_secret,

@@ -9,6 +9,9 @@ import {
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { emitCardMemberAssigned, emitCardMemberUnassigned } from '../../activity/mods/createActivityEvent';
+import { getCurrentWorkspaceRole } from '../../board/api/members/authorization';
+import { lockBoardMemberMutations } from '../../board/api/members/lock';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 
 interface CardContext {
   boardId: string;
@@ -87,11 +90,64 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
     return Response.json({ data: { card_id: cardId, user_id: body.userId } });
   }
 
-  const actorId = (req as AuthenticatedRequest).currentUser!.id;
+  const actorId = (req as AuthenticatedRequest).currentUser?.id;
+  if (!actorId) {
+    return Response.json(
+      { error: { code: 'unauthorized', message: 'Authentication required' } },
+      { status: 401 },
+    );
+  }
   const assigneeUser = await db('users').where({ id: body.userId }).select('name', 'email').first();
   const assigneeName = assigneeUser?.name ?? assigneeUser?.email ?? body.userId;
 
-  await db('card_members').insert({ card_id: cardId, user_id: body.userId });
+  const assignmentError = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, context.workspaceId);
+    await lockBoardMemberMutations(trx, context.boardId);
+    const actorRole = await getCurrentWorkspaceRole(trx, context.workspaceId, actorId);
+    if (!actorRole) {
+      return Response.json(
+        { error: { code: 'forbidden', message: 'Workspace membership is no longer active' } },
+        { status: 403 },
+      );
+    }
+    if (actorRole === 'GUEST') {
+      const actorGrant = await trx('board_guest_access')
+        .where({ board_id: context.boardId, user_id: actorId, guest_type: 'MEMBER' })
+        .first();
+      if (!actorGrant) {
+        return Response.json(
+          { error: { code: 'forbidden', message: 'Write access is no longer active' } },
+          { status: 403 },
+        );
+      }
+    }
+    const freshTargetMembership = await trx('memberships')
+      .where({ user_id: body.userId, workspace_id: context.workspaceId })
+      .first();
+    if (!freshTargetMembership) {
+      return Response.json(
+        { error: { code: 'member-not-in-workspace', message: 'User is not a member of this workspace' } },
+        { status: 400 },
+      );
+    }
+    if (freshTargetMembership.role === 'GUEST') {
+      const targetGrant = await trx('board_guest_access')
+        .where({ board_id: context.boardId, user_id: body.userId })
+        .first();
+      if (!targetGrant) {
+        return Response.json(
+          { error: { code: 'member-not-on-board', message: 'Guest is not a member of this board' } },
+          { status: 400 },
+        );
+      }
+    }
+    await trx('card_members')
+      .insert({ card_id: cardId, user_id: body.userId })
+      .onConflict(['card_id', 'user_id'])
+      .ignore();
+    return null;
+  });
+  if (assignmentError) return assignmentError;
 
   await emitCardMemberAssigned({
     actorId,

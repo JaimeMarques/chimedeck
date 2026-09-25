@@ -17,10 +17,15 @@ class QueryBuilder {
   private orderByDirection: 'asc' | 'desc' = 'asc';
   private pickedColumns: string[] | null = null;
 
-  constructor(private readonly store: DataStore, private readonly tableName: keyof DataStore) {}
+  constructor(
+    private readonly store: DataStore,
+    private readonly tableName: keyof DataStore
+  ) {}
 
   where(criteria: Row): QueryBuilder {
-    this.filters.push((row) => Object.entries(criteria).every(([key, value]) => row[key] === value));
+    this.filters.push((row) =>
+      Object.entries(criteria).every(([key, value]) => row[key] === value)
+    );
     return this;
   }
 
@@ -63,7 +68,7 @@ class QueryBuilder {
 
   then<TResult1 = Row[], TResult2 = never>(
     onfulfilled?: ((value: Row[]) => TResult1 | PromiseLike<TResult1>) | null,
-    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ): Promise<TResult1 | TResult2> {
     return this.execute().then(onfulfilled, onrejected);
   }
@@ -106,15 +111,24 @@ function createStore(): DataStore {
     users: [
       { id: 'user-admin', email: 'admin@example.com', name: 'Admin User', avatar_url: null },
       { id: 'user-member', email: 'member@example.com', name: 'Member User', avatar_url: null },
+      { id: 'user-owner-2', email: 'owner2@example.com', name: 'Owner Two', avatar_url: null },
       { id: 'user-new', email: 'new@example.com', name: 'New User', avatar_url: null },
     ],
     workspaces: [{ id: 'ws-1', name: 'Workspace One', owner_id: 'user-admin' }],
     memberships: [
       { workspace_id: 'ws-1', user_id: 'user-admin', role: 'OWNER' },
       { workspace_id: 'ws-1', user_id: 'user-member', role: 'MEMBER' },
+      { workspace_id: 'ws-1', user_id: 'user-owner-2', role: 'OWNER' },
     ],
     boards: [
-      { id: 'board-1', workspace_id: 'ws-1', title: 'Board One', description: 'board', state: 'ACTIVE', visibility: 'PRIVATE' },
+      {
+        id: 'board-1',
+        workspace_id: 'ws-1',
+        title: 'Board One',
+        description: 'board',
+        state: 'ACTIVE',
+        visibility: 'PRIVATE',
+      },
     ],
     board_members: [{ id: 'bm-1', board_id: 'board-1', user_id: 'user-admin', role: 'ADMIN' }],
     board_guest_access: [],
@@ -138,15 +152,28 @@ const authenticateMock = mock(async (req: Request & { currentUser?: unknown }) =
     return null;
   }
 
-  return Response.json({ error: { code: 'unauthorized', message: 'Invalid API token' } }, { status: 401 });
+  return Response.json(
+    { error: { code: 'unauthorized', message: 'Invalid API token' } },
+    { status: 401 }
+  );
 });
 
-const createInviteMock = mock(async ({ workspaceId, invitedEmail, role }: { workspaceId: string; invitedEmail: string; role: string }) => {
-  inviteIdSeq += 1;
-  const id = `invite-${inviteIdSeq}`;
-  dataStore.invites.push({ id, workspace_id: workspaceId, invited_email: invitedEmail, role });
-  return { id, token: `token-${inviteIdSeq}`, expiresAt: new Date() };
-});
+const createInviteMock = mock(
+  async ({
+    workspaceId,
+    invitedEmail,
+    role,
+  }: {
+    workspaceId: string;
+    invitedEmail: string;
+    role: string;
+  }) => {
+    inviteIdSeq += 1;
+    const id = `invite-${inviteIdSeq}`;
+    dataStore.invites.push({ id, workspace_id: workspaceId, invited_email: invitedEmail, role });
+    return { id, token: `token-${inviteIdSeq}`, expiresAt: new Date() };
+  }
+);
 
 mock.module('../../../server/extensions/auth/middlewares/authentication', () => ({
   authenticate: authenticateMock,
@@ -156,8 +183,33 @@ mock.module('../../../server/extensions/workspace/mods/invite/create', () => ({
   createInvite: createInviteMock,
 }));
 
+const dbMockBase = (tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName);
+const dbMock = Object.assign(dbMockBase, {
+  transaction: async <T>(callback: (trx: typeof dbMockBase) => Promise<T>) => callback(dbMockBase),
+});
 mock.module('../../../server/common/db', () => ({
-  db: ((tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName)) as unknown as typeof import('../../../server/common/db').db,
+  db: dbMock as unknown as typeof import('../../../server/common/db').db,
+}));
+mock.module('../../../server/extensions/workspace/api/members/lock', () => ({
+  lockWorkspaceMembershipMutations: async () => {},
+}));
+mock.module('../../../server/extensions/board/api/members/authorization', () => ({
+  getCurrentWorkspaceRole: async (_trx: unknown, workspaceId: string, userId: string) =>
+    (dataStore.memberships.find(
+      (membership) => membership.workspace_id === workspaceId && membership.user_id === userId
+    )?.role as string | undefined) ?? null,
+}));
+mock.module('../../../server/extensions/workspace/api/members/removeService', () => ({
+  removeWorkspaceMemberInTransaction: async (
+    _trx: unknown,
+    workspaceId: string,
+    userId: string
+  ) => {
+    dataStore.memberships = dataStore.memberships.filter(
+      (membership) => membership.workspace_id !== workspaceId || membership.user_id !== userId
+    );
+    return null;
+  },
 }));
 
 const { trelloCompatRouter } = await import('../../../server/extensions/trelloCompat/api/index');
@@ -179,7 +231,7 @@ describe('trelloCompat organizations', () => {
     });
     const res = await trelloCompatRouter(req, '/trello/1/organizations');
     expect(res?.status).toBe(200);
-    const body = await res!.json() as { id: string; displayName: string };
+    const body = (await res!.json()) as { id: string; displayName: string };
     expect(body.displayName).toBe('Created Workspace');
     expect(dataStore.workspaces.some((workspace) => workspace.id === body.id)).toBe(true);
   });
@@ -191,9 +243,9 @@ describe('trelloCompat organizations', () => {
     });
     const res = await trelloCompatRouter(req, '/trello/1/organizations/ws-1');
     expect(res?.status).toBe(200);
-    const body = await res!.json() as { id: string; memberships: Array<{ idMember: string }> };
+    const body = (await res!.json()) as { id: string; memberships: Array<{ idMember: string }> };
     expect(body.id).toBe('ws-1');
-    expect(body.memberships).toHaveLength(2);
+    expect(body.memberships).toHaveLength(3);
   });
 
   it('GET /organizations/{id}/boards and /members returns arrays', async () => {
@@ -203,7 +255,7 @@ describe('trelloCompat organizations', () => {
     });
     const boardsRes = await trelloCompatRouter(boardsReq, '/trello/1/organizations/ws-1/boards');
     expect(boardsRes?.status).toBe(200);
-    const boards = await boardsRes!.json() as Array<{ id: string }>;
+    const boards = (await boardsRes!.json()) as Array<{ id: string }>;
     expect(boards.map((board) => board.id)).toEqual(['board-1']);
 
     const membersReq = new Request('http://localhost/trello/1/organizations/ws-1/members', {
@@ -212,8 +264,12 @@ describe('trelloCompat organizations', () => {
     });
     const membersRes = await trelloCompatRouter(membersReq, '/trello/1/organizations/ws-1/members');
     expect(membersRes?.status).toBe(200);
-    const members = await membersRes!.json() as Array<{ id: string }>;
-    expect(members.map((member) => member.id)).toEqual(['user-admin', 'user-member']);
+    const members = (await membersRes!.json()) as Array<{ id: string }>;
+    expect(members.map((member) => member.id)).toEqual([
+      'user-admin',
+      'user-member',
+      'user-owner-2',
+    ]);
   });
 
   it('PUT /organizations/{id}/members invites by email', async () => {
@@ -237,9 +293,47 @@ describe('trelloCompat organizations', () => {
     });
     const res = await trelloCompatRouter(req, '/trello/1/organizations/ws-1/members/user-member');
     expect(res?.status).toBe(200);
-    const body = await res!.json() as { idMember: string; memberType: string };
+    const body = (await res!.json()) as { idMember: string; memberType: string };
     expect(body.idMember).toBe('user-member');
     expect(body.memberType).toBe('admin');
+  });
+
+  it('preserves OWNER on admin round-trip and denies ADMIN demotion of OWNER', async () => {
+    const ownerRoundTrip = new Request(
+      'http://localhost/trello/1/organizations/ws-1/members/user-owner-2',
+      {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer hf_admin_token' },
+        body: JSON.stringify({ type: 'admin' }),
+      }
+    );
+    const ownerResponse = await trelloCompatRouter(
+      ownerRoundTrip,
+      '/trello/1/organizations/ws-1/members/user-owner-2'
+    );
+    expect(ownerResponse?.status).toBe(200);
+    expect(
+      dataStore.memberships.find((membership) => membership.user_id === 'user-owner-2')?.role
+    ).toBe('OWNER');
+
+    const caller = dataStore.memberships.find((membership) => membership.user_id === 'user-member');
+    if (caller) caller.role = 'ADMIN';
+    const adminDemotion = new Request(
+      'http://localhost/trello/1/organizations/ws-1/members/user-owner-2',
+      {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer hf_member_token' },
+        body: JSON.stringify({ type: 'normal' }),
+      }
+    );
+    const denied = await trelloCompatRouter(
+      adminDemotion,
+      '/trello/1/organizations/ws-1/members/user-owner-2'
+    );
+    expect(denied?.status).toBe(401);
+    expect(
+      dataStore.memberships.find((membership) => membership.user_id === 'user-owner-2')?.role
+    ).toBe('OWNER');
   });
 
   it('DELETE /organizations/{id}/members/{id} removes member', async () => {
@@ -250,6 +344,26 @@ describe('trelloCompat organizations', () => {
     const res = await trelloCompatRouter(req, '/trello/1/organizations/ws-1/members/user-member');
     expect(res?.status).toBe(200);
     expect(await res!.json()).toEqual({});
-    expect(dataStore.memberships.some((membership) => membership.user_id === 'user-member')).toBe(false);
+    expect(dataStore.memberships.some((membership) => membership.user_id === 'user-member')).toBe(
+      false
+    );
+  });
+
+  it('DELETE /organizations/{id}/members/{id}/all supports Trello all-board removal', async () => {
+    const req = new Request(
+      'http://localhost/trello/1/organizations/ws-1/members/user-member/all',
+      {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer hf_admin_token' },
+      }
+    );
+    const res = await trelloCompatRouter(
+      req,
+      '/trello/1/organizations/ws-1/members/user-member/all'
+    );
+    expect(res?.status).toBe(200);
+    expect(dataStore.memberships.some((membership) => membership.user_id === 'user-member')).toBe(
+      false
+    );
   });
 });

@@ -135,6 +135,7 @@ const WorkspacePage = () => {
           members={members}
           currentUserId={authUser?.id ?? ''}
           canManageMembers={canManageMembers}
+          callerRole={currentMember?.role ?? 'MEMBER'}
         />
       </section>
 

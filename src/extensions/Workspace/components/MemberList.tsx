@@ -12,7 +12,8 @@ import type { WorkspaceMember, Role } from '../api';
 import RoleBadge from './RoleBadge';
 import Button from '../../../common/components/Button';
 
-const ASSIGNABLE_ROLES: Role[] = ['OWNER', 'ADMIN', 'MEMBER', 'VIEWER'];
+const OWNER_ASSIGNABLE_ROLES: Role[] = ['OWNER', 'ADMIN', 'MEMBER', 'VIEWER'];
+const ADMIN_ASSIGNABLE_ROLES: Role[] = ['ADMIN', 'MEMBER', 'VIEWER'];
 
 interface MemberListProps {
   workspaceId: string;
@@ -20,6 +21,7 @@ interface MemberListProps {
   // userId of the currently authenticated user, used to prevent self-removal.
   currentUserId: string;
   canManageMembers: boolean;
+  callerRole: Role;
 }
 
 const MemberList = ({
@@ -27,6 +29,7 @@ const MemberList = ({
   members,
   currentUserId,
   canManageMembers,
+  callerRole,
 }: MemberListProps) => {
   const dispatch = useAppDispatch();
   const removeError = useAppSelector(removeErrorSelector);
@@ -35,6 +38,7 @@ const MemberList = ({
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null);
 
   const ownerCount = members.filter((m) => m.role === 'OWNER').length;
+  const assignableRoles = callerRole === 'OWNER' ? OWNER_ASSIGNABLE_ROLES : ADMIN_ASSIGNABLE_ROLES;
 
   const handleRoleChange = (userId: string, newRole: Role) => {
     dispatch(updateMemberRoleThunk({ workspaceId, userId, role: newRole }));
@@ -92,7 +96,9 @@ const MemberList = ({
             <tr key={member.userId}>
               <td className="px-4 py-2 text-base">{member.email}</td>
               <td className="px-4 py-2">
-                {canManageMembers && member.userId !== currentUserId ? (
+                {canManageMembers &&
+                member.userId !== currentUserId &&
+                (callerRole === 'OWNER' || member.role !== 'OWNER') ? (
                   <select
                     value={member.role}
                     onChange={(e) =>
@@ -101,7 +107,7 @@ const MemberList = ({
                     aria-label={`Change role for ${member.email}`}
                     className="rounded border border-border bg-bg-overlay text-base px-2 py-0.5 text-xs"
                   >
-                    {ASSIGNABLE_ROLES.map((r) => (
+                    {assignableRoles.map((r) => (
                       <option key={r} value={r}>
                         {r.charAt(0) + r.slice(1).toLowerCase()}
                       </option>
@@ -114,7 +120,9 @@ const MemberList = ({
               {canManageMembers && (
                 <td className="px-4 py-2">
                   {/* Prevent removing yourself or the last owner */}
-                  {member.userId !== currentUserId && !isLastOwner(member) && (
+                  {member.userId !== currentUserId &&
+                    !isLastOwner(member) &&
+                    (callerRole === 'OWNER' || member.role !== 'OWNER') && (
                     <Button
                       variant="link"
                       size="sm"

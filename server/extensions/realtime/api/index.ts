@@ -9,6 +9,7 @@ import { unsubscribeFromBoard } from '../mods/rooms/unsubscribe';
 import { recordPong, initHeartbeat, startHeartbeatLoop } from '../mods/heartbeat';
 import { cache } from '../../../mods/cache/index';
 import { db } from '../../../common/db';
+import { canUserAccessBoard, type BoardAccessRow } from '../../board/access';
 import { registerUserSocket, deregisterUserSocket, subscribeUserChannel, unsubscribeUserChannel } from '../userChannel';
 import {
   subscribeSessionRevocation,
@@ -74,22 +75,29 @@ export const wsHandlers = {
       recordPong(ws);
       ws.send(JSON.stringify({ type: 'pong' }));
       for (const boardId of ws.data.subscribedBoards) {
+        const board = (await db('boards').where({ id: boardId }).first()) as
+          | BoardAccessRow
+          | undefined;
+        if (!board || !(await canUserAccessBoard(ws.data.userId, board))) {
+          await unsubscribeFromBoard({ ws, boardId });
+          ws.send(JSON.stringify({ type: 'access_revoked', board_id: boardId }));
+          continue;
+        }
         await cache.set(`presence:${boardId}:${ws.data.userId}`, ws.data.userId, 35);
       }
       return;
     }
 
     if (msg.type === 'subscribe' && msg.board_id) {
-      const board = await db('boards').where({ id: msg.board_id }).first();
+      const board = (await db('boards').where({ id: msg.board_id }).first()) as
+        | BoardAccessRow
+        | undefined;
       if (!board) {
         ws.send(JSON.stringify({ type: 'error', name: 'board-not-found' }));
         return;
       }
-      const member = await db('memberships')
-        .where({ workspace_id: board.workspace_id, user_id: ws.data.userId })
-        .first();
-      if (!member) {
-        ws.send(JSON.stringify({ type: 'error', name: 'not-a-member' }));
+      if (!(await canUserAccessBoard(ws.data.userId, board))) {
+        ws.send(JSON.stringify({ type: 'error', name: 'board-access-denied' }));
         return;
       }
       await subscribeToBoard({ ws, boardId: msg.board_id });

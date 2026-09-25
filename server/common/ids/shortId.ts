@@ -8,13 +8,13 @@ export function generateShortId(length = SHORT_ID_LENGTH): string {
   const bytes = randomBytes(length);
   let out = '';
   for (let i = 0; i < length; i += 1) {
-    out += SHORT_ID_ALPHABET[bytes[i] % SHORT_ID_ALPHABET.length];
+    out += SHORT_ID_ALPHABET[bytes[i]! % SHORT_ID_ALPHABET.length];
   }
   return out;
 }
 
 export async function generateUniqueShortId(
-  tableName: 'boards' | 'cards' | 'lists' | 'comments' | 'attachments',
+  tableName: 'boards' | 'cards' | 'lists' | 'comments' | 'attachments'
 ): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const shortId = generateShortId();

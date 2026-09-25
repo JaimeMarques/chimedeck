@@ -11,6 +11,11 @@ import { env } from '../../config/env';
 import { getActiveWebhooksForEvent } from '../../extensions/webhooks/mods/registry';
 import { dispatchWebhook } from '../../extensions/webhooks/mods/dispatch';
 import type { WebhookEventType } from '../../extensions/webhooks/common/eventTypes';
+import { eventForAutomation, shouldDeliverWebhookEvent } from './policy';
+import {
+  canUserReceiveBoardWebhook,
+  type BoardAccessRow,
+} from '../../extensions/board/access';
 
 // [why] Maps internal event type names to their webhook event type aliases.
 // comment_added is the internal type but subscribers register as card.commented / card_commented.
@@ -32,7 +37,7 @@ const INTERNAL_TO_WEBHOOK_TYPES: Partial<Record<string, WebhookEventType[]>> = {
   // [why] board_created is the internal event name emitted by board/api/create.ts
   board_created: ['board.created'],
   'board.created': ['board.created'],
-  // [why] board_member_added is the internal event name emitted by board/api/members/create.ts
+  // [why] Keep accepting the legacy persisted event name for webhook replay.
   board_member_added: ['board.member_added'],
   'board.member_added': ['board.member_added'],
 };
@@ -42,16 +47,17 @@ export async function dispatchEvent(input: WriteEventInput): Promise<WrittenEven
 
   // Fire-and-forget automation evaluation — must not block or throw.
   if (automationConfig.enabled && event.board_id) {
+    const automationEvent = eventForAutomation(event);
     import('../../extensions/automation/engine/index')
       .then(({ evaluate }) =>
         evaluate({
           boardId: event.board_id as string,
           event: {
-            type: event.type,
+            type: automationEvent.type,
             boardId: event.board_id as string,
             entityId: event.entity_id,
             actorId: event.actor_id,
-            payload: event.payload,
+            payload: automationEvent.payload,
           },
           context: {
             actorId: event.actor_id,
@@ -83,6 +89,10 @@ export async function dispatchEvent(input: WriteEventInput): Promise<WrittenEven
     if (webhookEventTypes) {
       (async () => {
         try {
+          const board = (await db('boards').where({ id: event.board_id }).first()) as
+            | BoardAccessRow
+            | undefined;
+          if (!board) return;
           // Collect unique webhooks across all alias types — prevents double-delivery to a webhook
           // that is subscribed to both dot-notation and underscore alias of the same event.
           const seen = new Map<
@@ -98,6 +108,16 @@ export async function dispatchEvent(input: WriteEventInput): Promise<WrittenEven
               eventType: webhookEventType,
             });
             for (const wh of webhooks) {
+              if (!(await canUserReceiveBoardWebhook(wh.created_by, board, db))) continue;
+              if (
+                !shouldDeliverWebhookEvent({
+                  event,
+                  webhookEventType,
+                  webhookOwnerId: wh.created_by,
+                })
+              ) {
+                continue;
+              }
               if (!seen.has(wh.id)) seen.set(wh.id, { webhook: wh, eventType: webhookEventType });
             }
           }
