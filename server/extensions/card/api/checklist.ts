@@ -17,6 +17,9 @@ import { writeActivity } from '../../activity/mods/write';
 import { publishCardActivityEvent } from '../../activity/events/publishCardActivityEvent';
 import { mapActivityToNotification } from '../../activity/mods/mapActivityToNotification';
 import { resolveCoverImageUrl } from '../../../common/cards/cover';
+import { getCurrentWorkspaceRole } from '../../board/api/members/authorization';
+import { lockBoardMemberMutations } from '../../board/api/members/lock';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 
 interface CardContext { boardId: string; workspaceId: string; }
 
@@ -266,7 +269,61 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
   }
 
   if (Object.keys(updates).length > 0) {
-    await db('checklist_items').where({ id: itemId }).update(updates);
+    const actorId = (req as AuthenticatedRequest).currentUser?.id;
+    if (!actorId) {
+      return Response.json(
+        { error: { code: 'unauthorized', message: 'Authentication required' } },
+        { status: 401 },
+      );
+    }
+    const updateError = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, updateContext.workspaceId);
+      await lockBoardMemberMutations(trx, updateContext.boardId);
+      const actorRole = await getCurrentWorkspaceRole(trx, updateContext.workspaceId, actorId);
+      if (!actorRole) {
+        return Response.json(
+          { error: { code: 'forbidden', message: 'Workspace membership is no longer active' } },
+          { status: 403 },
+        );
+      }
+      if (actorRole === 'GUEST') {
+        const actorGrant = await trx('board_guest_access')
+          .where({ board_id: updateContext.boardId, user_id: actorId, guest_type: 'MEMBER' })
+          .first();
+        if (!actorGrant) {
+          return Response.json(
+            { error: { code: 'forbidden', message: 'Write access is no longer active' } },
+            { status: 403 },
+          );
+        }
+      }
+      if (typeof updates.assigned_member_id === 'string') {
+        const targetMembership = await trx('memberships')
+          .where({
+            workspace_id: updateContext.workspaceId,
+            user_id: updates.assigned_member_id,
+          })
+          .first();
+        const boardMember = await trx('board_members')
+          .where({ board_id: updateContext.boardId, user_id: updates.assigned_member_id })
+          .first();
+        const boardGuest = await trx('board_guest_access')
+          .where({ board_id: updateContext.boardId, user_id: updates.assigned_member_id })
+          .first();
+        const eligible =
+          targetMembership &&
+          (targetMembership.role === 'GUEST' ? Boolean(boardGuest) : Boolean(boardMember));
+        if (!eligible) {
+          return Response.json(
+            { error: { code: 'bad-request', message: 'assigned_member_id must be an active member or guest of this board' } },
+            { status: 400 },
+          );
+        }
+      }
+      await trx('checklist_items').where({ id: itemId }).update(updates);
+      return null;
+    });
+    if (updateError) return updateError;
   }
 
   const updated = await db('checklist_items').where({ id: itemId }).first();

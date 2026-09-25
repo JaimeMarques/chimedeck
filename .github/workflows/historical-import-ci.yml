@@ -49,7 +49,26 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun run db:migrate
-      - run: bun test server/extensions/board/api/members
+      - run: bun test server/extensions/board/api/members server/mods/events/__tests__/policy.test.ts server/mods/events/__tests__/dispatch.test.ts server/extensions/realtime/mods/rooms/broadcast.test.ts tests/integration/trelloCompat/organizations.test.ts
+      - name: Lint board-member regressions
+        run: >-
+          bunx eslint
+          tests/db/concurrentBoardMemberAdd.ts
+          tests/db/concurrentBoardMemberRoleMutation.ts
+          tests/db/workspaceMembershipSecurity.ts
+          tests/e2e/board-members.spec.ts
+          server/mods/events/__tests__/policy.test.ts
+          server/mods/events/__tests__/dispatch.test.ts
+          server/mods/events/__tests__/fixtures/dispatchPolicy.ts
+          server/extensions/board/api/members/__tests__/fixtures/addBoardMember.ts
+          server/extensions/board/access.ts
+          server/extensions/board/api/members/authorization.ts
+          server/extensions/board/api/members/lock.ts
+          server/extensions/board/api/members/role.ts
+          server/extensions/workspace/api/members/lock.ts
+          server/extensions/workspace/api/members/removeService.ts
+          server/mods/events/policy.ts
+      - run: bunx tsc -p tests/tsconfig.json --noEmit
       - run: bun run test:db:board-members
       - name: Run board-member HTTP contracts against the real server
         shell: bash

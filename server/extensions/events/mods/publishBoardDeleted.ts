@@ -11,6 +11,7 @@ export interface PublishBoardDeletedInput {
   boardId: string;
   workspaceId: string;
   actorId: string;
+  recipientIds?: string[];
 }
 
 export interface PublishBoardDeletedResult {
@@ -21,6 +22,7 @@ export async function publishBoardDeleted({
   boardId,
   workspaceId,
   actorId,
+  recipientIds,
 }: PublishBoardDeletedInput): Promise<PublishBoardDeletedResult> {
   const event = await writeEvent({
     type: 'board_deleted',
@@ -52,9 +54,9 @@ export async function publishBoardDeleted({
 
   // Fan out directly to connected workspace member sockets so the event is
   // received immediately regardless of whether the client is watching a board.
-  const members = await db('memberships')
-    .where({ workspace_id: workspaceId })
-    .select('user_id');
+  const members = recipientIds
+    ? recipientIds.map((user_id) => ({ user_id }))
+    : await db('memberships').where({ workspace_id: workspaceId }).select('user_id');
 
   for (const member of members) {
     await publishToUser(member.user_id, message);

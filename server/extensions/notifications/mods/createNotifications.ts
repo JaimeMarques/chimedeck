@@ -15,6 +15,7 @@ import { env } from '../../../config/env';
 import { getActiveWebhooksForEvent } from '../../webhooks/mods/registry';
 import { dispatchWebhook } from '../../webhooks/mods/dispatch';
 import type { Knex } from 'knex';
+import { canUserReceiveBoardWebhook, type BoardAccessRow } from '../../board/access';
 
 // [why] extracted to keep createNotificationsForMentions within the cognitive complexity limit.
 async function fireMentionWebhooks({
@@ -32,8 +33,13 @@ async function fireMentionWebhooks({
   actorId: string;
   recipients: string[];
 }): Promise<void> {
+  const board = (await db('boards').where({ id: boardId }).first()) as
+    | BoardAccessRow
+    | undefined;
+  if (!board) return;
   const webhooks = await getActiveWebhooksForEvent({ knex: db, eventType: 'mention' });
   for (const wh of webhooks) {
+    if (!(await canUserReceiveBoardWebhook(wh.created_by, board, db))) continue;
     dispatchWebhook({
       endpoint: wh.endpoint_url,
       signingSecret: wh.signing_secret,

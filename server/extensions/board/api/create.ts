@@ -11,6 +11,8 @@ import { dispatchEvent } from '../../../mods/events/dispatch';
 import type { BoardVisibility } from '../types';
 import { sanitizeText, sanitizeRichText } from '../../../common/sanitize';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
+import { getCurrentWorkspaceRole } from './members/authorization';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 
 const VALID_VISIBILITY: BoardVisibility[] = ['PUBLIC', 'PRIVATE', 'WORKSPACE'];
 
@@ -50,16 +52,25 @@ export async function handleCreateBoard(req: Request, workspaceId: string): Prom
   }
 
   const creatorId = (req as AuthenticatedRequest).currentUser!.id;
+  const title = body.title.trim();
   const id = randomUUID();
   const shortId = await generateUniqueShortId('boards');
 
   // Wrap board creation + initial member insert in a transaction so no partial state is persisted.
-  await db.transaction(async (trx) => {
+  const creationError = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, workspaceId);
+    const currentRole = await getCurrentWorkspaceRole(trx, workspaceId, creatorId);
+    if (currentRole !== 'OWNER' && currentRole !== 'ADMIN' && currentRole !== 'MEMBER') {
+      return Response.json(
+        { error: { code: 'forbidden', message: 'Requires MEMBER role or higher' } },
+        { status: 403 },
+      );
+    }
     await trx('boards').insert({
       id,
       short_id: shortId,
       workspace_id: workspaceId,
-      title: sanitizeText(body.title.trim()),
+      title: sanitizeText(title),
       state: 'ACTIVE',
       visibility: body.visibility ?? 'PRIVATE',
       description: body.description ? sanitizeRichText(body.description.trim()) : null,
@@ -73,7 +84,9 @@ export async function handleCreateBoard(req: Request, workspaceId: string): Prom
       user_id: creatorId,
       role: 'ADMIN',
     });
+    return null;
   });
+  if (creationError) return creationError;
 
   const board = await db('boards').where({ id }).first();
 

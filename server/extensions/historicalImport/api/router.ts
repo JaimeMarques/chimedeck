@@ -124,7 +124,7 @@ export async function historicalImportRouter(
     if (!plan) return badRequest('body.plan is required');
     // Authorization consumes the adapter's out-of-band board-create witness
     // proof, so deps are created before the workspace is resolved.
-    const deps = await createDeps();
+    const deps = await createDeps(actorId);
     const ws = await resolvePlanWorkspace(planAuthorizationWitnesses(plan), deps);
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
@@ -140,7 +140,7 @@ export async function historicalImportRouter(
     if (!plan) return badRequest('body.plan is required');
     // Authorization consumes the adapter's out-of-band board-create witness
     // proof, so deps are created before the workspace is resolved.
-    const deps = await createDeps();
+    const deps = await createDeps(actorId);
     const ws = await resolvePlanWorkspace(planAuthorizationWitnesses(plan), deps);
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
@@ -194,7 +194,7 @@ export async function historicalImportRouter(
     }
     // Authorization consumes the adapter's out-of-band board-create witness
     // proof, so deps are created before the workspace is resolved.
-    const deps = await createDeps();
+    const deps = await createDeps(actorId);
     const ws = await resolvePlanWorkspace(planAuthorizationWitnesses(plan), deps);
     if ('error' in ws) return ws.error;
     const authz = await requireImportOperator(req as AuthenticatedRequest, ws.workspaceId);
@@ -252,7 +252,7 @@ export async function historicalImportRouter(
     if (!entityTableBoard) return badRequest('cannot resolve workspace for plan — reset denied');
     // Reset authorises against an existing board only (the plan's own witness is
     // not applicable: reset is addressed by a provenance row, not a plan).
-    const deps = await createDeps();
+    const deps = await createDeps(actorId);
     const ws = await resolvePlanWorkspace(
       { existingBoardIds: [entityTableBoard], boardCreates: [] },
       deps
@@ -313,12 +313,12 @@ export async function historicalImportRouter(
   );
 }
 
-async function createDeps() {
+async function createDeps(operatorUserId: string) {
   const [identityMap, cardDescriptionAuthorization] = await Promise.all([
     loadIdentityMap(),
     loadCardDescriptionAuthorization(),
   ]);
-  return createKnexDeps(identityMap, cardDescriptionAuthorization);
+  return createKnexDeps(identityMap, cardDescriptionAuthorization, operatorUserId);
 }
 
 // Resolve a board id for an entity type/target so reset can authorize.

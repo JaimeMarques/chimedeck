@@ -1,20 +1,25 @@
 import { randomUUID } from 'node:crypto';
+import type { Knex } from 'knex';
 import { db } from '../../../../common/db';
 import { generateUniqueShortId } from '../../../../common/ids/shortId';
 import { resolveBoardId } from '../../../../common/ids/resolveEntityId';
 import { between, HIGH_SENTINEL } from '../../../list/mods/fractional';
 import type { AuthenticatedRequest } from '../../../auth/middlewares/authentication';
-import {
-  TRELLO_NOT_FOUND,
-  TRELLO_PERMISSION_DENIED,
-  trelloError,
-} from '../../common/errors';
+import { TRELLO_NOT_FOUND, TRELLO_PERMISSION_DENIED, trelloError } from '../../common/errors';
 import { serializeBoard } from '../../serializers/board';
 import { serializeCard as serializeTrelloCard } from '../../serializers/card';
 import { serializeLabel } from '../../serializers/label';
 import { serializeList } from '../../serializers/list';
 import { serializeMember } from '../../serializers/member';
 import type { TrelloBoardMembership, TrelloCard } from '../../types/trello';
+import {
+  countEligibleBoardAdmins,
+  lockBoardMemberMutations,
+  removeBoardUserAssignments,
+} from '../../../board/api/members/lock';
+import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
+import { dispatchEvent } from '../../../../mods/events/dispatch';
+import { publishBoardDeleted } from '../../../events/mods/publishBoardDeleted';
 
 type TrelloAuthUser = {
   id: string;
@@ -33,6 +38,27 @@ type BoardRow = {
   description?: string | null;
   background?: string | null;
   created_at?: string | Date | null;
+};
+
+type UserRow = {
+  id: string;
+  email: string;
+  name?: string | null;
+  avatar_url?: string | null;
+};
+
+type BoardMemberRow = {
+  id: string;
+  board_id: string;
+  user_id: string;
+  role: string;
+  updated_at?: string | Date | null;
+};
+
+type BoardGuestAccessRow = {
+  id: string;
+  board_id: string;
+  user_id: string;
 };
 
 type MembershipRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER' | 'GUEST';
@@ -77,11 +103,7 @@ async function parseBody(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
-function getInput(
-  url: URL,
-  body: Record<string, unknown>,
-  ...keys: string[]
-): unknown {
+function getInput(url: URL, body: Record<string, unknown>, ...keys: string[]): unknown {
   for (const key of keys) {
     const fromQuery = url.searchParams.get(key);
     if (fromQuery !== null) return fromQuery;
@@ -90,8 +112,12 @@ function getInput(
   return undefined;
 }
 
-async function getWorkspaceRole(userId: string, workspaceId: string): Promise<MembershipRole | null> {
-  const memberships = await db('memberships')
+async function getWorkspaceRole(
+  userId: string,
+  workspaceId: string,
+  connection: Knex | Knex.Transaction = db
+): Promise<MembershipRole | null> {
+  const memberships = await connection('memberships')
     .where({ user_id: userId, workspace_id: workspaceId })
     .select('role');
 
@@ -110,8 +136,14 @@ async function isBoardMember(userId: string, boardId: string): Promise<boolean> 
   return !!row;
 }
 
-async function hasBoardAdminRole(userId: string, boardId: string): Promise<boolean> {
-  const row = await db('board_members').where({ user_id: userId, board_id: boardId }).first();
+async function hasBoardAdminRole(
+  userId: string,
+  boardId: string,
+  connection: Knex | Knex.Transaction = db
+): Promise<boolean> {
+  const row = await connection('board_members')
+    .where({ user_id: userId, board_id: boardId })
+    .first();
   return row?.role === 'ADMIN';
 }
 
@@ -139,10 +171,15 @@ async function canReadBoard(userId: string, board: BoardRow): Promise<boolean> {
   return true;
 }
 
-async function canWriteBoard(userId: string, board: BoardRow): Promise<boolean> {
-  const role = await getWorkspaceRole(userId, board.workspace_id);
+async function canWriteBoard(
+  userId: string,
+  board: BoardRow,
+  connection: Knex | Knex.Transaction = db
+): Promise<boolean> {
+  const role = await getWorkspaceRole(userId, board.workspace_id, connection);
   if (role === 'OWNER' || role === 'ADMIN') return true;
-  return hasBoardAdminRole(userId, board.id);
+  if (!role || role === 'GUEST') return false;
+  return hasBoardAdminRole(userId, board.id, connection);
 }
 
 async function loadBoard(boardIdentifier: string): Promise<BoardRow | null> {
@@ -159,7 +196,9 @@ async function listBoardMemberships(boardId: string): Promise<TrelloBoardMembers
     .where({ board_id: boardId })
     .orderBy('granted_at', 'asc');
 
-  const memberships: TrelloBoardMembership[] = (boardMembers as Array<{ id: string; user_id: string; role: string }>).map((row) => ({
+  const memberships: TrelloBoardMembership[] = (
+    boardMembers as Array<{ id: string; user_id: string; role: string }>
+  ).map((row) => ({
     id: row.id,
     idMember: row.user_id,
     memberType: row.role === 'ADMIN' ? 'admin' : 'normal',
@@ -228,25 +267,30 @@ function serializeCard(card: {
   });
 }
 
-async function listCardsForBoard(boardId: string, filter: 'open' | 'closed' | 'all'): Promise<TrelloCard[]> {
+async function listCardsForBoard(
+  boardId: string,
+  filter: 'open' | 'closed' | 'all'
+): Promise<TrelloCard[]> {
   const lists = await db('lists').where({ board_id: boardId }).orderBy('position', 'asc');
   const listIds = new Set((lists as Array<{ id: string }>).map((row) => row.id));
   if (listIds.size === 0) return [];
 
   const allCards = await db('cards').orderBy('position', 'asc');
-  const cards = (allCards as Array<{
-    id: string;
-    short_id?: string | null;
-    list_id: string;
-    title: string;
-    description?: string | null;
-    archived: boolean;
-    due_date?: string | Date | null;
-    due_complete?: boolean | null;
-    start_date?: string | Date | null;
-    created_at?: string | Date | null;
-    updated_at?: string | Date | null;
-  }>).filter((row) => listIds.has(row.list_id));
+  const cards = (
+    allCards as Array<{
+      id: string;
+      short_id?: string | null;
+      list_id: string;
+      title: string;
+      description?: string | null;
+      archived: boolean;
+      due_date?: string | Date | null;
+      due_complete?: boolean | null;
+      start_date?: string | Date | null;
+      created_at?: string | Date | null;
+      updated_at?: string | Date | null;
+    }>
+  ).filter((row) => listIds.has(row.list_id));
 
   const filteredCards = cards.filter((row) => {
     if (filter === 'all') return true;
@@ -260,8 +304,16 @@ async function listCardsForBoard(boardId: string, filter: 'open' | 'closed' | 'a
   const cardMembers = await db('card_members');
   const checklists = await db('checklists');
 
-  const labelsById = new Map((labels as Array<{ id: string; board_id: string; name: string; color: string }>).map((row) => [row.id, row]));
-  const labelsByCardId = new Map<string, Array<{ id: string; board_id: string; name: string; color: string }>>();
+  const labelsById = new Map(
+    (labels as Array<{ id: string; board_id: string; name: string; color: string }>).map((row) => [
+      row.id,
+      row,
+    ])
+  );
+  const labelsByCardId = new Map<
+    string,
+    Array<{ id: string; board_id: string; name: string; color: string }>
+  >();
   for (const row of cardLabels as Array<{ card_id: string; label_id: string }>) {
     if (!cardIds.has(row.card_id)) continue;
     const label = labelsById.get(row.label_id);
@@ -295,10 +347,14 @@ async function listCardsForBoard(boardId: string, filter: 'open' | 'closed' | 'a
       memberIds: membersByCardId.get(row.id) ?? [],
       checklistIds: checklistByCardId.get(row.id) ?? [],
       rank: index,
-    }));
+    })
+  );
 }
 
-export async function boardsRouter(req: AuthenticatedRequest, path: string): Promise<Response | null> {
+export async function boardsRouter(
+  req: AuthenticatedRequest,
+  path: string
+): Promise<Response | null> {
   const user = req.currentUser as TrelloAuthUser | undefined;
   if (!user) return trelloError('invalid token', 401);
 
@@ -330,42 +386,59 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
     const boardShortId = await generateUniqueShortId('boards');
     const visibility = toBoardVisibility(permissionLevel) ?? 'PRIVATE';
 
-    await db('boards').insert({
-      id: boardId,
-      short_id: boardShortId,
-      workspace_id: idOrganization,
-      title: name.trim(),
-      description: typeof desc === 'string' ? desc : null,
-      state: 'ACTIVE',
-      visibility,
-      background: typeof background === 'string' ? background : null,
-    });
-
-    await db('board_members').insert({
-      id: randomUUID(),
-      board_id: boardId,
-      user_id: user.id,
-      role: 'ADMIN',
-    });
-
-    if (toBoolean(defaultLists, true)) {
-      const titles = ['To Do', 'In Progress', 'Done'];
-      let previousPosition = '';
-      for (const title of titles) {
-        const listId = randomUUID();
-        const shortId = await generateUniqueShortId('lists');
-        const position = between(previousPosition, HIGH_SENTINEL);
-        previousPosition = position;
-        await db('lists').insert({
-          id: listId,
-          short_id: shortId,
-          board_id: boardId,
-          title,
-          position,
-          archived: false,
-        });
+    const creationError = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, idOrganization);
+      const freshWorkspaceRole = await getWorkspaceRole(user.id, idOrganization, trx);
+      if (freshWorkspaceRole !== 'OWNER' && freshWorkspaceRole !== 'ADMIN') {
+        return TRELLO_PERMISSION_DENIED();
       }
-    }
+      await trx('boards').insert({
+        id: boardId,
+        short_id: boardShortId,
+        workspace_id: idOrganization,
+        title: name.trim(),
+        description: typeof desc === 'string' ? desc : null,
+        state: 'ACTIVE',
+        visibility,
+        background: typeof background === 'string' ? background : null,
+      });
+
+      await trx('board_members').insert({
+        id: randomUUID(),
+        board_id: boardId,
+        user_id: user.id,
+        role: 'ADMIN',
+      });
+
+      if (toBoolean(defaultLists, true)) {
+        const titles = ['To Do', 'In Progress', 'Done'];
+        let previousPosition = '';
+        for (const title of titles) {
+          const listId = randomUUID();
+          const shortId = await generateUniqueShortId('lists');
+          const position = between(previousPosition, HIGH_SENTINEL);
+          previousPosition = position;
+          await trx('lists').insert({
+            id: listId,
+            short_id: shortId,
+            board_id: boardId,
+            title,
+            position,
+            archived: false,
+          });
+        }
+      }
+      return null;
+    });
+    if (creationError) return creationError;
+
+    await dispatchEvent({
+      type: 'board_created',
+      boardId,
+      entityId: boardId,
+      actorId: user.id,
+      payload: { workspaceId: idOrganization },
+    });
 
     const board = await db('boards').where({ id: boardId }).first();
     const memberships = await listBoardMemberships(boardId);
@@ -375,7 +448,7 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
         idMemberCreator: user.id,
         memberships,
       }),
-      { status: 200 },
+      { status: 200 }
     );
   }
 
@@ -415,29 +488,112 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
     if (typeof background === 'string') updates['background'] = background;
 
     if (Object.keys(updates).length > 0) {
-      await db('boards').where({ id: board.id }).update(updates);
+      const updated = await db.transaction(async (trx) => {
+        await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+        await lockBoardMemberMutations(trx, board.id);
+        const freshBoard = await trx<BoardRow>('boards')
+          .where({ id: board.id, workspace_id: board.workspace_id })
+          .first();
+        if (!freshBoard) return 'missing' as const;
+        if (!(await canWriteBoard(user.id, freshBoard, trx))) return 'denied' as const;
+        return (await trx('boards').where({ id: board.id }).update(updates)) > 0
+          ? ('updated' as const)
+          : ('missing' as const);
+      });
+      if (updated === 'missing') return TRELLO_NOT_FOUND();
+      if (updated === 'denied') return TRELLO_PERMISSION_DENIED();
     }
 
     const updated = await db('boards').where({ id: board.id }).first();
+    if (Object.keys(updates).length > 0) {
+      await dispatchEvent({
+        type: 'board_updated',
+        boardId: board.id,
+        entityId: board.id,
+        actorId: user.id,
+        payload: updates,
+      });
+    }
     const memberships = await listBoardMemberships(board.id);
     const idMemberCreator = await resolveBoardCreatorId(board.id);
-    return Response.json(serializeBoard({ ...(updated as BoardRow), memberships, idMemberCreator }));
+    return Response.json(
+      serializeBoard({ ...(updated as BoardRow), memberships, idMemberCreator })
+    );
   }
 
   if (subPath === '' && req.method === 'DELETE') {
     if (!(await canWriteBoard(user.id, board))) return TRELLO_PERMISSION_DENIED();
-    await db('boards').where({ id: board.id }).delete();
+    const deletion = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+      await lockBoardMemberMutations(trx, board.id);
+      const freshBoard = await trx<BoardRow>('boards')
+        .where({ id: board.id, workspace_id: board.workspace_id })
+        .forUpdate()
+        .first();
+      if (!freshBoard || !(await canWriteBoard(user.id, freshBoard, trx))) return null;
+      const guestRows = (await trx('board_guest_access')
+        .where({ board_id: board.id })
+        .select('user_id')) as Array<{ user_id: string }>;
+      const recipients =
+        freshBoard.visibility === 'PRIVATE'
+          ? ((await trx('memberships as m')
+              .leftJoin('board_members as bm', function joinBoardMember() {
+                this.on('bm.user_id', '=', 'm.user_id').andOnVal('bm.board_id', '=', board.id);
+              })
+              .leftJoin('board_guest_access as bga', function joinGuest() {
+                this.on('bga.user_id', '=', 'm.user_id').andOnVal('bga.board_id', '=', board.id);
+              })
+              .where('m.workspace_id', board.workspace_id)
+              .andWhere(function authorizedPrivateRecipient() {
+                this.whereIn('m.role', ['OWNER', 'ADMIN'])
+                  .orWhereNotNull('bm.user_id')
+                  .orWhereNotNull('bga.user_id');
+              })
+              .distinct('m.user_id')) as Array<{ user_id: string }>)
+          : ((await trx('memberships')
+              .where({ workspace_id: board.workspace_id })
+              .select('user_id')) as Array<{ user_id: string }>);
+      if (!(await trx('boards').where({ id: board.id }).delete())) return null;
+      for (const guest of guestRows) {
+        const remainingGrant = await trx('board_guest_access as bga')
+          .join('boards as b', 'b.id', 'bga.board_id')
+          .where({ 'b.workspace_id': board.workspace_id, 'bga.user_id': guest.user_id })
+          .first();
+        if (!remainingGrant) {
+          await trx('memberships')
+            .where({ workspace_id: board.workspace_id, user_id: guest.user_id, role: 'GUEST' })
+            .delete();
+        }
+      }
+      return { recipientIds: recipients.map((recipient) => recipient.user_id) };
+    });
+    if (!deletion) return TRELLO_NOT_FOUND();
+    await publishBoardDeleted({
+      boardId: board.id,
+      workspaceId: board.workspace_id,
+      actorId: user.id,
+      recipientIds: deletion.recipientIds,
+    });
     return Response.json({});
   }
 
   const listPathMatch = subPath.match(/^lists(?:\/(open|closed|all))?$/);
   if (listPathMatch && req.method === 'GET') {
-    const filter = (url.searchParams.get('filter') ?? listPathMatch[1] ?? 'open') as 'open' | 'closed' | 'all';
-    const lists = await db('lists')
-      .where({ board_id: board.id })
-      .orderBy('position', 'asc');
+    const filter = (url.searchParams.get('filter') ?? listPathMatch[1] ?? 'open') as
+      | 'open'
+      | 'closed'
+      | 'all';
+    const lists = await db('lists').where({ board_id: board.id }).orderBy('position', 'asc');
 
-    const filtered = (lists as Array<{ id: string; board_id: string; title: string; archived: boolean; color?: string | null }>)
+    const filtered = (
+      lists as Array<{
+        id: string;
+        board_id: string;
+        title: string;
+        archived: boolean;
+        color?: string | null;
+      }>
+    )
       .filter((row) => {
         if (filter === 'all') return true;
         if (filter === 'closed') return row.archived;
@@ -456,9 +612,7 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
       return trelloError('invalid value for name', 400);
     }
 
-    const existing = await db('lists')
-      .where({ board_id: board.id })
-      .orderBy('position', 'asc');
+    const existing = await db('lists').where({ board_id: board.id }).orderBy('position', 'asc');
     const last = (existing as Array<{ position: string }>).at(-1);
     const listId = randomUUID();
     const shortId = await generateUniqueShortId('lists');
@@ -474,19 +628,38 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
     });
 
     const created = await db('lists').where({ id: listId }).first();
-    return Response.json(serializeList({ ...(created as { id: string; board_id: string; title: string; archived: boolean; color?: string | null }), _rank: existing.length }), { status: 200 });
+    return Response.json(
+      serializeList({
+        ...(created as {
+          id: string;
+          board_id: string;
+          title: string;
+          archived: boolean;
+          color?: string | null;
+        }),
+        _rank: existing.length,
+      }),
+      { status: 200 }
+    );
   }
 
   const cardsPathMatch = subPath.match(/^cards(?:\/(open|closed|all))?$/);
   if (cardsPathMatch && req.method === 'GET') {
-    const filter = (url.searchParams.get('filter') ?? cardsPathMatch[1] ?? 'open') as 'open' | 'closed' | 'all';
+    const filter = (url.searchParams.get('filter') ?? cardsPathMatch[1] ?? 'open') as
+      | 'open'
+      | 'closed'
+      | 'all';
     const cards = await listCardsForBoard(board.id, filter);
     return Response.json(cards);
   }
 
   if (subPath === 'members' && req.method === 'GET') {
-    const boardMembers = await db('board_members').where({ board_id: board.id }).orderBy('created_at', 'asc');
-    const guestRows = await db('board_guest_access').where({ board_id: board.id }).orderBy('granted_at', 'asc');
+    const boardMembers = await db('board_members')
+      .where({ board_id: board.id })
+      .orderBy('created_at', 'asc');
+    const guestRows = await db('board_guest_access')
+      .where({ board_id: board.id })
+      .orderBy('granted_at', 'asc');
 
     const membersById = new Map<string, 'admin' | 'normal' | 'observer'>();
     for (const row of boardMembers as Array<{ user_id: string; role: string }>) {
@@ -507,7 +680,7 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
           name: (dbUser.name as string) ?? (dbUser.email as string),
           avatar_url: (dbUser.avatar_url as string | null | undefined) ?? null,
           memberType,
-        }),
+        })
       );
     }
 
@@ -516,44 +689,74 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
 
   const memberMatch = subPath.match(/^members\/([^/]+)$/);
   if (memberMatch && req.method === 'PUT') {
-    if (!(await canWriteBoard(user.id, board))) return TRELLO_PERMISSION_DENIED();
-
     const idMember = memberMatch[1] as string;
     const body = await parseBody(req);
     const typeValue = getInput(url, body, 'type');
     const memberType = typeof typeValue === 'string' ? typeValue : 'normal';
-
-    const targetUser = await db('users').where({ id: idMember }).first();
-    if (!targetUser) return TRELLO_NOT_FOUND();
-
-    const workspaceRole = await getWorkspaceRole(idMember, board.workspace_id);
-    if (!workspaceRole) return TRELLO_PERMISSION_DENIED();
-
-    const boardRole = memberType === 'admin' ? 'ADMIN' : 'MEMBER';
-    const existingBoardMembership = await db('board_members')
-      .where({ board_id: board.id, user_id: idMember })
-      .first();
-
-    if (existingBoardMembership) {
-      await db('board_members')
-        .where({ board_id: board.id, user_id: idMember })
-        .update({ role: boardRole, updated_at: new Date().toISOString() });
-    } else {
-      await db('board_members').insert({
-        id: randomUUID(),
-        board_id: board.id,
-        user_id: idMember,
-        role: boardRole,
-      });
+    if (memberType !== 'admin' && memberType !== 'normal') {
+      return trelloError('invalid value for type', 400);
     }
+    const boardRole = memberType === 'admin' ? 'ADMIN' : 'MEMBER';
 
-    const saved = await db('board_members')
-      .where({ board_id: board.id, user_id: idMember })
-      .first();
+    const result = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+      await lockBoardMemberMutations(trx, board.id);
+      const freshBoard = await trx<BoardRow>('boards')
+        .where({ id: board.id, workspace_id: board.workspace_id })
+        .first();
+      if (!freshBoard) return { response: TRELLO_NOT_FOUND() };
+      if (!(await canWriteBoard(user.id, freshBoard, trx))) {
+        return { response: TRELLO_PERMISSION_DENIED() };
+      }
 
+      const targetUser = await trx<UserRow>('users').where({ id: idMember }).first();
+      if (!targetUser) return { response: TRELLO_NOT_FOUND() };
+
+      const workspaceRole = await getWorkspaceRole(idMember, board.workspace_id, trx);
+      if (!workspaceRole || workspaceRole === 'GUEST') {
+        return { response: TRELLO_PERMISSION_DENIED() };
+      }
+
+      const existingBoardMembership = await trx<BoardMemberRow>('board_members')
+        .where({ board_id: board.id, user_id: idMember })
+        .first();
+      if (existingBoardMembership?.role === 'ADMIN' && boardRole !== 'ADMIN') {
+        const adminCount = await countEligibleBoardAdmins(trx, board.id, board.workspace_id);
+        if (adminCount <= 1) {
+          return { response: trelloError('cannot remove the last board admin', 409) };
+        }
+      }
+
+      const now = new Date().toISOString();
+      await trx('board_members')
+        .insert({
+          id: randomUUID(),
+          board_id: board.id,
+          user_id: idMember,
+          role: boardRole,
+          updated_at: now,
+        })
+        .onConflict(['board_id', 'user_id'])
+        .merge({ role: boardRole, updated_at: now });
+
+      const saved = await trx<BoardMemberRow>('board_members')
+        .where({ board_id: board.id, user_id: idMember })
+        .first();
+      return { saved, created: !existingBoardMembership };
+    });
+
+    if ('response' in result && result.response) return result.response;
+    const saved = result.saved;
+    await dispatchEvent({
+      type: result.created ? 'board_member_added' : 'board_member_role_updated',
+      boardId: board.id,
+      entityId: board.id,
+      actorId: user.id,
+      payload: { memberId: idMember, userId: idMember, role: boardRole },
+    });
     return Response.json({
-      id: (saved?.id as string) ?? randomUUID(),
-      idMember: idMember,
+      id: saved?.id ?? randomUUID(),
+      idMember,
       memberType: boardRole === 'ADMIN' ? 'admin' : 'normal',
       unconfirmed: false,
       deactivated: false,
@@ -561,22 +764,72 @@ export async function boardsRouter(req: AuthenticatedRequest, path: string): Pro
   }
 
   if (memberMatch && req.method === 'DELETE') {
-    if (!(await canWriteBoard(user.id, board))) return TRELLO_PERMISSION_DENIED();
-
     const idMember = memberMatch[1] as string;
-    const existing = await db('board_members').where({ board_id: board.id, user_id: idMember }).first();
-    const guest = await db('board_guest_access').where({ board_id: board.id, user_id: idMember }).first();
-    if (!existing && !guest) return TRELLO_NOT_FOUND();
+    const result = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+      await lockBoardMemberMutations(trx, board.id);
+      const freshBoard = await trx<BoardRow>('boards')
+        .where({ id: board.id, workspace_id: board.workspace_id })
+        .first();
+      if (!freshBoard) return { response: TRELLO_NOT_FOUND() };
+      if (!(await canWriteBoard(user.id, freshBoard, trx))) {
+        return { response: TRELLO_PERMISSION_DENIED() };
+      }
 
-    await db('board_members').where({ board_id: board.id, user_id: idMember }).delete();
-    await db('board_guest_access').where({ board_id: board.id, user_id: idMember }).delete();
+      const existing = await trx<BoardMemberRow>('board_members')
+        .where({ board_id: board.id, user_id: idMember })
+        .first();
+      const guest = await trx<BoardGuestAccessRow>('board_guest_access')
+        .where({ board_id: board.id, user_id: idMember })
+        .first();
+      if (!existing && !guest) return { response: TRELLO_NOT_FOUND() };
+
+      const targetWorkspaceRole = await getWorkspaceRole(idMember, board.workspace_id, trx);
+      const targetIsEligibleAdmin =
+        existing?.role === 'ADMIN' &&
+        targetWorkspaceRole !== null &&
+        targetWorkspaceRole !== 'GUEST';
+      if (targetIsEligibleAdmin) {
+        const adminCount = await countEligibleBoardAdmins(trx, board.id, board.workspace_id);
+        if (adminCount <= 1) {
+          return { response: trelloError('cannot remove the last board admin', 409) };
+        }
+      }
+
+      await removeBoardUserAssignments(trx, [board.id], idMember);
+      await trx('board_members').where({ board_id: board.id, user_id: idMember }).delete();
+      await trx('board_guest_access').where({ board_id: board.id, user_id: idMember }).delete();
+      if (guest) {
+        const remainingGrant = await trx('board_guest_access as bga')
+          .join('boards as b', 'b.id', 'bga.board_id')
+          .where({ 'b.workspace_id': board.workspace_id, 'bga.user_id': idMember })
+          .first();
+        if (!remainingGrant) {
+          await trx('memberships')
+            .where({ workspace_id: board.workspace_id, user_id: idMember, role: 'GUEST' })
+            .delete();
+        }
+      }
+      return { response: null };
+    });
+
+    if (result.response) return result.response;
+    await dispatchEvent({
+      type: 'board_member_removed',
+      boardId: board.id,
+      entityId: board.id,
+      actorId: user.id,
+      payload: { userId: idMember },
+    });
     return Response.json({});
   }
 
   if (subPath === 'labels' && req.method === 'GET') {
     const labels = await db('labels').where({ board_id: board.id }).orderBy('name', 'asc');
     return Response.json(
-      (labels as Array<{ id: string; board_id: string; name: string; color: string }>).map((label) => serializeLabel(label)),
+      (labels as Array<{ id: string; board_id: string; name: string; color: string }>).map(
+        (label) => serializeLabel(label)
+      )
     );
   }
 

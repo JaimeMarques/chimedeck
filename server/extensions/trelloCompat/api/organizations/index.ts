@@ -14,6 +14,9 @@ import { getTrelloAuthUser } from '../../middlewares/trelloAuth';
 import { serializeBoard } from '../../serializers/board';
 import { serializeMember, workspaceRoleToMemberType } from '../../serializers/member';
 import { serializeOrganization } from '../../serializers/organization';
+import { getCurrentWorkspaceRole } from '../../../board/api/members/authorization';
+import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
+import { removeWorkspaceMemberInTransaction } from '../../../workspace/api/members/removeService';
 
 type MembershipRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER' | 'GUEST';
 const ROLE_RANK: Record<MembershipRole, number> = {
@@ -231,7 +234,13 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
 
   if (subPath === '' && req.method === 'DELETE') {
     if (!hasMinRole(callerRole, 'OWNER')) return TRELLO_PERMISSION_DENIED();
-    await db('workspaces').where({ id: workspace.id }).delete();
+    const deleted = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, workspace.id);
+      const currentRole = await getCurrentWorkspaceRole(trx, workspace.id, user.id);
+      if (currentRole !== 'OWNER') return false;
+      return Boolean(await trx('workspaces').where({ id: workspace.id }).delete());
+    });
+    if (!deleted) return TRELLO_PERMISSION_DENIED();
     return Response.json({});
   }
 
@@ -283,11 +292,20 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
     const role = trelloTypeToWorkspaceRole(type);
     if (!role) return trelloError('invalid value for type', 400);
 
-    const invite = await createInvite({
-      workspaceId: workspace.id,
-      invitedEmail: email.trim().toLowerCase(),
-      role,
-    });
+    let invite;
+    try {
+      invite = await createInvite({
+        workspaceId: workspace.id,
+        invitedEmail: email.trim().toLowerCase(),
+        role,
+        actorId: user.id,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'InviteRoleForbiddenError') {
+        return TRELLO_PERMISSION_DENIED();
+      }
+      throw error;
+    }
 
     return Response.json({ id: invite.id });
   }
@@ -312,54 +330,71 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
     return Response.json(serializeOrgMembership(workspace.id, membership));
   }
 
-  const memberMatch = subPath.match(/^members\/([^/]+)$/);
-  if (memberMatch && req.method === 'PUT') {
+  const memberMatch = subPath.match(/^members\/([^/]+)(?:\/all)?$/);
+  if (memberMatch && req.method === 'PUT' && !subPath.endsWith('/all')) {
     if (!hasMinRole(callerRole, 'ADMIN')) return TRELLO_PERMISSION_DENIED();
     const memberId = memberMatch[1] as string;
-    const targetMembership = await db('memberships')
-      .where({ workspace_id: workspace.id, user_id: memberId })
-      .first() as MembershipRow | undefined;
-    if (!targetMembership) return TRELLO_MEMBER_NOT_FOUND();
-
     const body = await parseBody(req);
     const type = getInput(url, body, 'type');
     const nextRole = trelloTypeToWorkspaceRole(type);
     if (!nextRole) return trelloError('invalid value for type', 400);
 
-    if (targetMembership.role === 'OWNER' && nextRole !== 'OWNER') {
-      const owners = await db('memberships').where({ workspace_id: workspace.id, role: 'OWNER' }) as MembershipRow[];
-      if (owners.length <= 1) {
-        return trelloError('A workspace must always have at least one Owner. Promote another member first.', 422);
+    const result = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, workspace.id);
+      const currentRole = await getCurrentWorkspaceRole(trx, workspace.id, user.id);
+      if (currentRole !== 'OWNER' && currentRole !== 'ADMIN') {
+        return { response: TRELLO_PERMISSION_DENIED() };
       }
-    }
+      const targetMembership = await trx<MembershipRow>('memberships')
+        .where({ workspace_id: workspace.id, user_id: memberId })
+        .first();
+      if (!targetMembership) return { response: TRELLO_MEMBER_NOT_FOUND() };
+      if (targetMembership.role === 'GUEST') {
+        return { response: trelloError('promote guests through the native member-add flow', 409) };
+      }
+      if (ROLE_RANK[targetMembership.role] > ROLE_RANK[currentRole]) {
+        return { response: TRELLO_PERMISSION_DENIED() };
+      }
+      const effectiveNextRole =
+        targetMembership.role === 'OWNER' && nextRole === 'ADMIN' ? 'OWNER' : nextRole;
+      if (ROLE_RANK[effectiveNextRole] > ROLE_RANK[currentRole]) {
+        return { response: TRELLO_PERMISSION_DENIED() };
+      }
+      if (targetMembership.role === 'OWNER' && effectiveNextRole !== 'OWNER') {
+        const owners = await trx<MembershipRow>('memberships').where({ workspace_id: workspace.id, role: 'OWNER' });
+        if (owners.length <= 1) {
+          return { response: trelloError('A workspace must always have at least one Owner. Promote another member first.', 422) };
+        }
+      }
+      await trx('memberships')
+        .where({ workspace_id: workspace.id, user_id: memberId })
+        .update({ role: effectiveNextRole });
+      const updated = await trx<MembershipRow>('memberships')
+        .where({ workspace_id: workspace.id, user_id: memberId })
+        .first();
+      return { updated };
+    });
 
-    await db('memberships')
-      .where({ workspace_id: workspace.id, user_id: memberId })
-      .update({ role: nextRole });
-
-    const updated = await db('memberships')
-      .where({ workspace_id: workspace.id, user_id: memberId })
-      .first() as MembershipRow | undefined;
-    if (!updated) return TRELLO_MEMBER_NOT_FOUND();
-    return Response.json(serializeOrgMembership(workspace.id, updated));
+    if ('response' in result && result.response) return result.response;
+    if (!result.updated) return TRELLO_MEMBER_NOT_FOUND();
+    return Response.json(serializeOrgMembership(workspace.id, result.updated));
   }
 
   if (memberMatch && req.method === 'DELETE') {
     if (!hasMinRole(callerRole, 'ADMIN')) return TRELLO_PERMISSION_DENIED();
     const memberId = memberMatch[1] as string;
-    const targetMembership = await db('memberships')
-      .where({ workspace_id: workspace.id, user_id: memberId })
-      .first() as MembershipRow | undefined;
-    if (!targetMembership) return TRELLO_MEMBER_NOT_FOUND();
-
-    if (targetMembership.role === 'OWNER') {
-      const owners = await db('memberships').where({ workspace_id: workspace.id, role: 'OWNER' }) as MembershipRow[];
-      if (owners.length <= 1) {
-        return trelloError('A workspace must always have at least one Owner. Promote another member first.', 422);
-      }
+    const mutationError = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, workspace.id);
+      const currentRole = await getCurrentWorkspaceRole(trx, workspace.id, user.id);
+      if (currentRole !== 'OWNER' && currentRole !== 'ADMIN') return TRELLO_PERMISSION_DENIED();
+      return removeWorkspaceMemberInTransaction(trx, workspace.id, memberId, user.id);
+    });
+    if (mutationError) {
+      const body = (await mutationError.clone().json()) as {
+        error?: { message?: string };
+      };
+      return trelloError(body.error?.message ?? 'member removal failed', mutationError.status);
     }
-
-    await db('memberships').where({ workspace_id: workspace.id, user_id: memberId }).delete();
     return Response.json({});
   }
 

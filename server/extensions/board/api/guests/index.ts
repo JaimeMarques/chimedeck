@@ -12,11 +12,15 @@ import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewar
 import {
   requireWorkspaceMembership,
   requireRole,
+  roleRank,
   type WorkspaceScopedRequest,
 } from '../../../../middlewares/permissionManager';
 import { requireBoardAccess, type BoardScopedRequest } from '../../middlewares/requireBoardAccess';
 import { writeEvent } from '../../../../mods/events/index';
 import type { GuestType } from '../../types';
+import { getCurrentWorkspaceRole } from '../members/authorization';
+import { lockBoardMemberMutations, removeBoardUserAssignments } from '../members/lock';
+import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 
 // Legacy userId-based handler kept for internal use.
 async function handleInviteGuestById(req: Request, boardId: string): Promise<Response> {
@@ -82,9 +86,31 @@ async function handleInviteGuestById(req: Request, boardId: string): Promise<Res
     );
   }
 
-  await db.transaction(async (trx) => {
+  const mutationError = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    await lockBoardMemberMutations(trx, boardId);
+    const actorRole = await getCurrentWorkspaceRole(
+      trx,
+      board.workspace_id,
+      (req as AuthenticatedRequest).currentUser!.id,
+    );
+    if (!actorRole || roleRank(actorRole) < roleRank('ADMIN')) {
+      return Response.json(
+        { error: { code: 'forbidden', message: 'Requires ADMIN role or higher' } },
+        { status: 403 },
+      );
+    }
+    const freshMembership = await trx('memberships')
+      .where({ user_id: userId, workspace_id: board.workspace_id })
+      .first();
+    if (freshMembership && freshMembership.role !== 'GUEST') {
+      return Response.json(
+        { error: { code: 'user-already-workspace-member', message: 'User is already a workspace member with a higher role' } },
+        { status: 409 },
+      );
+    }
     // Upsert a GUEST membership so the user is recognised as a workspace participant.
-    if (!existingMembership) {
+    if (!freshMembership) {
       await trx('memberships').insert({
         user_id: userId,
         workspace_id: board.workspace_id,
@@ -103,14 +129,16 @@ async function handleInviteGuestById(req: Request, boardId: string): Promise<Res
       })
       .onConflict(['user_id', 'board_id'])
       .ignore();
+    return null;
   });
+  if (mutationError) return mutationError;
 
   const grantRow = await db('board_guest_access')
     .where({ user_id: userId, board_id: boardId })
     .first();
 
   // Emit real-time event so board subscribers learn about the new guest member (§8).
-  writeEvent({
+  await writeEvent({
     type: 'member_joined',
     boardId,
     entityId: boardId,
@@ -122,7 +150,7 @@ async function handleInviteGuestById(req: Request, boardId: string): Promise<Res
       role: 'GUEST',
       joinedAt: new Date().toISOString(),
     },
-  }).catch(() => {});
+  });
 
   return Response.json({ data: grantRow }, { status: 201 });
 }
@@ -158,7 +186,30 @@ export async function handleRevokeGuest(
     );
   }
 
-  await db.transaction(async (trx) => {
+  const mutationError = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    await lockBoardMemberMutations(trx, boardId);
+    const actorRole = await getCurrentWorkspaceRole(
+      trx,
+      board.workspace_id,
+      (req as AuthenticatedRequest).currentUser!.id,
+    );
+    if (!actorRole || roleRank(actorRole) < roleRank('ADMIN')) {
+      return Response.json(
+        { error: { code: 'forbidden', message: 'Requires ADMIN role or higher' } },
+        { status: 403 },
+      );
+    }
+    const freshGrant = await trx('board_guest_access')
+      .where({ user_id: userId, board_id: boardId })
+      .first();
+    if (!freshGrant) {
+      return Response.json(
+        { error: { code: 'guest-access-not-found', message: 'Guest access record not found' } },
+        { status: 404 },
+      );
+    }
+    await removeBoardUserAssignments(trx, [boardId], userId);
     await trx('board_guest_access').where({ user_id: userId, board_id: boardId }).delete();
 
     // Remove GUEST workspace membership only if no other board grants remain.
@@ -177,6 +228,16 @@ export async function handleRevokeGuest(
         .where({ user_id: userId, workspace_id: board.workspace_id, role: 'GUEST' })
         .delete();
     }
+    return null;
+  });
+  if (mutationError) return mutationError;
+
+  await writeEvent({
+    type: 'member_removed',
+    boardId,
+    entityId: userId,
+    actorId: (req as AuthenticatedRequest).currentUser!.id,
+    payload: { scope: 'board', userId, role: 'GUEST' },
   });
 
   return Response.json({ data: { board_id: boardId, user_id: userId, revoked: true } });

@@ -34,11 +34,15 @@ export async function apiCall<T>({
   }
 
   if (!res.ok) {
-    const errPayload = payload as { name?: string; data?: unknown } | null;
+    const errPayload = payload as {
+      name?: string;
+      data?: unknown;
+      error?: { code?: string; message?: string };
+    } | null;
     return {
       error: {
-        name: errPayload?.name ?? `http-${res.status}`,
-        data: errPayload?.data ?? payload,
+        name: errPayload?.name ?? errPayload?.error?.code ?? `http-${res.status}`,
+        data: errPayload?.data ?? errPayload?.error ?? payload,
       },
     };
   }

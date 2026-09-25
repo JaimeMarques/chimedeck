@@ -33,6 +33,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Knex } from 'knex';
 import { db } from '../../../common/db';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 import {
   compositeKeyColumns,
   decodeCompositeTargetId,
@@ -117,6 +118,126 @@ const ENTITY_TABLES: Record<EntityType, string> = {
   activity: 'activities',
   mention: 'mentions',
 };
+
+async function resolveWorkspaceForEntity(
+  trx: Knex.Transaction,
+  entityType: EntityType,
+  targetId: string
+): Promise<string | null> {
+  let boardId: string | null = null;
+  if (entityType === 'board') boardId = targetId;
+  else if (entityType === 'list') {
+    boardId =
+      ((await trx('lists').where({ id: targetId }).first()) as
+        | { board_id?: string }
+        | undefined)?.board_id ?? null;
+  } else if (entityType === 'card') {
+    boardId =
+      ((await trx('cards as c')
+        .join('lists as l', 'l.id', 'c.list_id')
+        .where('c.id', targetId)
+        .select('l.board_id')
+        .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+  } else if (entityType === 'comment' || entityType === 'attachment' || entityType === 'checklist') {
+    const table = ENTITY_TABLES[entityType];
+    boardId =
+      ((await trx(`${table} as e`)
+        .join('cards as c', 'c.id', 'e.card_id')
+        .join('lists as l', 'l.id', 'c.list_id')
+        .where('e.id', targetId)
+        .select('l.board_id')
+        .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+  } else if (entityType === 'comment_reaction') {
+    boardId =
+      ((await trx('comment_reactions as r')
+        .join('comments as m', 'm.id', 'r.comment_id')
+        .join('cards as c', 'c.id', 'm.card_id')
+        .join('lists as l', 'l.id', 'c.list_id')
+        .where('r.id', targetId)
+        .select('l.board_id')
+        .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+  } else if (entityType === 'checklist_item') {
+    boardId =
+      ((await trx('checklist_items as i')
+        .join('cards as c', 'c.id', 'i.card_id')
+        .join('lists as l', 'l.id', 'c.list_id')
+        .where('i.id', targetId)
+        .select('l.board_id')
+        .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+  } else if (entityType === 'custom_field_value') {
+    boardId =
+      ((await trx('card_custom_field_values as v')
+        .join('cards as c', 'c.id', 'v.card_id')
+        .join('lists as l', 'l.id', 'c.list_id')
+        .where('v.id', targetId)
+        .select('l.board_id')
+        .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+  } else if (entityType === 'mention') {
+    const mention = (await trx('mentions').where({ id: targetId }).first()) as
+      | { source_type?: string; source_id?: string }
+      | undefined;
+    if (mention?.source_id) {
+      if (mention.source_type === 'card_description') {
+        boardId =
+          ((await trx('cards as c')
+            .join('lists as l', 'l.id', 'c.list_id')
+            .where('c.id', mention.source_id)
+            .select('l.board_id')
+            .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+      } else {
+        boardId =
+          ((await trx('comments as m')
+            .join('cards as c', 'c.id', 'm.card_id')
+            .join('lists as l', 'l.id', 'c.list_id')
+            .where('m.id', mention.source_id)
+            .select('l.board_id')
+            .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+      }
+    }
+  } else if (
+    entityType === 'label' ||
+    entityType === 'custom_field' ||
+    entityType === 'activity'
+  ) {
+    boardId =
+      ((await trx(ENTITY_TABLES[entityType]).where({ id: targetId }).first()) as
+        | { board_id?: string }
+        | undefined)?.board_id ?? null;
+  } else {
+    const key = decodeCompositeTargetId(entityType, targetId);
+    const cardId = key['card_id'];
+    if (cardId) {
+      boardId =
+        ((await trx('cards as c')
+          .join('lists as l', 'l.id', 'c.list_id')
+          .where('c.id', cardId)
+          .select('l.board_id')
+          .first()) as { board_id?: string } | undefined)?.board_id ?? null;
+    }
+  }
+  if (!boardId) return null;
+  return (
+    ((await trx('boards').where({ id: boardId }).select('workspace_id').first()) as
+      | { workspace_id?: string }
+      | undefined)?.workspace_id ?? null
+  );
+}
+
+async function lockAndRequireImportOwner(
+  trx: Knex.Transaction,
+  operatorUserId: string | null,
+  entityType: EntityType,
+  targetId: string
+): Promise<void> {
+  if (!operatorUserId) return;
+  const workspaceId = await resolveWorkspaceForEntity(trx, entityType, targetId);
+  if (!workspaceId) throw new Error('cannot resolve workspace for historical import authorization');
+  await lockWorkspaceMembershipMutations(trx, workspaceId);
+  const owner = await trx('memberships')
+    .where({ workspace_id: workspaceId, user_id: operatorUserId, role: 'OWNER' })
+    .first();
+  if (!owner) throw new Error('historical import operator is no longer a workspace owner');
+}
 
 const SHORT_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const SHORT_ID_LENGTH = 8;
@@ -223,6 +344,7 @@ async function performCreate(
   mode: 'apply' | 'dry-run',
   identityMap: Map<string, string>,
   projection: CreateTimestampProjection,
+  operatorUserId: string | null,
   openTrx?: OpenOperationTransaction
 ): Promise<{ target_id: string; created: boolean }> {
   const { entity_type, source_id, target_id, payload_ref, plan_hash, operation, board_id } = input;
@@ -283,6 +405,10 @@ async function performCreate(
     : { trx: await db.transaction(), nested: false };
   const trx = opened.trx;
   try {
+    if (entity_type !== 'board') {
+      if (!board_id) throw new Error('non-board create requires board_id authorization context');
+      await lockAndRequireImportOwner(trx, operatorUserId, 'board', board_id);
+    }
     const existingProv = (await trx('import_provenance')
       .where({ entity_type, source_id })
       .first()) as ProvenanceRow | undefined;
@@ -382,6 +508,15 @@ async function performCreate(
         if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
           throw new Error('board payload requires workspace_id');
         }
+        await lockWorkspaceMembershipMutations(trx, workspaceId);
+        if (operatorUserId) {
+          const operatorMembership = await trx('memberships')
+            .where({ workspace_id: workspaceId, user_id: operatorUserId, role: 'OWNER' })
+            .first();
+          if (!operatorMembership) {
+            throw new Error('historical import operator is no longer a workspace owner');
+          }
+        }
         const workspace = await trx('workspaces').where({ id: workspaceId }).first();
         if (!workspace || workspace.owner_id !== authorUserId) {
           throw new Error('board historical_author must resolve to the workspace owner');
@@ -475,6 +610,7 @@ interface LinkProvenanceInput {
 async function performLink(
   input: LinkProvenanceInput,
   mode: 'apply' | 'dry-run',
+  operatorUserId: string | null,
   openTrx?: OpenOperationTransaction
 ): Promise<void> {
   const opened: OperationTransaction = openTrx
@@ -482,6 +618,7 @@ async function performLink(
     : { trx: await db.transaction(), nested: false };
   const trx = opened.trx;
   try {
+    await lockAndRequireImportOwner(trx, operatorUserId, input.entity_type, input.target_id);
     await trx('import_provenance').insert({
       id: randomUUID(),
       source_system: 'trello',
@@ -527,6 +664,7 @@ async function performMutation(
   mode: 'apply' | 'dry-run',
   identityMap: Map<string, string>,
   cardDescriptionAuthorization: LoadedCardDescriptionAuthorization | null,
+  operatorUserId: string | null,
   openTrx?: OpenOperationTransaction
 ): Promise<MutationResult> {
   const payload = await readVerifiedStagedPayload(input.payload_ref);
@@ -598,6 +736,7 @@ async function performMutation(
     : { trx: await db.transaction(), nested: false };
   const trx = opened.trx;
   try {
+    await lockAndRequireImportOwner(trx, operatorUserId, input.entity_type, input.target_id);
     const table = ENTITY_TABLES[input.entity_type];
     const current = (await trx(table).where({ id: input.target_id }).forUpdate().first()) as
       | Record<string, unknown>
@@ -813,7 +952,8 @@ const COMPOSITE_REFERENCES: Record<string, ReadonlyArray<{ column: string; table
 
 export function createKnexDeps(
   identityMap: Map<string, string>,
-  cardDescriptionAuthorization: LoadedCardDescriptionAuthorization | null = null
+  cardDescriptionAuthorization: LoadedCardDescriptionAuthorization | null = null,
+  operatorUserId: string | null = null
 ): ImporterDeps {
   const trxOf = async (): Promise<Knex.Transaction> => db.transaction();
   // Dry-run rehearsal scope: ONE transaction shared by every operation of a
@@ -960,7 +1100,7 @@ export function createKnexDeps(
     },
 
     createWithProvenance(input) {
-      return performCreate(input, 'apply', identityMap, projection, beginOperation);
+      return performCreate(input, 'apply', identityMap, projection, operatorUserId, beginOperation);
     },
 
     // Dry-run preflight invokes the identical verified-payload/create body in
@@ -972,6 +1112,7 @@ export function createKnexDeps(
           'dry-run',
           identityMap,
           projection,
+          operatorUserId,
           beginOperation
         );
         return { ok: true, created: result.created, target_id: result.target_id } as const;
@@ -986,6 +1127,7 @@ export function createKnexDeps(
         'apply',
         identityMap,
         cardDescriptionAuthorization,
+        operatorUserId,
         beginOperation
       );
     },
@@ -996,16 +1138,17 @@ export function createKnexDeps(
         'dry-run',
         identityMap,
         cardDescriptionAuthorization,
+        operatorUserId,
         beginOperation
       );
     },
 
     linkProvenance(input) {
-      return performLink(input, 'apply', beginOperation);
+      return performLink(input, 'apply', operatorUserId, beginOperation);
     },
 
     preflightLink(input) {
-      return performLink(input, 'dry-run', beginOperation);
+      return performLink(input, 'dry-run', operatorUserId, beginOperation);
     },
 
     async writeAudit(entry) {
@@ -1028,9 +1171,24 @@ export function createKnexDeps(
     },
 
     async clearProvenanceByPlan(planHash) {
-      return db('import_provenance')
-        .where({ import_plan_hash: planHash })
-        .del() as unknown as Promise<number>;
+      const trx = await db.transaction();
+      try {
+        const rows = (await trx('import_provenance').where({ import_plan_hash: planHash })) as ProvenanceRow[];
+        for (const row of rows) {
+          await lockAndRequireImportOwner(
+            trx,
+            operatorUserId,
+            row.entity_type as EntityType,
+            row.target_id
+          );
+        }
+        const cleared = await trx('import_provenance').where({ import_plan_hash: planHash }).del();
+        await trx.commit();
+        return cleared;
+      } catch (error) {
+        if (!trx.isCompleted()) await trx.rollback();
+        throw error;
+      }
     },
 
     async listProvenanceByPlan(planHash) {
@@ -1039,7 +1197,7 @@ export function createKnexDeps(
     },
 
     async recoverByPlan(planHash) {
-      return recoverByPlan(planHash);
+      return recoverByPlan(planHash, operatorUserId);
     },
   } as ImporterDeps & {
     clearProvenanceByPlan(planHash: string): Promise<number>;
@@ -1178,7 +1336,10 @@ async function countRows(trx: Knex.Transaction, table: string): Promise<number> 
   return Number(row?.n ?? 0);
 }
 
-async function recoverByPlan(planHash: string): Promise<RecoveryReport> {
+async function recoverByPlan(
+  planHash: string,
+  operatorUserId: string | null
+): Promise<RecoveryReport> {
   const trx = await db.transaction();
   const blockers: RecoveryReport['blockers'] = [];
   try {
@@ -1212,6 +1373,15 @@ async function recoverByPlan(planHash: string): Promise<RecoveryReport> {
           break;
         }
       }
+    }
+
+    for (const row of created) {
+      await lockAndRequireImportOwner(
+        trx,
+        operatorUserId,
+        row.entity_type as EntityType,
+        row.target_id
+      );
     }
 
     // Candidate delete set: rows this plan created, addressed by primary key

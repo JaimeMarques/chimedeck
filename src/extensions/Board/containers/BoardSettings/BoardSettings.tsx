@@ -23,9 +23,11 @@ interface Props {
   isViewerGuest?: boolean;
   /** When false, the user can see the board but is not a board participant (member/guest) — notification settings are hidden. */
   isBoardParticipant?: boolean;
+  /** Matches PATCH /boards/:id: workspace ADMIN or OWNER. */
+  canManageBoard?: boolean;
 }
 
-const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoardParticipant = true }: Props) => {
+const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoardParticipant = true, canManageBoard = false }: Props) => {
   const navigate = useNavigate();
   const { boardId } = useParams<{ boardId: string }>();
   const board = useAppSelector(selectBoard);
@@ -95,8 +97,8 @@ const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoar
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {/* Visibility — full members only. Guests can still manage board-writable settings below based on guest subtype. */}
-          {!isGuest && (
+          {/* Visibility — workspace administrators only, matching the server policy. */}
+          {!isGuest && canManageBoard && (
             <VisibilitySelector
               value={visibility}
               onChange={(next) => {

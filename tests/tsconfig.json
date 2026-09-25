@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["bun-types"],
+    "exactOptionalPropertyTypes": false
+  },
+  "include": [
+    "db/concurrentBoardMemberAdd.ts",
+    "db/concurrentBoardMemberRoleMutation.ts",
+    "db/workspaceMembershipSecurity.ts",
+    "e2e/board-members.spec.ts",
+    "../server/mods/events/__tests__/dispatch.test.ts",
+    "../server/mods/events/__tests__/fixtures/dispatchPolicy.ts",
+    "../server/extensions/board/api/members/__tests__/addBoardMember.test.ts",
+    "../server/extensions/board/api/members/__tests__/fixtures/addBoardMember.ts",
+    "../server/extensions/realtime/mods/rooms/broadcast.test.ts"
+  ],
+  "exclude": ["node_modules"]
+}

@@ -689,11 +689,11 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* invite_to_board */}
           <Section id="tool-invite-to-board">
             <H3>invite_to_board</H3>
-            <P>Invite a user to a board by email. Requires the token holder to be a board admin.</P>
+            <P>Invite a user to a board by email. Requires board-management permission.</P>
             <WarnCallout className="mb-3">
-              <strong>Access control:</strong> If the token holder is not a board admin, the
-              tool returns a structured error (<Code>current-user-is-not-admin</Code>) instead
-              of crashing.
+              <strong>Access control:</strong> Workspace ADMIN/OWNER or explicit board ADMIN
+              permission is required. Failures return a structured API error such as{' '}
+              <Code>insufficient-role</Code> instead of crashing.
             </WarnCallout>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -720,7 +720,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                   rowId: 'itb-role',
                   cells: [
                     { key: 'param', content: <Code>role</Code> },
-                    { key: 'type', content: '"member" | "observer"' },
+                    { key: 'type', content: '"member" | "admin"' },
                     { key: 'req', content: 'No' },
                     { key: 'desc', content: 'Role to assign (defaults to "member")' },
                   ],

@@ -3,11 +3,17 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../../../common/db';
 import { generateUniqueShortId } from '../../../../common/ids/shortId';
+import { roleRank } from '../../../../middlewares/permissionManager';
+import { getCurrentWorkspaceRole } from '../../api/members/authorization';
+import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
+
+class DuplicateBoardPermissionError extends Error {}
 
 export interface DuplicateBoardParams {
   originalBoardId: string;
   workspaceId: string;
   originalTitle: string;
+  actorId: string;
 }
 
 export interface DuplicateBoardResult {
@@ -20,12 +26,18 @@ export async function duplicateBoard({
   originalBoardId,
   workspaceId,
   originalTitle,
+  actorId,
 }: DuplicateBoardParams): Promise<DuplicateBoardResult> {
   try {
     const newBoardId = randomUUID();
     const newBoardShortId = await generateUniqueShortId('boards');
 
     await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, workspaceId);
+      const actorRole = await getCurrentWorkspaceRole(trx, workspaceId, actorId);
+      if (!actorRole || roleRank(actorRole) < roleRank('MEMBER')) {
+        throw new DuplicateBoardPermissionError();
+      }
       // 1. Create new board with ACTIVE state.
       await trx('boards').insert({
         id: newBoardId,
@@ -33,6 +45,12 @@ export async function duplicateBoard({
         workspace_id: workspaceId,
         title: `Copy of ${originalTitle}`,
         state: 'ACTIVE',
+      });
+      await trx('board_members').insert({
+        id: randomUUID(),
+        board_id: newBoardId,
+        user_id: actorId,
+        role: 'ADMIN',
       });
 
       // 2. Check if lists table exists (available from sprint 06 onwards).
@@ -80,6 +98,9 @@ export async function duplicateBoard({
     const newBoard = await db('boards').where({ id: newBoardId }).first();
     return { status: 201, data: newBoard };
   } catch (err) {
+    if (err instanceof DuplicateBoardPermissionError) {
+      return { status: 403, name: 'insufficient-role' };
+    }
     console.error('[board/duplicate] transaction failed', err);
     return {
       status: 500,

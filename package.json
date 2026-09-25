@@ -44,7 +44,7 @@
     "docker:build": "docker build -t chimedeck-app:latest .",
     "docker:build:nc": "docker build --no-cache -t chimedeck-app:latest .",
     "test:unit": "bun test tests/integration",
-    "test:db:board-members": "bun run tests/db/concurrentBoardMemberAdd.ts",
+    "test:db:board-members": "bun run tests/db/concurrentBoardMemberAdd.ts && bun run tests/db/concurrentBoardMemberRoleMutation.ts && bun run tests/db/workspaceMembershipSecurity.ts",
     "test:e2e:board-members": "playwright test tests/e2e/board-members.spec.ts --project=e2e --workers=1",
     "test:e2e": "playwright test --project=e2e",
     "test:mcp": "bash run-all-tests-full.sh",
@@ -141,6 +141,7 @@
     "prettier": "^3.0.0",
     "tailwindcss": "^3",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.70.1",
     "vite": "^8"
   }
 }
