@@ -2,7 +2,6 @@
 // Returns the invite record or an error descriptor.
 import { db } from '../../../../common/db';
 
-
 export type InviteRecord = {
   id: string;
   token: string;
@@ -19,7 +18,7 @@ export type ValidateInviteResult =
 
 export async function validateInvite({ token }: { token: string }): Promise<ValidateInviteResult> {
   // DB is authoritative for accepted_at and final expiry.
-  const invite: InviteRecord | undefined = await db('invites').where({ token }).first();
+  const invite = await db('invites').where({ token }).first<InviteRecord | undefined>();
 
   if (!invite) {
     return { ok: false, reason: 'not-found' };

@@ -279,7 +279,8 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
     if (!internal) return;
 
     setDetectingCard(true);
-    detectTimerRef.current = setTimeout(async () => {
+    detectTimerRef.current = setTimeout(() => {
+      void (async () => {
       try {
         const res = await fetchCardPreview({ cardId: internal.cardId });
         const card: CardPreview = {
@@ -299,6 +300,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
       } finally {
         setDetectingCard(false);
       }
+      })();
     }, 400);
   };
 
@@ -360,7 +362,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
         ]}
       >
       {/* Invisible paste listener — only active when the user can write */}
-      <PasteListener enabled={canWrite} onFiles={upload} onLink={handlePasteLink} />
+      <PasteListener enabled={canWrite} onFiles={upload} onLink={(url) => void handlePasteLink(url)} />
 
       {/* Hidden file input — accept covers all server-allowed types; server re-validates */}
       {canWrite && (
@@ -425,7 +427,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
               key={entry.clientId}
               attachment={tempAttachment}
               uploadProgress={entry.phase === 'uploading' ? entry.progress : null}
-              onDelete={() => removeEntry(entry.clientId)}
+              onDelete={() => { removeEntry(entry.clientId); }}
             />
           );
         })}
@@ -446,8 +448,8 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
             key={attachment.id}
             attachment={attachment}
             uploadProgress={progressForAttachment(attachment.id)}
-            onDelete={handleDelete}
-            onRename={handleRename}
+            onDelete={(id) => void handleDelete(id)}
+            onRename={(id, alias) => void handleRename(id, alias)}
             {...(insertMarkdownRef ? { onInsertComment: handleInsertComment } : {})}
           />
         ))}
@@ -468,7 +470,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
                   card={attachment.referenced_card}
                   cardUrl={attachment.view_url ?? attachment.external_url ?? ''}
                   canWrite={canWrite}
-                  onDelete={handleDelete}
+                  onDelete={(id) => void handleDelete(id)}
                 />
               ) : null,
             )}
@@ -488,7 +490,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
                 key={attachment.id}
                 attachment={attachment}
                 canWrite={canWrite}
-                onDelete={handleDelete}
+                onDelete={(id) => void handleDelete(id)}
                 onRename={(id: string, alias: string) => { void handleRename(id, alias); }}
                 onUpdateUrl={(id: string, url: string) => { void handleUpdateUrl(id, url); }}
               />
@@ -504,7 +506,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
         <div className="mt-3 pb-4">
           {showLinkForm ? (
             <form
-              onSubmit={handleLinkSubmit}
+              onSubmit={(e) => void handleLinkSubmit(e)}
               className="space-y-2"
               data-testid="link-form"
             >
@@ -512,7 +514,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
                 type="url"
                 placeholder={translations['attachments.panel.link.urlPlaceholder']}
                 value={linkUrl}
-                onChange={(e) => handleLinkUrlChange(e.target.value)}
+                onChange={(e) => { handleLinkUrlChange(e.target.value); }}
                 required
                 className="w-full text-sm bg-bg-overlay text-base placeholder:text-subtle border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary"
                 data-testid="link-url-input"
@@ -556,7 +558,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
                   type="text"
                   placeholder={translations['attachments.panel.link.namePlaceholder']}
                   value={linkName}
-                  onChange={(e) => setLinkName(e.target.value)}
+                  onChange={(e) => { setLinkName(e.target.value); }}
                   className="w-full text-sm bg-bg-overlay text-base placeholder:text-subtle border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary"
                   data-testid="link-name-input"
                 />
@@ -591,7 +593,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
           ) : (
             <button
               type="button"
-              onClick={() => setShowLinkForm(true)}
+              onClick={() => { setShowLinkForm(true); }}
               className="flex items-center gap-1 text-xs text-muted hover:text-subtle transition-colors"
               data-testid="attach-link-button"
             >

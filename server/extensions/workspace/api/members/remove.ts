@@ -1,7 +1,7 @@
 // DELETE /api/v1/workspaces/:id/members/:userId — remove member; min role: ADMIN.
 // Invariant: cannot remove the last OWNER.
 import { db } from '../../../../common/db';
-import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewares/authentication';
+import { authenticate } from '../../../auth/middlewares/authentication';
 import {
   requireWorkspaceMembership,
   requireRole,
@@ -16,7 +16,7 @@ export async function handleRemoveMember(
   workspaceId: string,
   userId: string
 ): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
   const scopedReq = req as WorkspaceScopedRequest;
@@ -26,7 +26,13 @@ export async function handleRemoveMember(
   const roleError = requireRole(scopedReq, 'ADMIN');
   if (roleError) return roleError;
 
-  const currentUserId = scopedReq.currentUser!.id;
+  const currentUserId = scopedReq.currentUser?.id;
+  if (!currentUserId) {
+    return Response.json(
+      { error: { code: 'unauthorized', message: 'Authentication required' } },
+      { status: 401 },
+    );
+  }
 
   const mutationError = await db.transaction(async (trx) => {
     await lockWorkspaceMembershipMutations(trx, workspaceId);

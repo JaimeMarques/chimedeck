@@ -45,9 +45,9 @@ export default function AppShell() {
 
   // Load workspace list, user profile, and client feature flags once when the shell mounts
   useEffect(() => {
-    dispatch(fetchWorkspacesThunk());
-    dispatch(fetchProfileThunk());
-    dispatch(fetchFeatureFlagsThunk());
+    void dispatch(fetchWorkspacesThunk());
+    void dispatch(fetchProfileThunk());
+    void dispatch(fetchFeatureFlagsThunk());
   }, [dispatch]);
 
   // Close mobile drawer on route change (e.g. nav link clicked or browser back)
@@ -65,7 +65,7 @@ export default function AppShell() {
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    return () => { document.removeEventListener('keydown', handleKeyDown); };
   }, [handleKeyDown]);
 
   // Focus trap + Escape close for mobile drawer
@@ -102,7 +102,7 @@ export default function AppShell() {
     };
 
     document.addEventListener('keydown', handleDrawerKeyDown);
-    return () => document.removeEventListener('keydown', handleDrawerKeyDown);
+    return () => { document.removeEventListener('keydown', handleDrawerKeyDown); };
   }, [sidebarOpen]);
 
   // Navigate when a search result is selected
@@ -160,7 +160,7 @@ export default function AppShell() {
             className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ${
               sidebarOpen ? 'opacity-100' : 'opacity-0'
             }`}
-            onClick={() => setSidebarOpen(false)}
+            onClick={() => { setSidebarOpen(false); }}
             data-testid="mobile-sidebar-backdrop"
           />
           {/* Drawer panel — slides in from the left */}
@@ -174,7 +174,7 @@ export default function AppShell() {
               sidebarOpen ? 'translate-x-0' : '-translate-x-full'
             }`}
           >
-            <Sidebar onClose={() => setSidebarOpen(false)} />
+            <Sidebar onClose={() => { setSidebarOpen(false); }} />
           </div>
         </div>
       )}
@@ -182,7 +182,7 @@ export default function AppShell() {
       {/* Main content — min-w-0 prevents flex children overflowing on narrow viewports */}
       <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
         <TopBar
-          onOpenDrawer={() => setSidebarOpen(true)}
+          onOpenDrawer={() => { setSidebarOpen(true); }}
           drawerOpen={sidebarOpen}
           showDrawerToggle={!isApiDocsRoute}
         />
@@ -198,7 +198,7 @@ export default function AppShell() {
           workspaceId={workspaceId}
           token={token}
           isOpen={searchOpen}
-          onClose={() => setSearchOpen(false)}
+          onClose={() => { setSearchOpen(false); }}
           onSelect={handleSearchSelect}
         />
       )}

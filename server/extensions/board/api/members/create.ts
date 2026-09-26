@@ -7,7 +7,6 @@
 // members/update.ts enforces on the dedicated role-change route.
 import { randomUUID } from 'crypto';
 import { db } from '../../../../common/db';
-import type { AuthenticatedRequest } from '../../../auth/middlewares/authentication';
 import type { BoardVisibilityScopedRequest } from '../../../../middlewares/boardVisibility';
 import { dispatchEvent } from '../../../../mods/events/dispatch';
 import { requireBoardMemberManager } from './authorization';
@@ -15,10 +14,24 @@ import { normalizeBoardMemberRole } from './role';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 import { lockBoardMemberMutations } from './lock';
 
+type BoardMemberRequest = BoardVisibilityScopedRequest & {
+  board: NonNullable<BoardVisibilityScopedRequest['board']>;
+  currentUser?: { id: string };
+};
+type MembershipRow = { user_id: string; workspace_id: string; role: string };
+type MemberResponseRow = {
+  id: string;
+  email: string;
+  name: string;
+  nickname: string | null;
+  role: string;
+  created_at: Date | string;
+};
+
 export async function handleAddBoardMember(req: Request, boardId: string): Promise<Response> {
-  const scopedReq = req as BoardVisibilityScopedRequest;
-  const board = scopedReq.board!;
-  const currentUserId = (req as AuthenticatedRequest).currentUser?.id;
+  const scopedReq = req as BoardMemberRequest;
+  const board = scopedReq.board;
+  const currentUserId = scopedReq.currentUser?.id;
 
   if (!currentUserId) {
     return Response.json(
@@ -32,7 +45,7 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
 
   let body: { userId?: string; email?: string; role?: unknown };
   try {
-    body = await req.json();
+    body = (await req.json()) as typeof body;
   } catch {
     return Response.json(
       { name: 'invalid-request-body', data: { message: 'Request body must be valid JSON' } },
@@ -60,9 +73,9 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
   const result = await db.transaction(async (trx) => {
     await lockWorkspaceMembershipMutations(trx, board.workspace_id);
     await lockBoardMemberMutations(trx, boardId);
-    const freshBoard = await trx('boards')
+    const freshBoard = await trx<NonNullable<BoardVisibilityScopedRequest['board']>>('boards')
       .where({ id: boardId, workspace_id: board.workspace_id })
-      .first();
+      .first<NonNullable<BoardVisibilityScopedRequest['board']> | undefined>();
     if (!freshBoard) {
       return {
         error: Response.json(
@@ -110,10 +123,10 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
 
     // Target eligibility and insertion share the workspace lock with removals.
     const workspaceMembership = userId
-      ? await trx('memberships')
+      ? await trx<MembershipRow>('memberships')
           .where({ user_id: userId, workspace_id: board.workspace_id })
           .whereNot('role', 'GUEST')
-          .first()
+          .first<MembershipRow | undefined>()
       : undefined;
     if (!workspaceMembership) {
       return {
@@ -147,7 +160,7 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
       };
     }
 
-    const member = await trx('board_members as bm')
+    const member = await trx<MemberResponseRow>('board_members as bm')
       .join('users as u', 'bm.user_id', 'u.id')
       .where({ 'bm.board_id': boardId, 'bm.user_id': userId })
       .select(
@@ -158,7 +171,7 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
         'bm.role',
         'bm.created_at'
       )
-      .first();
+      .first<MemberResponseRow>();
     return { member };
   });
 

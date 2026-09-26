@@ -1,5 +1,5 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
-import { s3Client } from '../../attachment/common/config/s3';
+import { s3ServerClient } from '../../attachment/common/config/s3';
 import { sha256Hex, type StagedPayload } from './payload';
 
 export interface AttachmentObjectPrecondition {
@@ -15,7 +15,7 @@ export interface AttachmentObjectReader {
 
 const s3Reader: AttachmentObjectReader = {
   async read(bucket, key) {
-    const response = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }), {
+    const response = await s3ServerClient.send(new GetObjectCommand({ Bucket: bucket, Key: key }), {
       abortSignal: AbortSignal.timeout(30_000),
     });
     if (!response.Body) throw new Error('attachment object response has no body');
@@ -57,7 +57,7 @@ export async function verifyAttachmentObjectPrecondition(
   const bytes = await reader.read(precondition.bucket, precondition.key);
   if (bytes.byteLength !== precondition.byte_count) {
     throw new Error(
-      `attachment object byte count mismatch: expected ${precondition.byte_count}, found ${bytes.byteLength}`
+      `attachment object byte count mismatch: expected ${String(precondition.byte_count)}, found ${String(bytes.byteLength)}`
     );
   }
   const actual = sha256Hex(bytes);

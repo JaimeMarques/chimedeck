@@ -35,7 +35,7 @@ const CreateBoardModal = ({ onClose, onCreate, subtitle, error, pending = false 
             type="text"
             placeholder="Board title"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => { setTitle(e.target.value); }}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? 'create-board-error' : undefined}
             className="rounded border border-border bg-bg-overlay px-3 py-2 text-sm text-base placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-primary"

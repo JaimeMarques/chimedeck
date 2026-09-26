@@ -16,18 +16,24 @@ import { getCurrentWorkspaceRole } from './members/authorization';
 import { lockBoardMemberMutations } from './members/lock';
 import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 
+type ResolvedBoardWritableRequest = BoardScopedRequest & {
+  board: { workspace_id: string };
+};
+
+type UpdatedBoardRow = Record<string, unknown>;
+
 const VALID_MONETIZATION_TYPES: Array<MonetizationType | null> = [null, 'pre-paid', 'pay-to-paid'];
 const VALID_VISIBILITY: BoardVisibility[] = ['PUBLIC', 'PRIVATE', 'WORKSPACE'];
 
 export async function handlePatchBoard(req: Request, boardId: string): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
-  const boardScopedReq = req as BoardScopedRequest;
+  const boardScopedReq = req as ResolvedBoardWritableRequest;
   const writableError = await requireBoardWritable(boardScopedReq, boardId);
   if (writableError) return writableError;
 
-  const board = boardScopedReq.board!;
+  const board = boardScopedReq.board;
 
   const scopedReq = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
@@ -62,7 +68,7 @@ export async function handlePatchBoard(req: Request, boardId: string): Promise<R
   }
 
   if ('monetization_type' in body) {
-    if (!VALID_MONETIZATION_TYPES.includes(body.monetization_type as MonetizationType | null)) {
+    if (!VALID_MONETIZATION_TYPES.includes(body.monetization_type)) {
       return Response.json(
         {
           name: 'bad-request',
@@ -99,13 +105,14 @@ export async function handlePatchBoard(req: Request, boardId: string): Promise<R
     );
   }
 
+  const actorId = (req as AuthenticatedRequest & { currentUser: { id: string } }).currentUser.id;
   const result = await db.transaction(async (trx) => {
     await lockWorkspaceMembershipMutations(trx, board.workspace_id);
     await lockBoardMemberMutations(trx, boardId);
     const actorRole = await getCurrentWorkspaceRole(
       trx,
       board.workspace_id,
-      (req as AuthenticatedRequest).currentUser!.id,
+      actorId,
     );
     if (!actorRole || roleRank(actorRole) < roleRank('ADMIN')) {
       return { error: Response.json(
@@ -113,7 +120,7 @@ export async function handlePatchBoard(req: Request, boardId: string): Promise<R
         { status: 403 },
       ) };
     }
-    const [updated] = await trx('boards')
+    const [updated] = await trx<UpdatedBoardRow>('boards')
       .where({ id: boardId, workspace_id: board.workspace_id })
       .update(updates, ['*']);
     if (!updated) {
@@ -124,7 +131,7 @@ export async function handlePatchBoard(req: Request, boardId: string): Promise<R
     }
     return { updated };
   });
-  if ('error' in result && result.error) return result.error;
+  if ('error' in result) return result.error;
   const { updated } = result;
 
   await writeEvent({

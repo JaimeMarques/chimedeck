@@ -15,17 +15,18 @@ export async function consumeInvite({ invite, userId }: ConsumeInviteParams): Pr
     await lockWorkspaceMembershipMutations(trx, invite.workspace_id);
     const existing = await trx('memberships')
       .where({ user_id: userId, workspace_id: invite.workspace_id })
-      .first();
+      .first<{ user_id: string; role: string } | undefined>();
     // Guest conversion also needs board-grant reconciliation; keep the invite
     // unused and require the dedicated add-member promotion flow.
     if (existing?.role === 'GUEST') return false;
 
     // Atomically claim this single-use invite after acquiring the workspace lock.
-    const claimed = await trx<InviteRecord>('invites')
+    const claimedRows: unknown = await trx<InviteRecord>('invites')
       .where({ id: invite.id })
       .whereNull('accepted_at')
       .where('expires_at', '>', new Date())
       .update({ accepted_at: new Date() }, ['*']);
+    const claimed = claimedRows as InviteRecord[];
     const currentInvite = claimed[0];
     if (!currentInvite) return false;
 

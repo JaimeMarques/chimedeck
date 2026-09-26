@@ -1,7 +1,7 @@
 // PATCH /api/v1/workspaces/:id/members/:userId — change a member's role; min role: ADMIN.
 // Invariant: demoting the last OWNER returns 409.
 import { db } from '../../../../common/db';
-import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewares/authentication';
+import { authenticate } from '../../../auth/middlewares/authentication';
 import {
   requireWorkspaceMembership,
   requireRole,
@@ -14,12 +14,18 @@ import { lockWorkspaceMembershipMutations } from './lock';
 
 const VALID_ROLES: Role[] = ['OWNER', 'ADMIN', 'MEMBER', 'VIEWER'];
 
+type MembershipRow = {
+  user_id: string;
+  workspace_id: string;
+  role: Role;
+};
+
 export async function handleUpdateMemberRole(
   req: Request,
   workspaceId: string,
   userId: string,
 ): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
   const scopedReq = req as WorkspaceScopedRequest;
@@ -64,7 +70,7 @@ export async function handleUpdateMemberRole(
       );
     }
 
-    const targetMembership = await trx('memberships')
+    const targetMembership = await trx<MembershipRow>('memberships')
       .where({ user_id: userId, workspace_id: workspaceId })
       .first();
     if (!targetMembership) {
@@ -83,7 +89,7 @@ export async function handleUpdateMemberRole(
 
     if (
       roleRank(newRole) > roleRank(currentRole) ||
-      roleRank(targetMembership.role as Role) > roleRank(currentRole)
+      roleRank(targetMembership.role) > roleRank(currentRole)
     ) {
       return Response.json(
         { error: { code: 'role-exceeds-caller-privilege', message: 'You cannot assign or modify a role higher than your own' } },
@@ -95,7 +101,7 @@ export async function handleUpdateMemberRole(
       const ownerCount = await trx('memberships')
         .where({ workspace_id: workspaceId, role: 'OWNER' })
         .count('user_id as count')
-        .first();
+        .first<{ count: number | string } | undefined>();
       if (Number(ownerCount?.count ?? 0) <= 1) {
         return Response.json(
           { error: { code: 'workspace-must-have-one-owner', message: 'A workspace must always have at least one Owner. Promote another member first.' } },
@@ -104,9 +110,10 @@ export async function handleUpdateMemberRole(
       }
     }
 
-    const updated = await trx('memberships')
+    const updatedRows: unknown = await trx<MembershipRow>('memberships')
       .where({ user_id: userId, workspace_id: workspaceId })
       .update({ role: newRole }, ['*']);
+    const updated = updatedRows as MembershipRow[];
     return updated[0];
   });
 

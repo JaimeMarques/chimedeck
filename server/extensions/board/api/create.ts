@@ -16,8 +16,14 @@ import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lo
 
 const VALID_VISIBILITY: BoardVisibility[] = ['PUBLIC', 'PRIVATE', 'WORKSPACE'];
 
+type BoardRow = {
+  id: string;
+  workspace_id: string;
+  title: string;
+};
+
 export async function handleCreateBoard(req: Request, workspaceId: string): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
   const scopedReq = req as WorkspaceScopedRequest;
@@ -51,7 +57,7 @@ export async function handleCreateBoard(req: Request, workspaceId: string): Prom
     );
   }
 
-  const creatorId = (req as AuthenticatedRequest).currentUser!.id;
+  const creatorId = (req as AuthenticatedRequest & { currentUser: { id: string } }).currentUser.id;
   const title = body.title.trim();
   const id = randomUUID();
   const shortId = await generateUniqueShortId('boards');
@@ -88,7 +94,7 @@ export async function handleCreateBoard(req: Request, workspaceId: string): Prom
   });
   if (creationError) return creationError;
 
-  const board = await db('boards').where({ id }).first();
+  const board = await db<BoardRow>('boards').where({ id }).first();
 
   // Stub event emission — replaced by activity log in sprint 10.
   await dispatchEvent({ type: 'board_created', boardId: id, entityId: id, actorId: creatorId, payload: { workspaceId } });

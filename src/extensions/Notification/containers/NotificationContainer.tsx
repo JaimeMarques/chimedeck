@@ -31,16 +31,16 @@ export default function NotificationContainer() {
     if (panelOpen) {
       document.addEventListener('mousedown', handleOutsideClick);
     }
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
+    return () => { document.removeEventListener('mousedown', handleOutsideClick); };
   }, [panelOpen]);
 
   const handleNavigate = useNotificationNavigate();
 
   return (
     <div ref={containerRef} className="relative">
-      <NotificationBell onClick={() => setPanelOpen((prev) => !prev)} />
+      <NotificationBell onClick={() => { setPanelOpen((prev) => !prev); }} />
       {panelOpen && (
-        <NotificationPanel onClose={() => setPanelOpen(false)} onNavigate={handleNavigate} />
+        <NotificationPanel onClose={() => { setPanelOpen(false); }} onNavigate={handleNavigate} />
       )}
     </div>
   );

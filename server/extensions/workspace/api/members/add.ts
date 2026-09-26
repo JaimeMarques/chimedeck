@@ -2,7 +2,7 @@
 // Members may only assign roles equal to or less privileged than their own.
 import { randomUUID } from 'crypto';
 import { db } from '../../../../common/db';
-import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewares/authentication';
+import { authenticate } from '../../../auth/middlewares/authentication';
 import {
   requireWorkspaceMembership,
   requireRole,
@@ -17,8 +17,11 @@ import { lockWorkspaceMembershipMutations } from './lock';
 
 const VALID_ROLES = new Set<Role>(['OWNER', 'ADMIN', 'MEMBER', 'VIEWER']);
 
+type UserRow = { id: string; email: string; name: string | null };
+type MembershipRow = { workspace_id: string; user_id: string; role: string };
+
 export async function handleAddMember(req: Request, workspaceId: string): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
   const scopedReq = req as WorkspaceScopedRequest;
@@ -65,7 +68,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
   const email = body.email.trim().toLowerCase();
 
   // Look up the target user by email
-  const user = await db('users').where({ email }).first();
+  const user = await db<UserRow>('users').where({ email }).first();
   if (!user) {
     return Response.json(
       { error: { code: 'user-not-found', message: `No account found for ${email}. Ask them to sign up first.` } },
@@ -74,7 +77,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
   }
 
   // Check if already a member
-  const existing = await db('memberships')
+  const existing = await db<MembershipRow>('memberships')
     .where({ workspace_id: workspaceId, user_id: user.id })
     .first();
 
@@ -104,7 +107,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
         }
         const freshExisting = await trx('memberships')
           .where({ workspace_id: workspaceId, user_id: user.id })
-          .first();
+          .first<{ role: string } | undefined>();
         if (freshExisting?.role !== 'GUEST') {
           return Response.json(
             { error: { code: 'membership-changed', message: 'The target workspace membership changed; retry the request.' } },
@@ -117,7 +120,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
             'boards.workspace_id': workspaceId,
             'board_guest_access.user_id': user.id,
           })
-          .select('boards.id')
+          .select<{ id: string }[]>('boards.id')
           .orderBy('boards.id');
         const staleBoards = await trx('boards')
           .join('board_members', 'board_members.board_id', 'boards.id')
@@ -125,7 +128,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
             'boards.workspace_id': workspaceId,
             'board_members.user_id': user.id,
           })
-          .select('boards.id');
+          .select<{ id: string }[]>('boards.id');
         const lockedBoardIds = [...new Set([...boards, ...staleBoards].map((board) => board.id))].sort();
         for (const lockedBoardId of lockedBoardIds) {
           await lockBoardMemberMutations(trx, lockedBoardId);
@@ -187,7 +190,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
         payload: {
           scope: 'workspace',
           userId: user.id,
-          displayName: (user.name as string | undefined) ?? user.email,
+          displayName: user.name ?? user.email,
           role,
           joinedAt: new Date().toISOString(),
         },
@@ -223,7 +226,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
     }
     const freshExisting = await trx('memberships')
       .where({ workspace_id: workspaceId, user_id: user.id })
-      .first();
+      .first<{ role: string } | undefined>();
     if (freshExisting) {
       return Response.json(
         { error: { code: 'already-a-member', message: `${email} is already a member of this workspace.` } },
@@ -251,7 +254,7 @@ export async function handleAddMember(req: Request, workspaceId: string): Promis
     payload: {
       scope: 'workspace',
       userId: user.id,
-      displayName: (user.name as string | undefined) ?? user.email,
+      displayName: user.name ?? user.email,
       role,
       joinedAt: new Date().toISOString(),
     },

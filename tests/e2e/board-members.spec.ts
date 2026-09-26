@@ -13,14 +13,8 @@ async function registerAndLogin(request: APIRequestContext, suffix: string) {
     data: { email, password, name: `BM ${suffix}` },
   });
   expect(registered.status()).toBe(201);
-  const loginRes = await request.post(`${BASE_URL}/api/v1/auth/token`, {
-    data: { email, password },
-    // Exercise independent clients instead of tripping the in-memory per-IP
-    // login limiter after the suite provisions more than ten users.
-    headers: { 'x-forwarded-for': `e2e-${email}` },
-  });
-  expect(loginRes.status()).toBe(200);
-  const body = (await loginRes.json()) as { data: { accessToken: string; user: { id: string } } };
+  // Registration itself returns a session; no second login (or login rate limit) needed.
+  const body = (await registered.json()) as { data: { accessToken: string; user: { id: string } } };
   expect(body.data.accessToken).toEqual(expect.any(String));
   expect(body.data.user.id).toEqual(expect.any(String));
   return { token: body.data.accessToken, id: body.data.user.id, email };
