@@ -7,6 +7,7 @@ import { db } from '../../server/common/db';
 const workspaceId = randomUUID();
 const ownerId = randomUUID();
 const guestId = randomUUID();
+const memberId = randomUUID();
 const sourceBoardId = randomUUID();
 const targetBoardId = randomUUID();
 const sourceListId = randomUUID();
@@ -20,13 +21,14 @@ async function cleanup(): Promise<void> {
   await db('checklist_items').where({ id: itemId }).delete();
   await db('checklists').where({ id: checklistId }).delete();
   await db('card_members').where({ card_id: cardId }).delete();
+  await db('board_members').whereIn('board_id', [sourceBoardId, targetBoardId]).delete();
   await db('cards').where({ id: cardId }).delete();
   await db('board_guest_access').whereIn('board_id', [sourceBoardId, targetBoardId]).delete();
   await db('lists').whereIn('id', [sourceListId, targetListId]).delete();
   await db('boards').whereIn('id', [sourceBoardId, targetBoardId]).delete();
   await db('memberships').where({ workspace_id: workspaceId }).delete();
   await db('workspaces').where({ id: workspaceId }).delete();
-  await db('users').whereIn('id', [ownerId, guestId]).delete();
+  await db('users').whereIn('id', [ownerId, guestId, memberId]).delete();
 }
 
 async function moveTo(listId: string): Promise<void> {
@@ -53,11 +55,13 @@ try {
   await db('users').insert([
     { id: ownerId, email: `${ownerId}@example.test`, name: 'Owner', email_verified: true },
     { id: guestId, email: `${guestId}@example.test`, name: 'Guest', email_verified: true },
+    { id: memberId, email: `${memberId}@example.test`, name: 'Member', email_verified: true },
   ]);
   await db('workspaces').insert({ id: workspaceId, name: `move-guard-${shortId()}`, owner_id: ownerId });
   await db('memberships').insert([
     { workspace_id: workspaceId, user_id: ownerId, role: 'OWNER' },
     { workspace_id: workspaceId, user_id: guestId, role: 'GUEST' },
+    { workspace_id: workspaceId, user_id: memberId, role: 'MEMBER' },
   ]);
   await db('boards').insert([
     { id: sourceBoardId, workspace_id: workspaceId, title: 'Source', visibility: 'PRIVATE', short_id: shortId() },
@@ -85,7 +89,17 @@ try {
   await db('checklists').insert({ id: checklistId, card_id: cardId, title: 'Tasks', position: 'a0' });
   await db('checklist_items').insert({ id: itemId, card_id: cardId, checklist_id: checklistId, title: 'Assigned', position: 'a0', assigned_member_id: guestId });
   await assertMoveDenied();
-  console.info('PASS cross-board move preserves assignment eligibility and fails closed for guests');
+
+  // A non-guest workspace MEMBER still cannot read a PRIVATE board without
+  // explicit board membership; moving their assignment there must fail.
+  await db('checklist_items').where({ id: itemId }).update({ assigned_member_id: null });
+  await db('board_members').insert({ id: randomUUID(), board_id: sourceBoardId, user_id: memberId, role: 'MEMBER' });
+  await db('card_members').insert({ card_id: cardId, user_id: memberId });
+  await assertMoveDenied();
+  await db('board_members').insert({ id: randomUUID(), board_id: targetBoardId, user_id: memberId, role: 'MEMBER' });
+  await moveTo(targetListId);
+  assert.ok(await db('card_members').where({ card_id: cardId, user_id: memberId }).first());
+  console.info('PASS cross-board move preserves assignment eligibility and fails closed for guests and private-board members');
 } finally {
   await cleanup();
   await db.destroy();
