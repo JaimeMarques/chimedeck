@@ -15,12 +15,15 @@ const targetListId = randomUUID();
 const cardId = randomUUID();
 const checklistId = randomUUID();
 const itemId = randomUUID();
+const labelId = randomUUID();
 const shortId = () => randomUUID().slice(0, 8);
 
 async function cleanup(): Promise<void> {
   await db('checklist_items').where({ id: itemId }).delete();
   await db('checklists').where({ id: checklistId }).delete();
   await db('card_members').where({ card_id: cardId }).delete();
+  await db('card_labels').where({ card_id: cardId }).delete();
+  await db('labels').where({ id: labelId }).delete();
   await db('board_members').whereIn('board_id', [sourceBoardId, targetBoardId]).delete();
   await db('cards').where({ id: cardId }).delete();
   await db('board_guest_access').whereIn('board_id', [sourceBoardId, targetBoardId]).delete();
@@ -35,7 +38,7 @@ async function moveTo(listId: string): Promise<void> {
   await db('cards').where({ id: cardId }).update({ list_id: listId });
 }
 
-async function assertMoveDenied(): Promise<void> {
+async function assertMoveDenied(expectedConstraint = 'card_move_assignment_eligibility'): Promise<void> {
   let error: unknown;
   try {
     await moveTo(targetListId);
@@ -45,7 +48,7 @@ async function assertMoveDenied(): Promise<void> {
   assert.equal((error as { code?: string } | undefined)?.code, '23514', 'move must fail closed');
   assert.equal(
     (error as { constraint?: string } | undefined)?.constraint,
-    'card_move_assignment_eligibility',
+    expectedConstraint,
   );
   const card = await db('cards').where({ id: cardId }).first<{ list_id: string }>();
   assert.equal(card?.list_id, sourceListId, 'rejected move must not mutate card location');
@@ -99,7 +102,17 @@ try {
   await db('board_members').insert({ id: randomUUID(), board_id: targetBoardId, user_id: memberId, role: 'MEMBER' });
   await moveTo(targetListId);
   assert.ok(await db('card_members').where({ card_id: cardId, user_id: memberId }).first());
-  console.info('PASS cross-board move preserves assignment eligibility and fails closed for guests and private-board members');
+
+  // A source-board label cannot follow a card to a different board, even if a
+  // concurrent writer attaches it after an application-level precheck.
+  await moveTo(sourceListId);
+  await db('card_members').where({ card_id: cardId, user_id: memberId }).delete();
+  await db('labels').insert({ id: labelId, board_id: sourceBoardId, name: 'Source label', color: '#336699' });
+  await db('card_labels').insert({ card_id: cardId, label_id: labelId });
+  await assertMoveDenied('card_move_label_ownership');
+  await db('card_labels').where({ card_id: cardId, label_id: labelId }).delete();
+  await moveTo(targetListId);
+  console.info('PASS cross-board move preserves assignment and label eligibility');
 } finally {
   await cleanup();
   await db.destroy();
