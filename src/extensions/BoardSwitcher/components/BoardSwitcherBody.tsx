@@ -34,7 +34,7 @@ import {
   selectSwitcherPrefs,
   selectSwitcherStatus,
   setSwitcherPrefs,
-  toggleSwitcherStarThunk,
+  toggleStarAndReconcileThunk,
 } from '../boardSwitcher.slice';
 import { boardRouteIdFromPath, filterBoards } from '../helpers';
 import { PinIcon, PinSlashIcon } from './icons';
@@ -109,10 +109,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   };
 
   const toggleStar = (b: Board) => {
-    void dispatch(toggleSwitcherStarThunk({ boardId: b.id, starred: !b.isStarred })).then((r) => {
-      // [why] The failed toggle rolls back locally; refetch so overlapping failures end on server truth.
-      if (toggleSwitcherStarThunk.rejected.match(r)) retryLoad();
-    });
+    void dispatch(toggleStarAndReconcileThunk({ boardId: b.id, starred: !b.isStarred }));
   };
 
   // Where "Create new board" lands: the filtered workspace, else the active one

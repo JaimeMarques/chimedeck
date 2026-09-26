@@ -28,7 +28,15 @@ interface StarMutation {
   desired: boolean;
   inFlight: number;
   touchedAt: number;
+  /** Toggles in the current burst (since inFlight was last 0), and whether any failed. */
+  burstSize: number;
+  burstFailed: boolean;
 }
+
+/** [why] Latest-wins is only a guess once toggles overlapped (the server may apply them
+ *  in another order) or one failed, so re-read the server once the burst has settled. */
+export const starNeedsReconcile = (m: StarMutation | undefined): boolean =>
+  m !== undefined && m.inFlight === 0 && (m.burstFailed || m.burstSize > 1);
 
 interface BoardSwitcherState {
   boards: Board[];
@@ -124,6 +132,18 @@ export const toggleSwitcherStarThunk = createAppAsyncThunk(
   },
 );
 
+/** Star toggle the UI dispatches: toggles, then re-reads the server when the burst
+ *  it ends was ambiguous (see starNeedsReconcile). */
+export const toggleStarAndReconcileThunk = createAppAsyncThunk(
+  'boardSwitcher/toggleStarAndReconcile',
+  async (arg: { boardId: string; starred: boolean }, { dispatch, getState }) => {
+    await dispatch(toggleSwitcherStarThunk(arg));
+    if (starNeedsReconcile(getState().boardSwitcher.starMutations[arg.boardId])) {
+      await dispatch(fetchSwitcherBoardsThunk());
+    }
+  },
+);
+
 export const createSwitcherBoardThunk = createAppAsyncThunk(
   'boardSwitcher/createBoard',
   async ({ workspaceId, title }: { workspaceId: string; title: string }, { extra }) => {
@@ -156,6 +176,7 @@ function settleStar(state: BoardSwitcherState, boardId: string, requestId: strin
   if (!m) return;
   m.inFlight = Math.max(0, m.inFlight - 1);
   m.touchedAt = ++state.seq;
+  if (!ok) m.burstFailed = true;
   // [why] An older toggle settling (either way) must not undo a newer one.
   if (m.latestId !== requestId) return;
   if (!ok) m.desired = m.prev;
@@ -206,12 +227,16 @@ const boardSwitcherSlice = createSlice({
       .addCase(toggleSwitcherStarThunk.pending, (state, action) => {
         const { boardId, starred } = action.meta.arg;
         const prev = state.boards.find((b) => b.id === boardId)?.isStarred === true;
+        const m = state.starMutations[boardId];
+        const continuing = m !== undefined && m.inFlight > 0;
         state.starMutations[boardId] = {
           latestId: action.meta.requestId,
           prev,
           desired: starred,
-          inFlight: (state.starMutations[boardId]?.inFlight ?? 0) + 1,
+          inFlight: (m?.inFlight ?? 0) + 1,
           touchedAt: ++state.seq,
+          burstSize: continuing ? m.burstSize + 1 : 1,
+          burstFailed: continuing ? m.burstFailed : false,
         };
         setStarred(state, boardId, starred);
       })
