@@ -127,4 +127,14 @@ describe('boardSwitcher slice — mutations made elsewhere', () => {
     const s = run(loaded(), patchSwitcherBoard({ id: 'b1', title: 'Framework', background: null, state: 'ARCHIVED' }));
     expect(ids(s)).toEqual(['b2']);
   });
+
+  it('keeps a board archived before the first fetch landed out of that fetch', () => {
+    const s = run(
+      undefined,
+      fetchStart('f1'),
+      patchSwitcherBoard({ id: 'b1', title: 'Framework', background: null, state: 'ARCHIVED' }),
+      fetchLand('f1'),
+    );
+    expect(ids(s)).toEqual(['b2']);
+  });
 });

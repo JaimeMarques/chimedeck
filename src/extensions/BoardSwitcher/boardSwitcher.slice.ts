@@ -18,6 +18,7 @@ import {
   unstarBoardThunk,
 } from '../Board/containers/BoardListPage/BoardListPage.duck';
 import { deleteBoardOptimisticThunk } from '../Board/slices/boardsSlice';
+import { boardStarSet } from '../Board/boardStarEvents';
 import type { WorkspaceFilter } from './helpers';
 
 export const PREFS_STORAGE_KEY = 'board_switcher_prefs';
@@ -154,21 +155,34 @@ export const fetchSwitcherBoardsThunk = createAppAsyncThunk(
 
 export const toggleSwitcherStarThunk = createAppAsyncThunk(
   'boardSwitcher/toggleStar',
-  async ({ boardId, starred }: { boardId: string; starred: boolean }, { extra }) => {
+  // `prev`: the caller's current value, the rollback target when the board is not cached.
+  async ({ boardId, starred }: { boardId: string; starred: boolean; prev?: boolean }, { extra }) => {
     if (starred) await starBoard({ api: apiOf(extra), boardId });
     else await unstarBoard({ api: apiOf(extra), boardId });
   },
 );
 
-/** Star toggle the UI dispatches: toggles, then re-reads the server when the burst
- *  it ends was ambiguous (see starNeedsReconcile). */
+/** Star toggle every star control dispatches: toggles, then re-reads the server when the
+ *  burst it ends was ambiguous (see starNeedsReconcile). Announces the resolved value at each
+ *  step (boardStarSet) so the board list follows. Returns whether this toggle succeeded. */
 export const toggleStarAndReconcileThunk = createAppAsyncThunk(
   'boardSwitcher/toggleStarAndReconcile',
-  async (arg: { boardId: string; starred: boolean }, { dispatch, getState }) => {
-    await dispatch(toggleSwitcherStarThunk(arg));
+  async (arg: { boardId: string; starred: boolean; prev?: boolean }, { dispatch, getState }) => {
+    const announce = (cachedOnly = false) => {
+      const s = getState().boardSwitcher;
+      const board = s.boards.find((b) => b.id === arg.boardId);
+      const isStarred = board ? board.isStarred === true : cachedOnly ? undefined : s.starMutations[arg.boardId]?.desired;
+      if (isStarred !== undefined) dispatch(boardStarSet({ boardId: arg.boardId, isStarred }));
+    };
+    const toggle = dispatch(toggleSwitcherStarThunk(arg)); // pending has run: optimistic value
+    announce();
+    const ok = toggleSwitcherStarThunk.fulfilled.match(await toggle);
+    announce();
     if (starNeedsReconcile(getState().boardSwitcher.starMutations[arg.boardId])) {
       await dispatch(fetchSwitcherBoardsThunk());
+      announce(true); // only a cached board was re-read
     }
+    return ok;
   },
 );
 
@@ -288,9 +302,13 @@ const boardSwitcherSlice = createSlice({
       action: PayloadAction<{ id: string; title: string; background: string | null; state: Board['state'] }>,
     ) {
       const { id, title, background } = action.payload;
+      // [why] Record a removal even for an uncached board: a fetch still in flight may carry it as ACTIVE.
+      if (action.payload.state !== 'ACTIVE') {
+        writeBoard(state, id, null);
+        return;
+      }
       const board = state.boards.find((b) => b.id === id);
-      if (!board) return;
-      writeBoard(state, id, action.payload.state === 'ACTIVE' ? { ...board, title, background } : null);
+      if (board) writeBoard(state, id, { ...board, title, background });
     },
   },
   extraReducers: (builder) => {
@@ -341,7 +359,8 @@ const boardSwitcherSlice = createSlice({
       // Optimistic star toggle; see settleStar for completion/rollback
       .addCase(toggleSwitcherStarThunk.pending, (state, action) => {
         const { boardId, starred } = action.meta.arg;
-        const prev = state.boards.find((b) => b.id === boardId)?.isStarred === true;
+        const cached = state.boards.find((b) => b.id === boardId);
+        const prev = cached ? cached.isStarred === true : action.meta.arg.prev ?? false;
         const m = state.starMutations[boardId];
         const continuing = m !== undefined && m.pendingIds.length > 0;
         state.starMutations[boardId] = {
@@ -443,4 +462,10 @@ export const selectSwitcherBoards = (state: RootState) => state.boardSwitcher.bo
 export const selectSwitcherStatus = (state: RootState) => state.boardSwitcher.status;
 export const selectSwitcherIncomplete = (state: RootState) => state.boardSwitcher.incomplete;
 export const selectSwitcherPrefs = (state: RootState) => state.boardSwitcher.prefs;
+/** The switcher's star value for a board: cached, else its latest toggle's; undefined if unknown. */
+export const selectSwitcherStarred = (state: RootState, boardId: string): boolean | undefined => {
+  const s = state.boardSwitcher;
+  const board = s.boards.find((b) => b.id === boardId);
+  return board ? board.isStarred === true : s.starMutations[boardId]?.desired;
+};
 export const selectSwitcherCreating = (state: RootState) => state.boardSwitcher.creatingId !== null;
