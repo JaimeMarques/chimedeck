@@ -63,11 +63,12 @@ export async function up(knex: Knex): Promise<void> {
       source_workspace text;
       target_board text;
       target_workspace text;
+      target_visibility text;
     BEGIN
       IF NEW.list_id IS NOT DISTINCT FROM OLD.list_id THEN RETURN NEW; END IF;
       SELECT b.id, b.workspace_id INTO source_board, source_workspace
         FROM lists l JOIN boards b ON b.id = l.board_id WHERE l.id = OLD.list_id;
-      SELECT b.id, b.workspace_id INTO target_board, target_workspace
+      SELECT b.id, b.workspace_id, b.visibility INTO target_board, target_workspace, target_visibility
         FROM lists l JOIN boards b ON b.id = l.board_id WHERE l.id = NEW.list_id;
       IF source_board IS NULL OR target_board IS NULL THEN
         RAISE EXCEPTION 'card move board context not found' USING ERRCODE = '23503';
@@ -87,10 +88,19 @@ export async function up(knex: Knex): Promise<void> {
         WHERE NOT EXISTS (
           SELECT 1 FROM memberships m
            WHERE m.workspace_id = target_workspace AND m.user_id = assigned.user_id
-             AND (m.role <> 'GUEST' OR EXISTS (
-               SELECT 1 FROM board_guest_access bga
-                WHERE bga.board_id = target_board AND bga.user_id = assigned.user_id
-             ))
+             AND (
+               m.role IN ('OWNER', 'ADMIN')
+               OR (m.role = 'GUEST' AND EXISTS (
+                 SELECT 1 FROM board_guest_access bga
+                  WHERE bga.board_id = target_board AND bga.user_id = assigned.user_id
+               ))
+               OR (m.role IN ('MEMBER', 'VIEWER') AND (
+                 target_visibility <> 'PRIVATE' OR EXISTS (
+                   SELECT 1 FROM board_members bm
+                    WHERE bm.board_id = target_board AND bm.user_id = assigned.user_id
+                 )
+               ))
+             )
         )
       ) THEN
         RAISE EXCEPTION 'card move would leave an ineligible assignment'
