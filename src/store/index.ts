@@ -1,6 +1,6 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { apiClient } from '../common/api/client';
-import { authReducer, workspaceShellReducer, boardReducer, boardListPageReducer, boardPageReducer, workspacePageReducer, cardDetailReducer, listReducer, cardsReducer, profileDuckReducer, notificationReducer, pluginDashboardReducer, pluginRegistryReducer, adminInviteReducer, viewPreferenceReducer, notificationPreferencesApi, boardMembersApi, boardGuestsApi, searchReducer, boardNotificationTypePreferencesApi, apiTokenApi, webhooksApi, stateTransitionsApi, healthCheckTabReducer } from '../reducers';
+import { authReducer, workspaceShellReducer, boardReducer, boardListPageReducer, boardPageReducer, workspacePageReducer, cardDetailReducer, listReducer, cardsReducer, profileDuckReducer, notificationReducer, pluginDashboardReducer, pluginRegistryReducer, adminInviteReducer, viewPreferenceReducer, boardSwitcherReducer, notificationPreferencesApi, boardMembersApi, boardGuestsApi, searchReducer, boardNotificationTypePreferencesApi, apiTokenApi, webhooksApi, stateTransitionsApi, healthCheckTabReducer } from '../reducers';
 import { uiReducer } from '../slices/uiSlice';
 import { featureFlagsReducer } from '../slices/featureFlagsSlice';
 import { wsMiddleware } from '../extensions/Realtime/middleware/wsMiddleware';
@@ -33,6 +33,7 @@ export const store = configureStore({
     pluginRegistry: pluginRegistryReducer,
     adminInvite: adminInviteReducer,
     viewPreference: viewPreferenceReducer,
+    boardSwitcher: boardSwitcherReducer,
     featureFlags: featureFlagsReducer,
     [notificationPreferencesApi.reducerPath]: notificationPreferencesApi.reducer,
     [boardMembersApi.reducerPath]: boardMembersApi.reducer,

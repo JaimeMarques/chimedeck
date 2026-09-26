@@ -6,7 +6,7 @@ import { apiClient } from '~/common/api/client';
 import type { ArchivedCard } from './types';
 import translations from './translations/en.json';
 import Button from '~/common/components/Button';
-import { contrastText } from '~/extensions/Card/components/LabelChip';
+import { labelStyle } from '~/extensions/Card/utils/labelColors';
 
 interface Props {
   boardId: string;
@@ -103,8 +103,8 @@ const BoardArchivedCardsPanel = ({ boardId, onCardUnarchived }: Props) => {
                   {card.labels.map((label) => (
                     <span
                       key={label.id}
-                      className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
-                      style={{ backgroundColor: label.color, color: contrastText(label.color) }}
+                      className="cd-label inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
+                      style={labelStyle(label.color)}
                       title={label.name}
                     >
                       {label.name}

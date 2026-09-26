@@ -78,7 +78,7 @@ function renderListTitleNode(args: {
         }}
         onBlur={onCommitRename}
         onKeyDown={onInputKeyDown}
-        className={`bg-transparent text-base font-semibold text-sm focus:outline-none rounded px-1 py-0.5 w-full ${toneTextClass} ${inputFocusClass}`}
+        className={`cd-list-title bg-transparent text-base font-semibold text-sm focus:outline-none rounded px-1 py-0.5 w-full ${toneTextClass} ${inputFocusClass}`}
         aria-label={`Rename list ${listTitle}`}
       />
     );
@@ -99,7 +99,7 @@ function renderListTitleNode(args: {
   return (
     <Button
       variant="ghost"
-      className={`flex-1 min-w-0 h-auto items-start justify-start px-1 py-0.5 text-left text-xs font-semibold leading-tight whitespace-normal break-words ${toneTextClass} ${toneButtonHoverClass}`}
+      className={`cd-list-title flex-1 min-w-0 h-auto items-start justify-start px-1 py-0.5 text-left text-xs font-semibold leading-tight whitespace-normal break-words ${toneTextClass} ${toneButtonHoverClass}`}
       onClick={onStartEditing}
       aria-label={`Rename list ${listTitle}`}
     >

@@ -10,7 +10,7 @@ import {
   ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import { CheckIcon } from '@heroicons/react/24/solid';
-import { contrastText } from '~/extensions/Card/components/LabelChip';
+import { labelStyle } from '~/extensions/Card/utils/labelColors';
 import type { Card } from '~/extensions/Card/api';
 
 // ── Filter state ───────────────────────────────────────────────────────────────
@@ -177,8 +177,8 @@ const CheckRow = ({
     </span>
     {swatch ? (
       <span
-        className="flex-1 rounded px-2 py-0.5 text-xs font-semibold"
-        style={{ backgroundColor: swatch.color, color: contrastText(swatch.color) }}
+        className="cd-label flex-1 rounded px-2 py-0.5 text-xs font-semibold"
+        style={labelStyle(swatch.color)}
       >
         {children}
       </span>

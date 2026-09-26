@@ -216,18 +216,24 @@ function getInsertIndexFromPointerY(
   midsCache?: Record<string, number>,
   cardElementsById?: Record<string, HTMLElement>,
 ): number {
+  return getInsertIndexFromMids(cardIds, pointerY, (cardId) => (
+    midsCache
+      ? getCachedCardViewportMidYWithElements(cardId, midsCache, cardElementsById)
+      : getLiveCardViewportMidYWithElements(cardId, cardElementsById)
+  ));
+}
+
+// Mids are read lazily (stops at the first card below the pointer).
+function getInsertIndexFromMids(
+  cardIds: readonly string[],
+  pointerY: number | null,
+  getMidY: (cardId: string) => number | null,
+): number {
   if (pointerY == null || cardIds.length === 0) return cardIds.length;
   let insertIndex = 0;
   for (let i = 0; i < cardIds.length; i += 1) {
     const cardId = cardIds[i];
-    let mid: number | null = null;
-    if (cardId != null) {
-      if (midsCache) {
-        mid = getCachedCardViewportMidYWithElements(cardId, midsCache, cardElementsById);
-      } else {
-        mid = getLiveCardViewportMidYWithElements(cardId, cardElementsById);
-      }
-    }
+    const mid = cardId != null ? getMidY(cardId) : null;
     if (mid == null) continue;
     if (pointerY >= mid - DRAG_MIDPOINT_TOLERANCE_PX) {
       insertIndex = i + 1;
@@ -373,25 +379,82 @@ function getContainingBoardListIdFromRects(
   return containingRect?.listId ?? null;
 }
 
+// Half of the board's gap-3 (12px) column gap, so the gutter splits between lanes.
+const BOARD_LANE_GAP_TOLERANCE_PX = 6;
+
+function getBoardLaneListIdFromRects(
+  clientX: number,
+  rects: BoardListRect[],
+  horizontalScrollDelta: number = 0,
+): string | null {
+  const lane = rects.find((r) => (
+    clientX >= r.left - horizontalScrollDelta - BOARD_LANE_GAP_TOLERANCE_PX
+    && clientX <= r.right - horizontalScrollDelta + BOARD_LANE_GAP_TOLERANCE_PX
+  ));
+  return lane?.listId ?? null;
+}
+
+// WHY: a collapsed list has no card area, so it is a target only inside its own
+// rect; its lane (above/below it) belongs to the nearest expanded list.
+function getExpandedListRects(rects: BoardListRect[], collapsedListIds: readonly string[]): BoardListRect[] {
+  if (collapsedListIds.length === 0) return rects;
+  const expanded = rects.filter((r) => !collapsedListIds.includes(r.listId));
+  return expanded.length > 0 ? expanded : rects;
+}
+
+/**
+ * Final card-drop destination. WHY: a fallback lane drop (over == null) is decided
+ * from the final pointer, while `current` may come from the previous frame's
+ * pointer/placeholder cache; a release before the next rAF after crossing lanes
+ * would otherwise commit to the previous lane. `laneCardIds` excludes the active card.
+ */
+export function resolveCardDropDestination(
+  current: { listId: string; index: number },
+  dropLaneListId: string | null,
+  laneCardIds: readonly string[],
+  pointerY: number | null,
+  getMidY: (cardId: string) => number | null,
+): { listId: string; index: number } {
+  if (dropLaneListId == null) return current;
+  return { listId: dropLaneListId, index: getInsertIndexFromMids(laneCardIds, pointerY, getMidY) };
+}
+
+// WHY: a card released anywhere in a list's lane (including the empty area
+// under a short list) drops into that list; outside the board scroller (e.g.
+// the board header) or beside every list (Add-list column) it does not.
+function getBoardDropLaneListId(
+  clientX: number | null,
+  clientY: number | null,
+  scroller: HTMLElement | null,
+  collapsedListIds: readonly string[],
+): string | null {
+  if (clientX == null || clientY == null || !scroller) return null;
+  const s = scroller.getBoundingClientRect();
+  if (clientX < s.left || clientX > s.right || clientY < s.top || clientY > s.bottom) return null;
+  const rects = buildLiveBoardListRects();
+  return getContainingBoardListIdFromRects(clientX, clientY, rects)
+    ?? getBoardLaneListIdFromRects(clientX, getExpandedListRects(rects, collapsedListIds));
+}
+
 function getNearestBoardListIdFromRects(
   clientX: number,
   clientY: number,
   rects: BoardListRect[],
   horizontalScrollDelta: number = 0,
+  collapsedListIds: readonly string[] = [],
 ): string | null {
   if (rects.length === 0) return null;
 
-  const verticalTolerance = 40;
-  const verticallyNearbyRects = rects.filter((r) => (
-    clientY >= r.top - verticalTolerance && clientY <= r.bottom + verticalTolerance
-  ));
-  const nearestCandidates = verticallyNearbyRects.length > 0
-    ? verticallyNearbyRects
-    : rects;
+  // WHY: lists are content-height, so the empty board area under a short list
+  // belongs to that list's vertical lane. Resolve by x only (lane first, then
+  // nearest centre); a vertical filter would hand that area to a taller neighbour.
+  const laneRects = getExpandedListRects(rects, collapsedListIds);
+  const laneListId = getBoardLaneListIdFromRects(clientX, laneRects, horizontalScrollDelta);
+  if (laneListId) return laneListId;
 
   let nearestListId: string | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
-  nearestCandidates.forEach((r) => {
+  laneRects.forEach((r) => {
     const adjustedCenterX = r.centerX - horizontalScrollDelta;
     const distance = Math.abs(clientX - adjustedCenterX);
     if (distance < nearestDistance) {
@@ -407,6 +470,7 @@ function getBoardListIdFromRects(
   clientY: number,
   rects: BoardListRect[],
   horizontalScrollDelta: number = 0,
+  collapsedListIds: readonly string[] = [],
 ): string | null {
   const containing = getContainingBoardListIdFromRects(
     clientX,
@@ -420,6 +484,7 @@ function getBoardListIdFromRects(
     clientY,
     rects,
     horizontalScrollDelta,
+    collapsedListIds,
   );
 }
 
@@ -443,6 +508,7 @@ function getBoardListIdFromPointer(
   clientY: number | null,
   cachedListRects?: BoardListRect[],
   horizontalScrollDelta: number = 0,
+  collapsedListIds: readonly string[] = [],
 ): string | null {
   if (clientX == null || clientY == null) return null;
 
@@ -463,7 +529,7 @@ function getBoardListIdFromPointer(
     // WHY: when the board scrolls during drag, cached rects can become stale.
     // We only pay the DOM-query cost when cached rects miss, keeping smoothness.
     const liveRects = buildLiveBoardListRects();
-    const liveResolved = getBoardListIdFromRects(clientX, clientY, liveRects);
+    const liveResolved = getBoardListIdFromRects(clientX, clientY, liveRects, 0, collapsedListIds);
     if (liveResolved) return liveResolved;
 
     return getNearestBoardListIdFromRects(
@@ -471,13 +537,14 @@ function getBoardListIdFromPointer(
       clientY,
       cachedListRects,
       horizontalScrollDelta,
+      collapsedListIds,
     );
   }
 
   const hitListId = getBoardListIdFromPointerHitTest(clientX, clientY);
   if (hitListId) return hitListId;
 
-  return getBoardListIdFromRects(clientX, clientY, buildLiveBoardListRects());
+  return getBoardListIdFromRects(clientX, clientY, buildLiveBoardListRects(), 0, collapsedListIds);
 }
 
 // WHY: Decoupled from BoardCanvas so that listHydration selector updates
@@ -580,6 +647,9 @@ const BoardCanvas = ({
     if (!globalThis.window) return [];
     return parseCollapsedListIds(globalThis.window.localStorage.getItem(collapsedListsStorageKey));
   });
+  // WHY: pointer resolvers run from stable drag callbacks; read collapsed lists via a ref.
+  const collapsedListIdsRef = useRef(collapsedListIds);
+  collapsedListIdsRef.current = collapsedListIds;
   const [dragPlaceholder, setDragPlaceholder] = useState<DragPlaceholder | null>(null);
   const dragPlaceholderRafRef = useRef<number | null>(null);
   const pendingDragPlaceholderRef = useRef<DragPlaceholder | null>(null);
@@ -760,6 +830,7 @@ const BoardCanvas = ({
         clientY,
         dragStartListRectsRef.current,
         horizontalScrollDelta,
+        collapsedListIdsRef.current,
       );
 
       pointerListResolutionCacheRef.current = {
@@ -1043,7 +1114,22 @@ const BoardCanvas = ({
     (args) => {
       const activeId = String(args.active.id);
       if (!cardsRef.current[activeId]) {
-        return rectIntersection(args);
+        // WHY: lists are content-height, so area-based rectIntersection favours
+        // taller columns. Reorder by x only: the list whose centre is nearest
+        // the dragged list's centre.
+        const { collisionRect } = args;
+        const activeCenterX = collisionRect.left + collisionRect.width / 2;
+        let nearest: { container: (typeof args.droppableContainers)[number]; distance: number } | null = null;
+        for (const container of args.droppableContainers) {
+          if (!listsRef.current[String(container.id)]) continue;
+          const rect = args.droppableRects.get(container.id);
+          if (!rect) continue;
+          const distance = Math.abs(rect.left + rect.width / 2 - activeCenterX);
+          if (!nearest || distance < nearest.distance) nearest = { container, distance };
+        }
+        return nearest
+          ? [{ id: nearest.container.id, data: { droppableContainer: nearest.container, value: nearest.distance } }]
+          : [];
       }
 
       let collisionArgs = args;
@@ -1354,7 +1440,24 @@ const BoardCanvas = ({
       dragStartListRectsRef.current = [];
       dragCardElementsByIdRef.current = {};
 
-      if (!over) {
+      const activeId = String(active.id);
+      // WHY: over is null when a card is released in the empty lane below a
+      // short list (collision uses pre-drag list rects). That is still a drop
+      // into the lane's list, so a pointer card drag also commits when the
+      // pointer is in a list lane. Keyboard drags have no live pointer, so they
+      // rely on `over` alone.
+      const isPointerCardDrag = Boolean(currentCards[activeId]) && 'clientX' in event.activatorEvent;
+      const dropLaneListId = isPointerCardDrag && over == null
+        ? getBoardDropLaneListId(
+          livePointerXRef.current,
+          livePointerYRef.current,
+          boardScrollerRef.current,
+          collapsedListIdsRef.current,
+        )
+        : null;
+      const hasDropTarget = over != null
+        || (dropLaneListId != null && currentLists[dropLaneListId] !== undefined);
+      if (!hasDropTarget) {
         setDragCardsByList(null);
         resetQueuedDragPlaceholder();
         dragPlaceholderRef.current = null;
@@ -1368,8 +1471,7 @@ const BoardCanvas = ({
         return;
       }
 
-      const activeId = String(active.id);
-      const overId = String(over.id);
+      const overId = over ? String(over.id) : '';
 
       // List reorder
       if (currentLists[activeId]) {
@@ -1470,6 +1572,14 @@ const BoardCanvas = ({
             dragCardElementsByIdRef.current,
           );
         }
+
+        ({ listId: resolvedToListId, index: resolvedNewIndex } = resolveCardDropDestination(
+          { listId: resolvedToListId, index: resolvedNewIndex },
+          dropLaneListId,
+          dropLaneListId ? getCardsWithoutActive(finalCardsByList, dropLaneListId, activeId) : [],
+          pointerY,
+          (cardId) => getLiveCardViewportMidYWithElements(cardId),
+        ));
 
         // WHY: these fallback blocks recalculate position from overId and are only
         // needed when disableLiveDragPreview=true and the placeholder was not set
@@ -1592,7 +1702,7 @@ const BoardCanvas = ({
       <SortableContext items={listOrder} strategy={horizontalListSortingStrategy}>
         <div
           ref={boardScrollerRef}
-          className="flex gap-3 p-4 overflow-x-auto overflow-y-hidden flex-1"
+          className="flex items-start gap-3 p-4 overflow-x-auto overflow-y-hidden flex-1"
           role="list"
           aria-label="Board lists"
         >

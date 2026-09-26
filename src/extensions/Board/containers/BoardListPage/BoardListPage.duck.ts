@@ -18,6 +18,7 @@ import {
   type Board,
 } from '../../api';
 import { deleteBoardOptimisticThunk } from '../../slices/boardsSlice';
+import { boardStarSet } from '../../boardStarEvents';
 
 // ---------- State ----------
 
@@ -189,6 +190,11 @@ const boardListPageSlice = createSlice({
       .addCase(unstarBoardThunk.fulfilled, (state, action: PayloadAction<string>) => {
         const board = state.boards.find((b) => b.id === action.payload);
         if (board) board.isStarred = false;
+      })
+      // The board switcher's resolved star value (its toggles, the board header's).
+      .addCase(boardStarSet, (state, action) => {
+        const board = state.boards.find((b) => b.id === action.payload.boardId);
+        if (board) board.isStarred = action.payload.isStarred;
       })
       // Optimistic delete: remove board immediately and snapshot for rollback.
       .addCase(deleteBoardOptimisticThunk.pending, (state, action) => {

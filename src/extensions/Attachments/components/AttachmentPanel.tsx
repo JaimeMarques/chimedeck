@@ -13,6 +13,7 @@ import { listAttachments, deleteAttachment, createUrlAttachment, patchAttachment
 import { AttachmentDropZone } from './AttachmentDropZone';
 import { AttachmentItem } from './AttachmentItem';
 import { CardAttachmentPreview } from './CardAttachmentPreview';
+import { labelStyle } from '~/extensions/Card/utils/labelColors';
 import { ExternalLinkPreview } from './ExternalLinkPreview';
 import { PasteListener } from './PasteListener';
 import type { Attachment, CardPreview } from '../types';
@@ -376,7 +377,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
 
       {/* Section header */}
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-subtle flex items-center gap-1.5">
+        <h3 className="cd-section-heading text-sm font-semibold text-subtle flex items-center gap-1.5">
           <PaperClipIcon className="h-4 w-4 text-muted" aria-hidden="true" />
           {translations['attachments.panel.title']}
         </h3>
@@ -536,8 +537,8 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
                       {detectedCard.labels.map((label) => (
                         <span
                           key={label.id}
-                          className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold text-white/90 truncate max-w-[120px]" // [theme-exception] text-white on colored attachment thumbnail
-                          style={{ backgroundColor: label.color }}
+                          className="cd-label inline-block px-2 py-0.5 rounded text-[10px] font-semibold truncate max-w-[120px]"
+                          style={labelStyle(label.color)}
                           title={label.name}
                         >
                           {label.name}

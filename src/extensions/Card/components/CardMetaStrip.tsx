@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { CalendarIcon, UserIcon, TagIcon } from '@heroicons/react/24/outline';
 import { CheckIcon } from '@heroicons/react/24/solid';
 import type { Label, CardMember } from '../api';
-import { LabelChip, contrastText } from './LabelChip';
+import { LabelChip } from './LabelChip';
+import { labelStyle } from '../utils/labelColors';
 import { CardDatesPicker } from './CardDatesPicker';
 import CardValue from './CardValue';
 import { DEFAULT_LABEL_COLOR, LABEL_PRESET_COLORS } from '../constants/labelPresetColors';
@@ -302,8 +303,8 @@ const LabelSection = ({
                       />
                       <button
                         type="button"
-                        className="flex-1 flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-semibold transition-opacity hover:opacity-90 min-w-0 truncate"
-                        style={{ backgroundColor: label.color, color: contrastText(label.color) }}
+                        className="cd-label flex-1 flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-semibold transition-opacity hover:opacity-90 min-w-0 truncate"
+                        style={labelStyle(label.color)}
                         onClick={() => void handleToggle(label)}
                         title={label.name}
                       >
@@ -337,8 +338,8 @@ const LabelSection = ({
               <div className="p-3 space-y-3">
                 {/* Preview */}
                 <div
-                  className="w-full rounded-md px-3 py-2 text-sm font-semibold text-center truncate" // [theme-exception] color computed from background luminance
-                  style={{ backgroundColor: formColor, color: contrastText(formColor) }}
+                  className="cd-label w-full rounded-md px-3 py-2 text-sm font-semibold text-center truncate" // [theme-exception] color computed from background luminance
+                  style={labelStyle(formColor)}
                 >
                   {formName || (isEditingLabel ? editingLabel?.name : 'Label preview')}
                 </div>

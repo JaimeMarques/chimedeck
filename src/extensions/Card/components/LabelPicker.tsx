@@ -4,6 +4,7 @@ import { ChevronDownIcon } from '@heroicons/react/24/outline';
 import Button from '../../../common/components/Button';
 import type { Label } from '../api';
 import { LabelChip } from './LabelChip';
+import { labelStyle } from '../utils/labelColors';
 
 interface Props {
   allLabels: Label[];
@@ -59,8 +60,8 @@ export const LabelPicker = ({ allLabels, selectedIds, onAttach, onDetach, disabl
                 onClick={() => toggle(label)}
               >
                 <span
-                  className="h-3 w-3 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: label.color }}
+                  className="cd-label h-3 w-3 rounded-full flex-shrink-0"
+                  style={labelStyle(label.color)}
                 />
                 <span className="flex-1 truncate">{label.name}</span>
                 {selected && <span className="text-blue-500">✓</span>}

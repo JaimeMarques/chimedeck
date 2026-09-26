@@ -452,7 +452,7 @@ const CardChecklist = ({
   return (
     <section aria-label="Checklists">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">
+        <h3 className="cd-section-heading text-xs font-semibold text-muted uppercase tracking-wider">
           Checklists
         </h3>
         {!disabled && (

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { TagIcon } from '@heroicons/react/24/outline';
 import type { Label } from '~/extensions/Card/api';
-import { contrastText } from '~/extensions/Card/components/LabelChip';
+import { contrastText, labelStyle } from '~/extensions/Card/utils/labelColors';
 import { DEFAULT_LABEL_COLOR, LABEL_PRESET_COLORS } from '~/extensions/Card/constants/labelPresetColors';
 import { getBoardLabels, createBoardLabel, updateBoardLabel, deleteBoardLabel } from '~/extensions/Card/api/cardDetail';
 import { apiClient } from '~/common/api/client';
@@ -272,8 +272,8 @@ const BoardLabelsPanel = ({ boardId }: Props) => {
                         <div key={label.id} className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            className="flex-1 flex items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition-opacity hover:opacity-90 min-w-0 truncate"
-                            style={{ backgroundColor: label.color, color: contrastText(label.color) }}
+                            className="cd-label flex-1 flex items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition-opacity hover:opacity-90 min-w-0 truncate"
+                            style={labelStyle(label.color)}
                             title={label.name}
                             onClick={() => openEdit(label)}
                           >
