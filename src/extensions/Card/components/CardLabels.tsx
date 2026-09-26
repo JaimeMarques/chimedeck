@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { Label } from '../api';
 import { LabelChip } from './LabelChip';
+import { labelStyle } from '../utils/labelColors';
 import Button from '../../../common/components/Button';
 
 const PRESET_COLORS = [
@@ -156,8 +157,8 @@ const CardLabels = ({
                         onClick={() => handleToggle(label)}
                       >
                         <span
-                          className="h-3 w-3 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: label.color }}
+                          className="cd-label h-3 w-3 rounded-full flex-shrink-0"
+                          style={labelStyle(label.color)}
                         />
                         {label.name}
                       </button>
@@ -177,8 +178,8 @@ const CardLabels = ({
                         onClick={() => handleToggle(label)}
                       >
                         <span
-                          className="h-3 w-3 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: label.color }}
+                          className="cd-label h-3 w-3 rounded-full flex-shrink-0"
+                          style={labelStyle(label.color)}
                         />
                         {label.name}
                         <span className="ml-auto text-emerald-400">✓</span>

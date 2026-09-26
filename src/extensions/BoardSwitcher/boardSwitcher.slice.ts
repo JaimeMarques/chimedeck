@@ -1,12 +1,13 @@
 // Board switcher slice — all active boards across the user's workspaces plus the
 // switcher's UI prefs. [why] Prefs live in Redux because the bottom bar (BoardPage)
 // and the pinned panel (AppShell) must share them; AppShell persists them.
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSlice, isAnyOf, type PayloadAction } from '@reduxjs/toolkit';
 import type { RootState } from '~/store';
 import { createAppAsyncThunk } from '~/utils/redux';
 import type { apiClient } from '~/common/api/client';
 import { listWorkspaces } from '../Workspace/api';
 import { listBoards, createBoard, starBoard, unstarBoard, type Board } from '../Board/api';
+import { clearAuth, loginThunk, logoutThunk, setCredentials, signupThunk } from '../Auth/duck/authDuck';
 import type { WorkspaceFilter } from './helpers';
 
 export const PREFS_STORAGE_KEY = 'board_switcher_prefs';
@@ -159,9 +160,11 @@ function setStarred(state: BoardSwitcherState, boardId: string, starred: boolean
   if (board) board.isStarred = starred;
 }
 
-/** Drops a settled fetch and returns its start seq (an unknown fetch counts as starting now). */
-function forgetFetch(state: BoardSwitcherState, requestId: string): number {
-  const startedAt = state.fetchStartedAt[requestId] ?? state.seq;
+/** Drops a settled fetch and returns its start seq, or null for an untracked one
+ *  (started before a session reset), whose result must be ignored. */
+function forgetFetch(state: BoardSwitcherState, requestId: string): number | null {
+  const startedAt = state.fetchStartedAt[requestId];
+  if (startedAt === undefined) return null;
   state.fetchStartedAt = Object.fromEntries(Object.entries(state.fetchStartedAt).filter(([id]) => id !== requestId));
   return startedAt;
 }
@@ -200,6 +203,7 @@ const boardSwitcherSlice = createSlice({
       })
       .addCase(fetchSwitcherBoardsThunk.fulfilled, (state, action) => {
         const startedAt = forgetFetch(state, action.meta.requestId);
+        if (startedAt === null) return;
         if (startedAt >= state.appliedFetchAt) {
           state.appliedFetchAt = startedAt;
           state.incomplete = action.payload.incomplete;
@@ -216,6 +220,7 @@ const boardSwitcherSlice = createSlice({
       })
       .addCase(fetchSwitcherBoardsThunk.rejected, (state, action) => {
         const startedAt = forgetFetch(state, action.meta.requestId);
+        if (startedAt === null) return;
         // [why] The newest attempt failed; an older fetch landing later must not mask that.
         if (startedAt >= state.appliedFetchAt) {
           state.appliedFetchAt = startedAt;
@@ -245,7 +250,13 @@ const boardSwitcherSlice = createSlice({
       })
       .addCase(toggleSwitcherStarThunk.rejected, (state, action) => {
         settleStar(state, action.meta.arg.boardId, action.meta.requestId, false);
-      });
+      })
+      // [why] Logout is client-side navigation, so without this the next account would see
+      // the previous one's boards. Prefs stay (per browser); seq stays monotonic.
+      .addMatcher(
+        isAnyOf(clearAuth, logoutThunk.pending, loginThunk.fulfilled, signupThunk.fulfilled, setCredentials),
+        (state) => ({ ...initialState, prefs: state.prefs, seq: state.seq }),
+      );
   },
 });
 

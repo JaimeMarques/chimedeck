@@ -216,18 +216,24 @@ function getInsertIndexFromPointerY(
   midsCache?: Record<string, number>,
   cardElementsById?: Record<string, HTMLElement>,
 ): number {
+  return getInsertIndexFromMids(cardIds, pointerY, (cardId) => (
+    midsCache
+      ? getCachedCardViewportMidYWithElements(cardId, midsCache, cardElementsById)
+      : getLiveCardViewportMidYWithElements(cardId, cardElementsById)
+  ));
+}
+
+// Mids are read lazily (stops at the first card below the pointer).
+function getInsertIndexFromMids(
+  cardIds: readonly string[],
+  pointerY: number | null,
+  getMidY: (cardId: string) => number | null,
+): number {
   if (pointerY == null || cardIds.length === 0) return cardIds.length;
   let insertIndex = 0;
   for (let i = 0; i < cardIds.length; i += 1) {
     const cardId = cardIds[i];
-    let mid: number | null = null;
-    if (cardId != null) {
-      if (midsCache) {
-        mid = getCachedCardViewportMidYWithElements(cardId, midsCache, cardElementsById);
-      } else {
-        mid = getLiveCardViewportMidYWithElements(cardId, cardElementsById);
-      }
-    }
+    const mid = cardId != null ? getMidY(cardId) : null;
     if (mid == null) continue;
     if (pointerY >= mid - DRAG_MIDPOINT_TOLERANCE_PX) {
       insertIndex = i + 1;
@@ -394,6 +400,23 @@ function getExpandedListRects(rects: BoardListRect[], collapsedListIds: readonly
   if (collapsedListIds.length === 0) return rects;
   const expanded = rects.filter((r) => !collapsedListIds.includes(r.listId));
   return expanded.length > 0 ? expanded : rects;
+}
+
+/**
+ * Final card-drop destination. WHY: a fallback lane drop (over == null) is decided
+ * from the final pointer, while `current` may come from the previous frame's
+ * pointer/placeholder cache; a release before the next rAF after crossing lanes
+ * would otherwise commit to the previous lane. `laneCardIds` excludes the active card.
+ */
+export function resolveCardDropDestination(
+  current: { listId: string; index: number },
+  dropLaneListId: string | null,
+  laneCardIds: readonly string[],
+  pointerY: number | null,
+  getMidY: (cardId: string) => number | null,
+): { listId: string; index: number } {
+  if (dropLaneListId == null) return current;
+  return { listId: dropLaneListId, index: getInsertIndexFromMids(laneCardIds, pointerY, getMidY) };
 }
 
 // WHY: a card released anywhere in a list's lane (including the empty area
@@ -1549,6 +1572,14 @@ const BoardCanvas = ({
             dragCardElementsByIdRef.current,
           );
         }
+
+        ({ listId: resolvedToListId, index: resolvedNewIndex } = resolveCardDropDestination(
+          { listId: resolvedToListId, index: resolvedNewIndex },
+          dropLaneListId,
+          dropLaneListId ? getCardsWithoutActive(finalCardsByList, dropLaneListId, activeId) : [],
+          pointerY,
+          (cardId) => getLiveCardViewportMidYWithElements(cardId),
+        ));
 
         // WHY: these fallback blocks recalculate position from overId and are only
         // needed when disableLiveDragPreview=true and the placeholder was not set

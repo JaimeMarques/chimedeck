@@ -9,13 +9,16 @@ interface Props {
   subtitle?: string | undefined;
   /** Optional error shown under the input (e.g. a failed create). */
   error?: string | undefined;
+  /** Create is in flight: blocks re-submit (click or Enter). */
+  pending?: boolean | undefined;
 }
 
-const CreateBoardModal = ({ onClose, onCreate, subtitle, error }: Props) => {
+const CreateBoardModal = ({ onClose, onCreate, subtitle, error, pending = false }: Props) => {
   const [title, setTitle] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pending) return;
     const trimmed = title.trim();
     if (!trimmed) return;
     onCreate(trimmed);
@@ -46,7 +49,7 @@ const CreateBoardModal = ({ onClose, onCreate, subtitle, error }: Props) => {
             <Button type="button" variant="ghost" size="md" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" size="md" disabled={!title.trim()}>
+            <Button type="submit" variant="primary" size="md" disabled={!title.trim() || pending}>
               Create
             </Button>
           </div>

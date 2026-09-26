@@ -1,6 +1,6 @@
 // BoardSwitcherBody — search, workspace chips and the board grid/list shared by
 // the bottom-bar popover and the pinned left panel.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -72,6 +72,9 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   const [query, setQuery] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string>();
+  const [creating, setCreating] = useState(false);
+  // [why] Sync guard: a second click can land before the `creating` re-render disables Create.
+  const creatingRef = useRef(false);
   // [why] Below md the pinned panel is hidden, so the popover owns the pin toggle
   const isMdUp = useIsMdUp();
 
@@ -122,9 +125,13 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
 
   const handleCreate = async (title: string) => {
     const workspaceId = createWorkspaceId;
-    if (!workspaceId) return;
+    if (!workspaceId || creatingRef.current) return;
+    creatingRef.current = true;
+    setCreating(true);
     setCreateError(undefined);
     const result = await dispatch(createSwitcherBoardThunk({ workspaceId, title }));
+    creatingRef.current = false;
+    setCreating(false);
     if (!createSwitcherBoardThunk.fulfilled.match(result)) {
       setCreateError(translations['BoardSwitcher.createFailed']);
       return;
@@ -383,6 +390,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
               onCreate={(t) => { void handleCreate(t); }}
               subtitle={createSubtitle}
               error={createError}
+              pending={creating}
             />
           </div>,
           document.body,
