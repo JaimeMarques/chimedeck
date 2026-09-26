@@ -146,7 +146,6 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
       return;
     }
     setCreateOpen(false);
-    void dispatch(fetchSwitcherBoardsThunk());
     dispatch(setActiveWorkspace(workspaceId));
     navigate(boardPath(result.payload));
     onDone?.();

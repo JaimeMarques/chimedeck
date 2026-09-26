@@ -28,12 +28,19 @@ function makeStore() {
   const posts: string[] = [];
   const settle: Array<() => void> = [];
   const actions: string[] = [];
+  // Boards the fake server has created, served back by the board-list GET.
+  const created: Array<{ id: string; title: string; state: string; workspace_id: string }> = [];
   const api = {
-    get: (url: string) => Promise.resolve({ data: url === '/workspaces' ? [{ id: 'w1', name: 'Phoenix' }] : [] }),
+    get: (url: string) => Promise.resolve({ data: url === '/workspaces' ? [{ id: 'w1', name: 'Phoenix' }] : [...created] }),
     // Held until the test calls settle[i]().
     post: (url: string) => {
       posts.push(url);
-      return new Promise((resolve) => { settle.push(() => { resolve({ data: { id: 'new1', title: 'Dup check' } }); }); });
+      return new Promise((resolve) => {
+        settle.push(() => {
+          created.push({ id: 'new1', title: 'Dup check', state: 'ACTIVE', workspace_id: 'w1' });
+          resolve({ data: { id: 'new1', title: 'Dup check' } });
+        });
+      });
     },
   };
   const log: Middleware = () => (next) => (action) => {
@@ -124,6 +131,8 @@ describe('BoardSwitcherBody create', () => {
     expect(path).toBe('/b/b1');
     expect(actions).not.toContain('workspaceShell/setActiveWorkspace');
     expect((second.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(false);
+    // The board created by the closed switcher still shows up in the reopened one.
+    expect(store.getState().boardSwitcher.boards.map((b) => b.id)).toContain('new1');
   });
 
   it('does not navigate when the session changed before the create finished', async () => {
@@ -132,9 +141,12 @@ describe('BoardSwitcherBody create', () => {
     const { create } = await openCreate(screen);
     act(() => { fireEvent.click(create); });
     act(() => { store.dispatch(clearAuth()); });
+    const fetchesBefore = actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length;
     settle[0]?.();
     await flush();
     expect(path).toBe('/b/b1');
     expect(actions).not.toContain('workspaceShell/setActiveWorkspace');
+    // No refresh on behalf of the previous account.
+    expect(actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length).toBe(fetchesBefore);
   });
 });

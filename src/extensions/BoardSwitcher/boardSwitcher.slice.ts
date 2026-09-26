@@ -156,8 +156,12 @@ export const toggleStarAndReconcileThunk = createAppAsyncThunk(
 
 export const createSwitcherBoardThunk = createAppAsyncThunk(
   'boardSwitcher/createBoard',
-  async ({ workspaceId, title }: { workspaceId: string; title: string }, { extra }) => {
+  async ({ workspaceId, title }: { workspaceId: string; title: string }, { extra, getState, dispatch }) => {
+    const session = getState().boardSwitcher.session;
     const res = await createBoard({ api: apiOf(extra), workspaceId, title });
+    // [why] Refresh here, not in the component: the switcher that started the create may be
+    // closed by now, and the new board must still show. Skipped after an account change.
+    if (getState().boardSwitcher.session === session) void dispatch(fetchSwitcherBoardsThunk());
     return res.data;
   },
   // [why] Synchronous, so a second submit in the same tick is refused before any POST.
