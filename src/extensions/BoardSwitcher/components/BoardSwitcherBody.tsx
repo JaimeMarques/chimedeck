@@ -1,6 +1,6 @@
 // BoardSwitcherBody — search, workspace chips and the board grid/list shared by
 // the bottom-bar popover and the pinned left panel.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from 'react-redux';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -122,6 +122,22 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
     setCreateError(undefined);
   }, [pathname]);
 
+  // [why] A fetch already out may predate the change that prompted this refresh (e.g. a
+  // header delete just before navigating), so queue one more to run once it settles.
+  const refreshQueuedRef = useRef(false);
+  const requestRefresh = useCallback(() => {
+    if (Object.keys(store.getState().boardSwitcher.fetchStartedAt).length > 0) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    void dispatch(fetchSwitcherBoardsThunk());
+  }, [dispatch, store]);
+  useEffect(() => {
+    if (status === 'loading' || !refreshQueuedRef.current) return;
+    refreshQueuedRef.current = false;
+    void dispatch(fetchSwitcherBoardsThunk());
+  }, [status, dispatch]);
+
   // [why] Some board mutations (BoardPage header delete/star) are plain API calls with no
   // Redux action; the delete navigates away, so refresh the (pinned) list on in-app
   // navigation. The first run is the mount, which the effect above already fetches for.
@@ -129,9 +145,8 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   useEffect(() => {
     if (seenPathRef.current === pathname) return;
     seenPathRef.current = pathname;
-    if (Object.keys(store.getState().boardSwitcher.fetchStartedAt).length > 0) return;
-    void dispatch(fetchSwitcherBoardsThunk());
-  }, [pathname, dispatch, store]);
+    requestRefresh();
+  }, [pathname, requestRefresh]);
 
   // [why] BoardPage's rename/background/archive changes carry no board id in Redux, so mirror the
   // open board's title/background/state into the list when they change (not on first sight: it may be stale).
@@ -141,8 +156,14 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
     if (!loadedBoard || prev?.id !== loadedBoard.id) return;
     const { id, title, background, state } = loadedBoard;
     if (prev.title === title && prev.background === background && prev.state === state) return;
+    // [why] An unarchived board is no longer in the list and the open board lacks the fields
+    // a list row needs, so re-read the list instead of patching.
+    if (state === 'ACTIVE' && !store.getState().boardSwitcher.boards.some((b) => b.id === id)) {
+      requestRefresh();
+      return;
+    }
     dispatch(patchSwitcherBoard({ id, title, background: background ?? null, state }));
-  }, [dispatch, loadedBoard]);
+  }, [dispatch, loadedBoard, requestRefresh, store]);
 
   // A saved filter may point at a workspace the user no longer belongs to
   const workspaceFilter = workspaces.some((w) => w.id === prefs.workspaceFilter) ? prefs.workspaceFilter : 'all';

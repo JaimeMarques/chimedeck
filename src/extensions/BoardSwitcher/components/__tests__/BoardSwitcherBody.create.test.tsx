@@ -51,7 +51,9 @@ function makeStore() {
     reducer: {
       boardSwitcher,
       workspaceShell: () => ({ workspaces: [{ id: 'w1', name: 'Phoenix' }], activeWorkspaceId: 'w1' }),
-      board: () => ({ board: null }),
+      // Test action 'test/setBoard' stands in for BoardPage loading/updating the open board.
+      board: (s: { board: unknown } = { board: null }, a: { type: string; payload?: unknown }) =>
+        a.type === 'test/setBoard' ? { board: a.payload } : s,
     },
     middleware: (gDM) =>
       gDM({ thunk: { extraArgument: { api } }, serializableCheck: false }).concat(log),
@@ -207,5 +209,30 @@ describe('BoardSwitcherBody create', () => {
     // e.g. BoardPage's header delete: a plain API call, then navigation to the boards page
     act(() => { nav('/workspaces/w1/boards'); });
     expect(fetches()).toBe(2);
+  });
+
+  it('queues a navigation refresh behind a fetch that is still out', async () => {
+    const { store, actions } = makeStore();
+    mount(store);
+    const fetches = () => actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length;
+    // The mount fetch is still out (it may predate e.g. a header delete) when we navigate.
+    act(() => { nav('/workspaces/w1/boards'); });
+    expect(fetches()).toBe(1);
+    await flush();
+    expect(fetches()).toBe(2); // queued refresh ran once the first settled
+    await flush();
+    expect(fetches()).toBe(2); // and only once
+  });
+
+  it('re-reads the list when the open board is unarchived', async () => {
+    const { store, actions } = makeStore();
+    mount(store);
+    await flush();
+    const fetches = () => actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length;
+    const open = { id: 'arch1', title: 'Old', background: null, state: 'ARCHIVED' };
+    act(() => { store.dispatch({ type: 'test/setBoard', payload: open }); });
+    const before = fetches();
+    act(() => { store.dispatch({ type: 'test/setBoard', payload: { ...open, state: 'ACTIVE' } }); });
+    expect(fetches()).toBe(before + 1);
   });
 });
