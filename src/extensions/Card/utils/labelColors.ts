@@ -26,17 +26,26 @@ function parseHex(hex: string): [number, number, number] | null {
   return [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16)) as [number, number, number];
 }
 
-function isLight(hex: string): boolean {
-  const rgb = parseHex(hex);
-  if (!rgb) return false;
+function luminance(rgb: [number, number, number]): number {
   const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
   const [r, g, b] = rgb;
-  return 0.2126 * lin(r / 255) + 0.7152 * lin(g / 255) + 0.0722 * lin(b / 255) > 0.3;
+  return 0.2126 * lin(r / 255) + 0.7152 * lin(g / 255) + 0.0722 * lin(b / 255);
 }
 
-/** Readable fixed text colour for a label background (theme-independent). */
+/** Whichever of `dark`/`light` has the higher WCAG contrast ratio against `bg`.
+ *  [why] A fixed luminance cut-off picks the weaker text for mid colours (e.g. #ef4444). */
+function pickText(bg: [number, number, number], dark: string, light: string): string {
+  const ratio = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  const l = luminance(bg);
+  const lum = (hex: string) => luminance(parseHex(hex) ?? [0, 0, 0]);
+  return ratio(l, lum(dark)) >= ratio(l, lum(light)) ? dark : light;
+}
+
+/** Readable fixed text colour for a label background (theme-independent). A colourless
+ *  label has a transparent background, so it takes the theme text colour. */
 export function contrastText(bgHex: string): string {
-  return isLight(bgHex) ? '#18181b' : '#ffffff';
+  const rgb = parseHex(bgHex);
+  return rgb ? pickText(rgb, '#18181b', '#ffffff') : 'var(--text-base)';
 }
 
 /** Trello dark-mode label background for any label hex. */
@@ -52,7 +61,8 @@ export function trelloLabelTone(hex: string): string {
 
 /** Text colour for a Trello-tone background. */
 export function trelloLabelText(tone: string): string {
-  return isLight(tone) ? TRELLO_BASE : '#dee4ea';
+  const rgb = parseHex(tone);
+  return rgb ? pickText(rgb, TRELLO_BASE, '#dee4ea') : '#dee4ea';
 }
 
 /** Inline CSS vars consumed by `.cd-label` (default look) and `.theme-trello .cd-label`. */

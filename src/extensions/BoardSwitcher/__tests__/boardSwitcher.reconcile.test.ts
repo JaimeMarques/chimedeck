@@ -3,6 +3,7 @@
 // once every request (including the reconcile fetch) has finished.
 import { describe, expect, it } from 'bun:test';
 import { configureStore } from '@reduxjs/toolkit';
+import { logoutThunk } from '../../Auth/duck/authDuck';
 import reducer, { fetchSwitcherBoardsThunk, toggleStarAndReconcileThunk } from '../boardSwitcher.slice';
 
 interface Deferred { resolve: () => void; reject: (e: Error) => void }
@@ -32,7 +33,7 @@ function setup(initialStarred: boolean) {
   const dispatch = store.dispatch as unknown as (action: unknown) => Promise<unknown>;
   const starred = () => store.getState().boardSwitcher.boards[0]?.isStarred;
   const flush = () => new Promise((r) => setTimeout(r, 0));
-  return { server, starCalls, dispatch, starred, flush };
+  return { server, starCalls, dispatch, starred, flush, store };
 }
 
 describe('boardSwitcher star toggles end on server state', () => {
@@ -82,6 +83,31 @@ describe('boardSwitcher star toggles end on server state', () => {
     await flush();
     starCalls[0]?.resolve();
     await done;
+    expect(starred()).toBe(true);
+  });
+
+  it("a previous account's toggle settling late does not end the next account's burst", async () => {
+    const { server, starCalls, dispatch, starred, flush, store } = setup(false);
+    await dispatch(fetchSwitcherBoardsThunk());
+    // Account A stars the shared board; the request is still out at logout.
+    const doneA = dispatch(toggleStarAndReconcileThunk({ boardId: 'b1', starred: true }));
+    await flush();
+    store.dispatch(logoutThunk.pending('lo'));
+
+    // Account B, same board ID: star (1), A's toggle settles (0), unstar (2).
+    await dispatch(fetchSwitcherBoardsThunk());
+    const done = [dispatch(toggleStarAndReconcileThunk({ boardId: 'b1', starred: true }))];
+    await flush();
+    starCalls[0]?.resolve();
+    await doneA;
+    done.push(dispatch(toggleStarAndReconcileThunk({ boardId: 'b1', starred: false })));
+    await flush();
+    starCalls[2]?.resolve(); // server applies B's unstar first…
+    starCalls[1]?.resolve(); // …then B's star
+    await Promise.all(done);
+    await flush();
+
+    expect(server.starred).toBe(true);
     expect(starred()).toBe(true);
   });
 });

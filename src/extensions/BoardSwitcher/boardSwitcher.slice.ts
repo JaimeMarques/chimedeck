@@ -27,9 +27,11 @@ interface StarMutation {
   /** isStarred before the latest toggle — its rollback target. */
   prev: boolean;
   desired: boolean;
-  inFlight: number;
+  /** Unsettled toggles, by requestId. [why] A completion not listed here was started
+   *  before a session reset (same board ID, other account) and must not touch counts. */
+  pendingIds: string[];
   touchedAt: number;
-  /** Toggles in the current burst (since inFlight was last 0), and whether any failed. */
+  /** Toggles in the current burst (since pendingIds was last empty), and whether any failed. */
   burstSize: number;
   burstFailed: boolean;
 }
@@ -37,7 +39,7 @@ interface StarMutation {
 /** [why] Latest-wins is only a guess once toggles overlapped (the server may apply them
  *  in another order) or one failed, so re-read the server once the burst has settled. */
 export const starNeedsReconcile = (m: StarMutation | undefined): boolean =>
-  m !== undefined && m.inFlight === 0 && (m.burstFailed || m.burstSize > 1);
+  m !== undefined && m.pendingIds.length === 0 && (m.burstFailed || m.burstSize > 1);
 
 interface BoardSwitcherState {
   boards: Board[];
@@ -57,6 +59,11 @@ interface BoardSwitcherState {
   /** [why] A fetch that overlaps a board's toggle may carry the old isStarred, so that
    *  board keeps its in-state value; only the latest toggle may roll back. */
   starMutations: Record<string, StarMutation>;
+  /** Bumped on every session reset, so async work can tell it outlived its session. */
+  session: number;
+  /** requestId of the create in flight this session. [why] In the slice, not the component:
+   *  closing and reopening the switcher must not allow a second concurrent create. */
+  creatingId: string | null;
 }
 
 const DEFAULT_PREFS: BoardSwitcherPrefs = {
@@ -95,6 +102,8 @@ const initialState: BoardSwitcherState = {
   fetchStartedAt: {},
   appliedFetchAt: 0,
   starMutations: {},
+  session: 0,
+  creatingId: null,
 };
 
 // ---------- Thunks ----------
@@ -151,6 +160,8 @@ export const createSwitcherBoardThunk = createAppAsyncThunk(
     const res = await createBoard({ api: apiOf(extra), workspaceId, title });
     return res.data;
   },
+  // [why] Synchronous, so a second submit in the same tick is refused before any POST.
+  { condition: (_, { getState }) => getState().boardSwitcher.creatingId === null },
 );
 
 // ---------- Slice ----------
@@ -176,8 +187,8 @@ function settleStatus(state: BoardSwitcherState) {
 
 function settleStar(state: BoardSwitcherState, boardId: string, requestId: string, ok: boolean) {
   const m = state.starMutations[boardId];
-  if (!m) return;
-  m.inFlight = Math.max(0, m.inFlight - 1);
+  if (!m?.pendingIds.includes(requestId)) return;
+  m.pendingIds = m.pendingIds.filter((id) => id !== requestId);
   m.touchedAt = ++state.seq;
   if (!ok) m.burstFailed = true;
   // [why] An older toggle settling (either way) must not undo a newer one.
@@ -211,7 +222,7 @@ const boardSwitcherSlice = createSlice({
           // [why] New objects: the fetched payload is frozen.
           state.boards = action.payload.boards.map((b) => {
             const m = state.starMutations[b.id];
-            if (!m || (m.inFlight === 0 && m.touchedAt < startedAt)) return b;
+            if (!m || (m.pendingIds.length === 0 && m.touchedAt < startedAt)) return b;
             return { ...b, isStarred: current.get(b.id) ?? m.desired };
           });
           state.loadFailed = false;
@@ -233,12 +244,12 @@ const boardSwitcherSlice = createSlice({
         const { boardId, starred } = action.meta.arg;
         const prev = state.boards.find((b) => b.id === boardId)?.isStarred === true;
         const m = state.starMutations[boardId];
-        const continuing = m !== undefined && m.inFlight > 0;
+        const continuing = m !== undefined && m.pendingIds.length > 0;
         state.starMutations[boardId] = {
           latestId: action.meta.requestId,
           prev,
           desired: starred,
-          inFlight: (m?.inFlight ?? 0) + 1,
+          pendingIds: [...(m?.pendingIds ?? []), action.meta.requestId],
           touchedAt: ++state.seq,
           burstSize: continuing ? m.burstSize + 1 : 1,
           burstFailed: continuing ? m.burstFailed : false,
@@ -251,11 +262,19 @@ const boardSwitcherSlice = createSlice({
       .addCase(toggleSwitcherStarThunk.rejected, (state, action) => {
         settleStar(state, action.meta.arg.boardId, action.meta.requestId, false);
       })
+      .addCase(createSwitcherBoardThunk.pending, (state, action) => {
+        state.creatingId = action.meta.requestId;
+      })
+      // [why] Match the requestId: a previous session's create settling late must not
+      // release the current session's guard.
+      .addMatcher(isAnyOf(createSwitcherBoardThunk.fulfilled, createSwitcherBoardThunk.rejected), (state, action) => {
+        if (state.creatingId === action.meta.requestId) state.creatingId = null;
+      })
       // [why] Logout is client-side navigation, so without this the next account would see
       // the previous one's boards. Prefs stay (per browser); seq stays monotonic.
       .addMatcher(
         isAnyOf(clearAuth, logoutThunk.pending, loginThunk.fulfilled, signupThunk.fulfilled, setCredentials),
-        (state) => ({ ...initialState, prefs: state.prefs, seq: state.seq }),
+        (state) => ({ ...initialState, prefs: state.prefs, seq: state.seq, session: state.session + 1 }),
       );
   },
 });
@@ -269,3 +288,4 @@ export const selectSwitcherBoards = (state: RootState) => state.boardSwitcher.bo
 export const selectSwitcherStatus = (state: RootState) => state.boardSwitcher.status;
 export const selectSwitcherIncomplete = (state: RootState) => state.boardSwitcher.incomplete;
 export const selectSwitcherPrefs = (state: RootState) => state.boardSwitcher.prefs;
+export const selectSwitcherCreating = (state: RootState) => state.boardSwitcher.creatingId !== null;

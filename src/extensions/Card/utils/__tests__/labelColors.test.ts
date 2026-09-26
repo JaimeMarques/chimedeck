@@ -2,11 +2,19 @@ import { describe, expect, it } from 'bun:test';
 import { contrastText, labelStyle, trelloLabelText, trelloLabelTone } from '../labelColors';
 
 describe('labelColors', () => {
-  it('picks fixed dark text on light labels and white on dark ones', () => {
-    expect(contrastText('#F2D600')).toBe('#18181b');
+  it('picks the fixed text colour with the higher contrast ratio', () => {
+    expect(contrastText('#F2D600')).toBe('#18181b'); // yellow
     expect(contrastText('#fff')).toBe('#18181b');
+    expect(contrastText('#61BD4F')).toBe('#18181b'); // green
+    expect(contrastText('#ef4444')).toBe('#18181b'); // red: 4.71:1 vs 3.76:1 on white
+    expect(contrastText('#ec4899')).toBe('#18181b'); // pink: 5.02:1 vs 3.53:1 on white
     expect(contrastText('#0079BF')).toBe('#ffffff');
-    expect(contrastText('')).toBe('#ffffff');
+    expect(contrastText('#344563')).toBe('#ffffff'); // dark
+  });
+
+  it('gives a colourless label the theme text colour', () => {
+    expect(contrastText('')).toBe('var(--text-base)');
+    expect(labelStyle('')).toMatchObject({ '--label-bg': '', '--label-fg': 'var(--text-base)' });
   });
 
   it('maps legacy Trello hexes case-insensitively', () => {
@@ -24,6 +32,9 @@ describe('labelColors', () => {
   it('uses light text on dark tones', () => {
     expect(trelloLabelText('#7F5F01')).toBe('#dee4ea');
     expect(trelloLabelText('#a5a6a8')).toBe('#1d2125');
+    // #AE2E24 (red): light 5.10:1 vs dark 2.48:1; mid grey #8f9194: dark 5.13:1 vs light 2.47:1
+    expect(trelloLabelText('#AE2E24')).toBe('#dee4ea');
+    expect(trelloLabelText('#8f9194')).toBe('#1d2125');
   });
 
   it('exposes both looks as CSS vars', () => {

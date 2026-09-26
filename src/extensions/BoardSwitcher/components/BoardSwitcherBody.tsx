@@ -2,6 +2,7 @@
 // the bottom-bar popover and the pinned left panel.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useStore } from 'react-redux';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ChevronDownIcon,
@@ -15,6 +16,7 @@ import {
 import { StarIcon as StarSolidIcon } from '@heroicons/react/24/solid';
 import { useAppDispatch } from '~/hooks/useAppDispatch';
 import { useAppSelector } from '~/hooks/useAppSelector';
+import type { RootState } from '~/store';
 import IconButton from '~/common/components/IconButton';
 import { boardPath } from '~/common/routing/shortUrls';
 import { cn } from '~/common/utils/cn';
@@ -30,6 +32,7 @@ import {
   createSwitcherBoardThunk,
   fetchSwitcherBoardsThunk,
   selectSwitcherBoards,
+  selectSwitcherCreating,
   selectSwitcherIncomplete,
   selectSwitcherPrefs,
   selectSwitcherStatus,
@@ -60,6 +63,7 @@ const BoardThumb = ({ board, className }: { board: Board; className: string }) =
 
 export default function BoardSwitcherBody({ variant, onDone }: Props) {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const boards = useAppSelector(selectSwitcherBoards);
@@ -72,11 +76,16 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   const [query, setQuery] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string>();
-  const [creating, setCreating] = useState(false);
-  // [why] Sync guard: a second click can land before the `creating` re-render disables Create.
-  const creatingRef = useRef(false);
+  // [why] From the slice: a create started before this switcher was closed and reopened still counts.
+  const creating = useAppSelector(selectSwitcherCreating);
+  const mountedRef = useRef(false);
   // [why] Below md the pinned panel is hidden, so the popover owns the pin toggle
   const isMdUp = useIsMdUp();
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Refetch whenever the popover opens / the pinned panel mounts
   useEffect(() => {
@@ -125,15 +134,15 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
 
   const handleCreate = async (title: string) => {
     const workspaceId = createWorkspaceId;
-    if (!workspaceId || creatingRef.current) return;
-    creatingRef.current = true;
-    setCreating(true);
+    if (!workspaceId) return;
+    const session = store.getState().boardSwitcher.session;
     setCreateError(undefined);
     const result = await dispatch(createSwitcherBoardThunk({ workspaceId, title }));
-    creatingRef.current = false;
-    setCreating(false);
+    // [why] The user closed the switcher or changed account meanwhile: don't pull them away.
+    if (!mountedRef.current || store.getState().boardSwitcher.session !== session) return;
     if (!createSwitcherBoardThunk.fulfilled.match(result)) {
-      setCreateError(translations['BoardSwitcher.createFailed']);
+      // A refused duplicate (another create in flight) is not a failure.
+      if (!result.meta.condition) setCreateError(translations['BoardSwitcher.createFailed']);
       return;
     }
     setCreateOpen(false);
