@@ -76,6 +76,8 @@ jobs:
           server/mods/events/policy.ts
       - run: bunx tsc -p tests/tsconfig.json --noEmit
       - run: bun run test:db:board-members
+      - name: Verify cross-board assignment eligibility on PostgreSQL
+        run: bun run tests/db/crossBoardAssignmentEligibility.ts
       - name: Run board-member HTTP contracts against the real server
         shell: bash
         run: |
