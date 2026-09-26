@@ -74,6 +74,10 @@ interface BoardSwitcherState {
   /** seq at which each in-flight open-board fetch (BoardPage) started, by requestId.
    *  [why] Its isStarred is server truth for that board unless a toggle overlapped it. */
   boardFetchAt: Record<string, number>;
+  /** Start seq of the newest accepted server read of each board's isStarred, from either the
+   *  switcher list fetch or the open-board fetch. [why] The two race: an older read of one kind
+   *  landing after a newer read of the other must not revert the star. */
+  starReadAt: Record<string, number>;
   /** Bumped on every session reset, so async work can tell it outlived its session. */
   session: number;
   /** requestId of the create in flight this session. [why] In the slice, not the component:
@@ -124,6 +128,7 @@ const initialState: BoardSwitcherState = {
   appliedFetchAt: 0,
   starMutations: {},
   boardFetchAt: {},
+  starReadAt: {},
   session: 0,
   creatingId: null,
   boardEdits: {},
@@ -353,8 +358,12 @@ const boardSwitcherSlice = createSlice({
           // [why] New objects: the fetched payload is frozen.
           state.boards = fetched.map((b) => {
             const m = state.starMutations[b.id];
-            if (!m || (m.pendingIds.length === 0 && m.touchedAt < startedAt)) return b;
-            return { ...b, isStarred: current.get(b.id) ?? m.desired };
+            const newerRead = (state.starReadAt[b.id] ?? -1) > startedAt;
+            if (!newerRead && (!m || (m.pendingIds.length === 0 && m.touchedAt < startedAt))) {
+              state.starReadAt[b.id] = startedAt;
+              return b;
+            }
+            return { ...b, isStarred: current.get(b.id) ?? m?.desired ?? b.isStarred === true };
           });
           state.loadFailed = false;
         }
@@ -407,6 +416,8 @@ const boardSwitcherSlice = createSlice({
         if (typeof isStarred !== 'boolean') return;
         const m = state.starMutations[id];
         if (m && (m.pendingIds.length > 0 || m.touchedAt > startedAt)) return;
+        if ((state.starReadAt[id] ?? -1) > startedAt) return; // a newer list read already landed
+        state.starReadAt[id] = startedAt;
         adoptStar(state, id, isStarred, action.meta.requestId, startedAt);
       })
       .addCase(fetchBoardDataThunk.rejected, (state, action) => {

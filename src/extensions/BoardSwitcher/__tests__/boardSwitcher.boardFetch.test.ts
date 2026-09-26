@@ -104,6 +104,18 @@ describe('boardSwitcher — the open board fetch reconciles stars', () => {
     expect(starred(state)).toBe(true);
   });
 
+  it('does not let an older board fetch revert a newer switcher refresh', () => {
+    let state = reducer(undefined, fetchSwitcherBoardsThunk.pending('f0'));
+    state = reducer(state, fetchSwitcherBoardsThunk.fulfilled({ boards: [board(false)], incomplete: false }, 'f0'));
+    state = reducer(state, fetchBoardDataThunk.pending('g', load)); // reads the old value
+    // Starred in another tab; the newer switcher refresh reads it and finishes first.
+    state = reducer(state, fetchSwitcherBoardsThunk.pending('f1'));
+    state = reducer(state, fetchSwitcherBoardsThunk.fulfilled({ boards: [board(true)], incomplete: false }, 'f1'));
+    expect(starred(state)).toBe(true);
+    state = reducer(state, fetchBoardDataThunk.fulfilled(loaded(false), 'g', load));
+    expect(starred(state)).toBe(true);
+  });
+
   it('ignores a previous session board fetch landing after logout', () => {
     let state = reducer(undefined, fetchBoardDataThunk.pending('g', load));
     state = reducer(state, logoutThunk.pending('lo'));
