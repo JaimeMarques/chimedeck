@@ -179,7 +179,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
                   onClick={(e) => { onBoardLinkClick(e, b); }}
                   aria-current={isCurrent(b) ? 'page' : undefined}
                   className={cn(
-                    'flex h-full flex-col overflow-hidden rounded-lg border bg-bg-surface hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                    'flex h-full flex-col overflow-hidden rounded-lg border bg-bg-surface group-hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                     isCurrent(b) ? 'border-primary' : 'border-border',
                   )}
                 >
@@ -216,7 +216,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
                 aria-current={current ? 'page' : undefined}
                 className={cn(
                   'relative flex items-center gap-2.5 rounded-md py-1.5 pl-2.5 pr-8 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-                  current ? 'bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)]' : 'hover:bg-bg-overlay',
+                  current ? 'bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)]' : 'group-hover:bg-bg-overlay',
                 )}
               >
                 {current && <span className="absolute inset-y-1 left-0 w-[3px] rounded-r bg-primary" aria-hidden="true" />}

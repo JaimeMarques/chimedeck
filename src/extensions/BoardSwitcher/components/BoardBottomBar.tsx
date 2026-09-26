@@ -99,8 +99,14 @@ export default function BoardBottomBar({ boardId, boardTabActive, onShowBoardTab
 
   // Close popovers on navigation
   useEffect(() => { setOpen(null); }, [pathname]);
-  // Growing past md with pinned on shows the panel, so drop the popover
-  useEffect(() => { if (pinned) setOpen((o) => (o === 'switcher' ? null : o)); }, [pinned]);
+  // Growing past md with pinned on: the panel replaces an open popover
+  // [why] AppShell renders the panel only when pinnedOpen, so force it open or nothing shows.
+  // (Pinned mode never opens the switcher popover, so this fires only on that transition.)
+  useEffect(() => {
+    if (!pinned || open !== 'switcher') return;
+    setOpen(null);
+    dispatch(setSwitcherPrefs({ pinnedOpen: true }));
+  }, [pinned, open, dispatch]);
 
   // Close popovers on outside click and Escape
   useEffect(() => {

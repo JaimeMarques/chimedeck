@@ -23,9 +23,13 @@ interface BoardSwitcherState {
   boards: Board[];
   status: 'idle' | 'loading' | 'error';
   prefs: BoardSwitcherPrefs;
-  /** Star toggles still in flight, by board id. [why] A board fetch that started
-   *  before the toggle resolves with the old isStarred; these are re-applied over it. */
-  pendingStars: Record<string, boolean>;
+  /** Monotonic event counter ordering fetch starts against star toggles. */
+  seq: number;
+  /** seq at which each in-flight fetch started, by requestId. */
+  fetchStartedAt: Record<string, number>;
+  /** seq of each board's latest star toggle. [why] A fetch that started before the
+   *  toggle may resolve with the old isStarred, so its value loses to the in-state one. */
+  starTouchedAt: Record<string, number>;
 }
 
 const DEFAULT_PREFS: BoardSwitcherPrefs = {
@@ -58,7 +62,9 @@ const initialState: BoardSwitcherState = {
   boards: [],
   status: 'idle',
   prefs: loadPrefs(),
-  pendingStars: {},
+  seq: 0,
+  fetchStartedAt: {},
+  starTouchedAt: {},
 };
 
 // ---------- Thunks ----------
@@ -108,8 +114,8 @@ function setStarred(state: BoardSwitcherState, boardId: string, starred: boolean
   if (board) board.isStarred = starred;
 }
 
-function clearPendingStar(state: BoardSwitcherState, boardId: string) {
-  state.pendingStars = Object.fromEntries(Object.entries(state.pendingStars).filter(([id]) => id !== boardId));
+function forgetFetch(state: BoardSwitcherState, requestId: string) {
+  state.fetchStartedAt = Object.fromEntries(Object.entries(state.fetchStartedAt).filter(([id]) => id !== requestId));
 }
 
 const boardSwitcherSlice = createSlice({
@@ -122,27 +128,30 @@ const boardSwitcherSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(fetchSwitcherBoardsThunk.pending, (state) => {
+      .addCase(fetchSwitcherBoardsThunk.pending, (state, action) => {
         state.status = 'loading';
+        state.fetchStartedAt[action.meta.requestId] = ++state.seq;
       })
       .addCase(fetchSwitcherBoardsThunk.fulfilled, (state, action) => {
         state.status = 'idle';
-        const pending = state.pendingStars;
-        state.boards = action.payload.map((b) => (b.id in pending ? { ...b, isStarred: pending[b.id] === true } : b));
+        const startedAt = state.fetchStartedAt[action.meta.requestId] ?? Infinity;
+        forgetFetch(state, action.meta.requestId);
+        const current = new Map(state.boards.map((b) => [b.id, b.isStarred === true]));
+        // [why] New objects: the fetched payload is frozen.
+        state.boards = action.payload.map((b) =>
+          (state.starTouchedAt[b.id] ?? 0) > startedAt && current.has(b.id) ? { ...b, isStarred: current.get(b.id) === true } : b,
+        );
       })
-      .addCase(fetchSwitcherBoardsThunk.rejected, (state) => {
+      .addCase(fetchSwitcherBoardsThunk.rejected, (state, action) => {
         state.status = 'error';
+        forgetFetch(state, action.meta.requestId);
       })
       // Optimistic star toggle with rollback on failure
       .addCase(toggleSwitcherStarThunk.pending, (state, action) => {
         setStarred(state, action.meta.arg.boardId, action.meta.arg.starred);
-        state.pendingStars[action.meta.arg.boardId] = action.meta.arg.starred;
-      })
-      .addCase(toggleSwitcherStarThunk.fulfilled, (state, action) => {
-        clearPendingStar(state, action.meta.arg.boardId);
+        state.starTouchedAt[action.meta.arg.boardId] = ++state.seq;
       })
       .addCase(toggleSwitcherStarThunk.rejected, (state, action) => {
-        clearPendingStar(state, action.meta.arg.boardId);
         setStarred(state, action.meta.arg.boardId, !action.meta.arg.starred);
       });
   },
