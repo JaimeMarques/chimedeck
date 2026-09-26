@@ -19,17 +19,35 @@ export interface BoardSwitcherPrefs {
   boardsCollapsed: boolean;
 }
 
+/** A board's star toggles: the latest one, how many are unsettled, and when the
+ *  board's star last changed (pending or settle), on the slice's seq clock. */
+interface StarMutation {
+  latestId: string;
+  /** isStarred before the latest toggle — its rollback target. */
+  prev: boolean;
+  desired: boolean;
+  inFlight: number;
+  touchedAt: number;
+}
+
 interface BoardSwitcherState {
   boards: Board[];
   status: 'idle' | 'loading' | 'error';
+  /** The newest settled fetch failed (status shows it once nothing is in flight). */
+  loadFailed: boolean;
+  /** Some (not all) workspaces failed to load on the last applied fetch. */
+  incomplete: boolean;
   prefs: BoardSwitcherPrefs;
-  /** Monotonic event counter ordering fetch starts against star toggles. */
+  /** Monotonic event counter ordering fetches against star toggles. */
   seq: number;
   /** seq at which each in-flight fetch started, by requestId. */
   fetchStartedAt: Record<string, number>;
-  /** seq of each board's latest star toggle. [why] A fetch that started before the
-   *  toggle may resolve with the old isStarred, so its value loses to the in-state one. */
-  starTouchedAt: Record<string, number>;
+  /** Start seq of the newest fetch whose result was applied. [why] An older fetch that
+   *  lands later must not replace newer data or flag an error over it. */
+  appliedFetchAt: number;
+  /** [why] A fetch that overlaps a board's toggle may carry the old isStarred, so that
+   *  board keeps its in-state value; only the latest toggle may roll back. */
+  starMutations: Record<string, StarMutation>;
 }
 
 const DEFAULT_PREFS: BoardSwitcherPrefs = {
@@ -61,10 +79,13 @@ function loadPrefs(): BoardSwitcherPrefs {
 const initialState: BoardSwitcherState = {
   boards: [],
   status: 'idle',
+  loadFailed: false,
+  incomplete: false,
   prefs: loadPrefs(),
   seq: 0,
   fetchStartedAt: {},
-  starTouchedAt: {},
+  appliedFetchAt: 0,
+  starMutations: {},
 };
 
 // ---------- Thunks ----------
@@ -81,13 +102,17 @@ export const fetchSwitcherBoardsThunk = createAppAsyncThunk(
     const results = await Promise.allSettled(
       workspaces.map((w) => listBoards({ api, workspaceId: w.id })),
     );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    // [why] Every workspace failing is an outage, not "no boards": surface it as an error.
+    if (failed > 0 && failed === results.length) throw new Error('Could not load boards');
     // [why] The list endpoint returns raw rows (workspace_id), so stamp the camelCase
     // workspaceId the filter chips and setActiveWorkspace rely on.
-    return results
+    const boards = results
       .flatMap((r, i) =>
         r.status === 'fulfilled' ? r.value.data.map((b) => ({ ...b, workspaceId: workspaces[i]?.id ?? b.workspaceId })) : [],
       )
       .filter((b) => b.state === 'ACTIVE');
+    return { boards, incomplete: failed > 0 };
   },
 );
 
@@ -114,8 +139,28 @@ function setStarred(state: BoardSwitcherState, boardId: string, starred: boolean
   if (board) board.isStarred = starred;
 }
 
-function forgetFetch(state: BoardSwitcherState, requestId: string) {
+/** Drops a settled fetch and returns its start seq (an unknown fetch counts as starting now). */
+function forgetFetch(state: BoardSwitcherState, requestId: string): number {
+  const startedAt = state.fetchStartedAt[requestId] ?? state.seq;
   state.fetchStartedAt = Object.fromEntries(Object.entries(state.fetchStartedAt).filter(([id]) => id !== requestId));
+  return startedAt;
+}
+
+function settleStatus(state: BoardSwitcherState) {
+  if (Object.keys(state.fetchStartedAt).length > 0) state.status = 'loading';
+  else state.status = state.loadFailed ? 'error' : 'idle';
+}
+
+function settleStar(state: BoardSwitcherState, boardId: string, requestId: string, ok: boolean) {
+  const m = state.starMutations[boardId];
+  if (!m) return;
+  m.inFlight = Math.max(0, m.inFlight - 1);
+  m.touchedAt = ++state.seq;
+  // [why] An older toggle settling (either way) must not undo a newer one.
+  if (m.latestId !== requestId) return;
+  if (!ok) m.desired = m.prev;
+  // Re-assert: a fetch that landed mid-flight may have been applied in between.
+  setStarred(state, boardId, m.desired);
 }
 
 const boardSwitcherSlice = createSlice({
@@ -133,26 +178,48 @@ const boardSwitcherSlice = createSlice({
         state.fetchStartedAt[action.meta.requestId] = ++state.seq;
       })
       .addCase(fetchSwitcherBoardsThunk.fulfilled, (state, action) => {
-        state.status = 'idle';
-        const startedAt = state.fetchStartedAt[action.meta.requestId] ?? Infinity;
-        forgetFetch(state, action.meta.requestId);
-        const current = new Map(state.boards.map((b) => [b.id, b.isStarred === true]));
-        // [why] New objects: the fetched payload is frozen.
-        state.boards = action.payload.map((b) =>
-          (state.starTouchedAt[b.id] ?? 0) > startedAt && current.has(b.id) ? { ...b, isStarred: current.get(b.id) === true } : b,
-        );
+        const startedAt = forgetFetch(state, action.meta.requestId);
+        if (startedAt >= state.appliedFetchAt) {
+          state.appliedFetchAt = startedAt;
+          state.incomplete = action.payload.incomplete;
+          const current = new Map(state.boards.map((b) => [b.id, b.isStarred === true]));
+          // [why] New objects: the fetched payload is frozen.
+          state.boards = action.payload.boards.map((b) => {
+            const m = state.starMutations[b.id];
+            if (!m || (m.inFlight === 0 && m.touchedAt < startedAt)) return b;
+            return { ...b, isStarred: current.get(b.id) ?? m.desired };
+          });
+          state.loadFailed = false;
+        }
+        settleStatus(state);
       })
       .addCase(fetchSwitcherBoardsThunk.rejected, (state, action) => {
-        state.status = 'error';
-        forgetFetch(state, action.meta.requestId);
+        const startedAt = forgetFetch(state, action.meta.requestId);
+        // [why] The newest attempt failed; an older fetch landing later must not mask that.
+        if (startedAt >= state.appliedFetchAt) {
+          state.appliedFetchAt = startedAt;
+          state.loadFailed = true;
+        }
+        settleStatus(state);
       })
-      // Optimistic star toggle with rollback on failure
+      // Optimistic star toggle; see settleStar for completion/rollback
       .addCase(toggleSwitcherStarThunk.pending, (state, action) => {
-        setStarred(state, action.meta.arg.boardId, action.meta.arg.starred);
-        state.starTouchedAt[action.meta.arg.boardId] = ++state.seq;
+        const { boardId, starred } = action.meta.arg;
+        const prev = state.boards.find((b) => b.id === boardId)?.isStarred === true;
+        state.starMutations[boardId] = {
+          latestId: action.meta.requestId,
+          prev,
+          desired: starred,
+          inFlight: (state.starMutations[boardId]?.inFlight ?? 0) + 1,
+          touchedAt: ++state.seq,
+        };
+        setStarred(state, boardId, starred);
+      })
+      .addCase(toggleSwitcherStarThunk.fulfilled, (state, action) => {
+        settleStar(state, action.meta.arg.boardId, action.meta.requestId, true);
       })
       .addCase(toggleSwitcherStarThunk.rejected, (state, action) => {
-        setStarred(state, action.meta.arg.boardId, !action.meta.arg.starred);
+        settleStar(state, action.meta.arg.boardId, action.meta.requestId, false);
       });
   },
 });
@@ -164,4 +231,5 @@ export default boardSwitcherSlice.reducer;
 
 export const selectSwitcherBoards = (state: RootState) => state.boardSwitcher.boards;
 export const selectSwitcherStatus = (state: RootState) => state.boardSwitcher.status;
+export const selectSwitcherIncomplete = (state: RootState) => state.boardSwitcher.incomplete;
 export const selectSwitcherPrefs = (state: RootState) => state.boardSwitcher.prefs;

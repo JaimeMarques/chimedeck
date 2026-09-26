@@ -18,6 +18,9 @@
   "BoardSwitcher.unstar": "Unstar board",
   "BoardSwitcher.noBoards": "No boards found",
   "BoardSwitcher.loading": "Loading…",
+  "BoardSwitcher.loadFailed": "Couldn't load your boards.",
+  "BoardSwitcher.loadIncomplete": "Some workspaces couldn't be loaded.",
+  "BoardSwitcher.retry": "Retry",
   "BoardSwitcher.members": "Members",
   "BoardSwitcher.allBoards": "All boards",
   "BoardSwitcher.allWorkspaces": "All workspaces"

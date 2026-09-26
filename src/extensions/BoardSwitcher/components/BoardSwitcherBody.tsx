@@ -30,6 +30,7 @@ import {
   createSwitcherBoardThunk,
   fetchSwitcherBoardsThunk,
   selectSwitcherBoards,
+  selectSwitcherIncomplete,
   selectSwitcherPrefs,
   selectSwitcherStatus,
   setSwitcherPrefs,
@@ -63,6 +64,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   const { pathname } = useLocation();
   const boards = useAppSelector(selectSwitcherBoards);
   const status = useAppSelector(selectSwitcherStatus);
+  const incomplete = useAppSelector(selectSwitcherIncomplete);
   const prefs = useAppSelector(selectSwitcherPrefs);
   const workspaces = useAppSelector(selectWorkspaces);
   const activeWorkspaceId = useAppSelector(selectActiveWorkspaceId);
@@ -102,8 +104,15 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
     onDone?.();
   };
 
+  const retryLoad = () => {
+    void dispatch(fetchSwitcherBoardsThunk());
+  };
+
   const toggleStar = (b: Board) => {
-    void dispatch(toggleSwitcherStarThunk({ boardId: b.id, starred: !b.isStarred }));
+    void dispatch(toggleSwitcherStarThunk({ boardId: b.id, starred: !b.isStarred })).then((r) => {
+      // [why] The failed toggle rolls back locally; refetch so overlapping failures end on server truth.
+      if (toggleSwitcherStarThunk.rejected.match(r)) retryLoad();
+    });
   };
 
   // Where "Create new board" lands: the filtered workspace, else the active one
@@ -163,13 +172,27 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
     if (status === 'loading' && boards.length === 0) {
       return <p className="px-1 py-3 text-sm text-muted">{translations['BoardSwitcher.loading']}</p>;
     }
-    const empty = visibleBoards.length === 0 && (
+    // [why] A failed load must not read as "no boards"; keep any earlier boards visible below it.
+    const loadIssue = (status === 'error' || incomplete) && (
+      <div role="alert" className="flex items-center justify-between gap-2 px-1 py-2 text-sm text-danger">
+        <span>{translations[status === 'error' ? 'BoardSwitcher.loadFailed' : 'BoardSwitcher.loadIncomplete']}</span>
+        <button
+          type="button"
+          onClick={retryLoad}
+          className="shrink-0 rounded px-2 py-0.5 text-xs font-medium text-primary hover:bg-bg-overlay focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          {translations['BoardSwitcher.retry']}
+        </button>
+      </div>
+    );
+    const empty = status !== 'error' && visibleBoards.length === 0 && (
       <p className="px-1 py-3 text-sm text-muted">{translations['BoardSwitcher.noBoards']}</p>
     );
 
     if (layout === 'grid') {
       return (
         <>
+          {loadIssue}
           {empty}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {visibleBoards.map((b) => (
@@ -204,8 +227,10 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
     }
 
     return (
+      <>
+      {loadIssue}
+      {empty}
       <ul className="flex flex-col gap-0.5">
-        {empty}
         {visibleBoards.map((b) => {
           const current = isCurrent(b);
           return (
@@ -244,6 +269,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
           </button>
         </li>
       </ul>
+      </>
     );
   };
 
