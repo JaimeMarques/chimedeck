@@ -68,13 +68,13 @@ try {
     { id: targetListId, board_id: targetBoardId, title: 'Target', short_id: shortId(), position: 'a0' },
   ]);
   await db('cards').insert({ id: cardId, list_id: sourceListId, short_id: shortId(), title: 'Guest assigned', position: 'a0', archived: false });
-  await db('board_guest_access').insert({ id: randomUUID(), board_id: sourceBoardId, user_id: guestId, guest_type: 'MEMBER' });
+  await db('board_guest_access').insert({ id: randomUUID(), board_id: sourceBoardId, user_id: guestId, guest_type: 'MEMBER', granted_by: ownerId });
   await db('card_members').insert({ card_id: cardId, user_id: guestId });
 
   await assertMoveDenied();
 
   // Giving the guest access to the destination preserves their assignment.
-  await db('board_guest_access').insert({ id: randomUUID(), board_id: targetBoardId, user_id: guestId, guest_type: 'MEMBER' });
+  await db('board_guest_access').insert({ id: randomUUID(), board_id: targetBoardId, user_id: guestId, guest_type: 'MEMBER', granted_by: ownerId });
   await moveTo(targetListId);
   assert.equal((await db('cards').where({ id: cardId }).first<{ list_id: string }>())?.list_id, targetListId);
   assert.ok(await db('card_members').where({ card_id: cardId, user_id: guestId }).first());
