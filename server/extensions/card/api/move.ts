@@ -9,6 +9,7 @@ import {
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { requireCardWritable, type CardScopedRequest } from '../middlewares/requireCardWritable';
+import { applyBoardVisibility } from '../../../middlewares/boardVisibility';
 import { between, HIGH_SENTINEL, generatePositions } from '../../list/mods/fractional';
 import { recordConflict } from '../../realtime/mods/conflictHandler';
 import { emitCardMoved } from '../../activity/mods/createActivityEvent';
@@ -29,12 +30,14 @@ type ListRow = {
   id: string;
   board_id: string;
   title?: string | null;
+  archived?: boolean;
   [key: string]: unknown;
 };
 
 type BoardRow = {
   id: string;
   workspace_id: string;
+  state: 'ACTIVE' | 'ARCHIVED';
 };
 
 async function parseMoveBody(req: Request): Promise<MoveBody | Response> {
@@ -198,6 +201,45 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
   if (listsOrError instanceof Response) return listsOrError;
   const { targetList, sourceList } = listsOrError;
 
+  // For cross-board moves, verify the caller has write access on the target board before
+  // evaluating state-transition rules so an inaccessible destination cannot leak list metadata.
+  const isCrossBoard = sourceList.board_id !== targetList.board_id;
+  if (isCrossBoard) {
+    const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
+    if (!targetBoard) {
+      return Response.json({ error: { name: 'target-board-not-found' } }, { status: 404 });
+    }
+    if (targetBoard.workspace_id !== board.workspace_id) {
+      return Response.json(
+        {
+          error: {
+            code: 'cross-workspace-move-forbidden',
+            message: 'Cards can only be moved between boards in the same workspace',
+          },
+        },
+        { status: 403 },
+      );
+    }
+    const targetVisibilityError = await applyBoardVisibility(req, targetBoard.id);
+    if (targetVisibilityError) return targetVisibilityError;
+    if (targetBoard.state === 'ARCHIVED') {
+      return Response.json(
+        { error: { code: 'board-is-archived', message: 'The target board is archived and cannot be modified' } },
+        { status: 403 },
+      );
+    }
+    const targetScopedReq = req as WorkspaceScopedRequest;
+    const targetRoleError = await requireMemberOrBoardGuestMember(targetScopedReq, targetBoard.id);
+    if (targetRoleError) return targetRoleError;
+  }
+
+  if (targetList.archived) {
+    return Response.json(
+      { error: { code: 'target-list-archived', message: 'The target list is archived' } },
+      { status: 403 },
+    );
+  }
+
   try {
     await validateCardMove({
       boardId: board.id,
@@ -226,20 +268,6 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
       );
     }
     throw error;
-  }
-
-  // For cross-board moves, verify the caller has write access on the target board too.
-  const isCrossBoard = sourceList.board_id !== targetList.board_id;
-  if (isCrossBoard) {
-    const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
-    if (!targetBoard) {
-      return Response.json({ error: { name: 'target-board-not-found' } }, { status: 404 });
-    }
-    const targetScopedReq = req as WorkspaceScopedRequest;
-    const targetMembershipError = await requireWorkspaceMembership(targetScopedReq, targetBoard.workspace_id);
-    if (targetMembershipError) return targetMembershipError;
-    const targetRoleError = await requireMemberOrBoardGuestMember(targetScopedReq, targetBoard.id);
-    if (targetRoleError) return targetRoleError;
   }
 
   // Compute new position within target list

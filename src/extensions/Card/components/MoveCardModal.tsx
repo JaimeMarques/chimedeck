@@ -155,6 +155,7 @@ const MoveCardModal = ({
           onInteractOutside={(e) => { e.preventDefault(); onClose(); }}
           onEscapeKeyDown={onClose}
           aria-label="Move card"
+          aria-describedby={undefined}
         >
           <Dialog.Title className="sr-only">Move card</Dialog.Title>
           <div className="relative w-80 rounded-2xl bg-bg-surface shadow-2xl overflow-hidden pointer-events-auto">
