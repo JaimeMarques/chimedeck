@@ -36,6 +36,7 @@ export async function handleDuplicateBoard(req: Request, boardId: string): Promi
     originalBoardId: boardId,
     workspaceId: board.workspace_id,
     originalTitle: board.title,
+    actorId: (req as AuthenticatedRequest).currentUser!.id,
   });
 
   if (result.status !== 201) {

@@ -4,6 +4,7 @@ import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/
 import {
   requireWorkspaceMembership,
   requireRole,
+  roleRank,
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { guestGuard } from '../../../middlewares/guestGuard';
@@ -11,6 +12,9 @@ import { requireBoardWritable, type BoardScopedRequest } from '../middlewares/re
 import { writeEvent } from '../../../mods/events/write';
 import type { MonetizationType, BoardVisibility } from '../types';
 import { sanitizeText, sanitizeRichText } from '../../../common/sanitize';
+import { getCurrentWorkspaceRole } from './members/authorization';
+import { lockBoardMemberMutations } from './members/lock';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 
 const VALID_MONETIZATION_TYPES: Array<MonetizationType | null> = [null, 'pre-paid', 'pay-to-paid'];
 const VALID_VISIBILITY: BoardVisibility[] = ['PUBLIC', 'PRIVATE', 'WORKSPACE'];
@@ -95,7 +99,33 @@ export async function handlePatchBoard(req: Request, boardId: string): Promise<R
     );
   }
 
-  const [updated] = await db('boards').where({ id: boardId }).update(updates, ['*']);
+  const result = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    await lockBoardMemberMutations(trx, boardId);
+    const actorRole = await getCurrentWorkspaceRole(
+      trx,
+      board.workspace_id,
+      (req as AuthenticatedRequest).currentUser!.id,
+    );
+    if (!actorRole || roleRank(actorRole) < roleRank('ADMIN')) {
+      return { error: Response.json(
+        { error: { code: 'insufficient-role', message: 'Requires ADMIN role or higher' } },
+        { status: 403 },
+      ) };
+    }
+    const [updated] = await trx('boards')
+      .where({ id: boardId, workspace_id: board.workspace_id })
+      .update(updates, ['*']);
+    if (!updated) {
+      return { error: Response.json(
+        { error: { code: 'board-not-found', message: 'Board not found' } },
+        { status: 404 },
+      ) };
+    }
+    return { updated };
+  });
+  if ('error' in result && result.error) return result.error;
+  const { updated } = result;
 
   await writeEvent({
     type: 'board_updated',

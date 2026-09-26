@@ -6,6 +6,8 @@ import {
   requireRole,
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
+import { getCurrentWorkspaceRole } from '../../board/api/members/authorization';
+import { lockWorkspaceMembershipMutations } from './members/lock';
 
 export async function handleDeleteWorkspace(req: Request, workspaceId: string): Promise<Response> {
   const authError = await authenticate(req as AuthenticatedRequest);
@@ -18,9 +20,26 @@ export async function handleDeleteWorkspace(req: Request, workspaceId: string): 
   const roleError = requireRole(scopedReq, 'OWNER');
   if (roleError) return roleError;
 
-  const deleted = await db('workspaces').where({ id: workspaceId }).del();
+  const result = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, workspaceId);
+    const currentRole = await getCurrentWorkspaceRole(
+      trx,
+      workspaceId,
+      (req as AuthenticatedRequest).currentUser!.id,
+    );
+    if (currentRole !== 'OWNER') return { authorized: false, deleted: 0 };
+    const deleted = await trx('workspaces').where({ id: workspaceId }).del();
+    return { authorized: true, deleted };
+  });
 
-  if (!deleted) {
+  if (!result.authorized) {
+    return Response.json(
+      { error: { code: 'insufficient-role', message: 'Requires OWNER role' } },
+      { status: 403 },
+    );
+  }
+
+  if (!result.deleted) {
     return Response.json(
       { error: { code: 'workspace-not-found', message: 'Workspace not found' } },
       { status: 404 },

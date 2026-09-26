@@ -9,10 +9,7 @@ export function registerInviteToBoard(server: McpServer, token: string): void {
     {
       boardId: z.string().describe('ID of the board to invite the user to'),
       email: z.string().email().describe('Email address of the user to invite'),
-      role: z
-        .enum(['member', 'admin'])
-        .optional()
-        .describe('Role to assign; defaults to "member"'),
+      role: z.enum(['member', 'admin']).optional().describe('Role to assign; defaults to "member"'),
     },
     async ({ boardId, email, role }) => {
       const result = await apiCall<{ data: unknown }>({
@@ -38,6 +35,6 @@ export function registerInviteToBoard(server: McpServer, token: string): void {
       return {
         content: [{ type: 'text', text: JSON.stringify(result.data) }],
       };
-    },
+    }
   );
 }

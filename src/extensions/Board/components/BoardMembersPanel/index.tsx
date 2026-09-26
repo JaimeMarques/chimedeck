@@ -1,6 +1,6 @@
 // BoardMembersPanel — slide-in panel for managing board members and guests.
 // Tabs: Members (list/add/change role/remove), Guests (invite by email/list/revoke).
-// Only ADMIN/OWNER board members can edit; others see read-only views.
+// Explicit board ADMINs and workspace ADMIN/OWNER users can edit; others see read-only views.
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAppSelector } from '~/hooks/useAppSelector';
@@ -51,9 +51,9 @@ const BoardMembersPanel = ({ onClose, isGuest = false }: Props) => {
   // intermittently missing cache state after hard refresh / route bootstrap races.
   useEffect(() => {
     if (
-      boardWorkspaceId
-      && !isMembersLoading
-      && (workspaceMembers.length === 0 || membersWorkspaceId !== boardWorkspaceId)
+      boardWorkspaceId &&
+      !isMembersLoading &&
+      (workspaceMembers.length === 0 || membersWorkspaceId !== boardWorkspaceId)
     ) {
       dispatch(fetchWorkspaceMembersThunk({ workspaceId: boardWorkspaceId }));
     }
@@ -61,9 +61,9 @@ const BoardMembersPanel = ({ onClose, isGuest = false }: Props) => {
 
   const handleAddMemberInputFocus = () => {
     if (
-      boardWorkspaceId
-      && !isMembersLoading
-      && (workspaceMembers.length === 0 || membersWorkspaceId !== boardWorkspaceId)
+      boardWorkspaceId &&
+      !isMembersLoading &&
+      (workspaceMembers.length === 0 || membersWorkspaceId !== boardWorkspaceId)
     ) {
       dispatch(fetchWorkspaceMembersThunk({ workspaceId: boardWorkspaceId }));
     }
@@ -80,7 +80,7 @@ const BoardMembersPanel = ({ onClose, isGuest = false }: Props) => {
   // Whether the current user is already an explicit board member.
   const isSelfMember = useMemo(
     () => boardMembers.some((m) => m.user_id === currentUser?.id),
-    [boardMembers, currentUser],
+    [boardMembers, currentUser]
   );
 
   // Show join button when the caller is a workspace member but not yet in board_members.
@@ -90,7 +90,10 @@ const BoardMembersPanel = ({ onClose, isGuest = false }: Props) => {
     (workspaceRole === 'ADMIN' || workspaceRole === 'OWNER'
       ? true
       : board?.visibility !== 'PRIVATE') &&
-    (workspaceRole === 'MEMBER' || workspaceRole === 'VIEWER' || workspaceRole === 'ADMIN' || workspaceRole === 'OWNER');
+    (workspaceRole === 'MEMBER' ||
+      workspaceRole === 'VIEWER' ||
+      workspaceRole === 'ADMIN' ||
+      workspaceRole === 'OWNER');
 
   // Determine if the current user can manage board members.
   // [why] Workspace OWNER/ADMIN have authority over all boards even if not explicitly
@@ -99,29 +102,26 @@ const BoardMembersPanel = ({ onClose, isGuest = false }: Props) => {
     if (!currentUser) return false;
     if (workspaceRole === 'OWNER' || workspaceRole === 'ADMIN') return true;
     const self = boardMembers.find((m) => m.user_id === currentUser.id);
-    return self?.role === 'ADMIN' || self?.role === 'OWNER';
+    return self?.role === 'ADMIN';
   }, [boardMembers, currentUser, workspaceRole]);
 
   // Count admins to enforce last-admin guard.
   const adminCount = useMemo(
-    () => boardMembers.filter((m) => m.role === 'ADMIN' || m.role === 'OWNER').length,
-    [boardMembers],
+    () => boardMembers.filter((m) => m.role === 'ADMIN').length,
+    [boardMembers]
   );
 
   // Workspace members eligible to be added: non-GUEST workspace role, not already on the board.
-  const boardMemberIds = useMemo(
-    () => new Set(boardMembers.map((m) => m.user_id)),
-    [boardMembers],
-  );
+  const boardMemberIds = useMemo(() => new Set(boardMembers.map((m) => m.user_id)), [boardMembers]);
 
   const candidates = useMemo(
     () =>
       // [why] 'GUEST' is a runtime value returned by the server but not in the static Role union.
       // Cast to string for the comparison to avoid TypeScript false-positive overlap error.
       workspaceMembers.filter(
-        (wm) => (wm.role as string) !== 'GUEST' && !boardMemberIds.has(wm.userId),
+        (wm) => (wm.role as string) !== 'GUEST' && !boardMemberIds.has(wm.userId)
       ),
-    [workspaceMembers, boardMemberIds],
+    [workspaceMembers, boardMemberIds]
   );
 
   // [why] GUEST users have no member-management rights — suppress the panel entirely.
@@ -252,9 +252,8 @@ const BoardMembersPanel = ({ onClose, isGuest = false }: Props) => {
                 ) : (
                   <ul className="divide-y divide-border">
                     {boardMembers.map((member) => {
-                      // Last-admin guard: disable remove for the last ADMIN/OWNER.
-                      const isThisLastAdmin =
-                        (member.role === 'ADMIN' || member.role === 'OWNER') && adminCount <= 1;
+                      // Last-admin guard: disable remove for the last ADMIN.
+                      const isThisLastAdmin = member.role === 'ADMIN' && adminCount <= 1;
 
                       return (
                         <MemberRow

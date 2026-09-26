@@ -5,11 +5,15 @@ import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewar
 import {
   requireWorkspaceMembership,
   requireRole,
+  roleRank,
   type WorkspaceScopedRequest,
 } from '../../../../middlewares/permissionManager';
 import { requireBoardAccess, type BoardScopedRequest } from '../../middlewares/requireBoardAccess';
 import { writeEvent } from '../../../../mods/events/index';
 import type { GuestType } from '../../types';
+import { getCurrentWorkspaceRole } from '../members/authorization';
+import { lockBoardMemberMutations } from '../members/lock';
+import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 
 export async function handleUpdateGuestType(
   req: Request,
@@ -68,9 +72,32 @@ export async function handleUpdateGuestType(
     );
   }
 
-  await db('board_guest_access')
-    .where({ user_id: targetUserId, board_id: boardId })
-    .update({ guest_type: validGuestType });
+  const mutationError = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    await lockBoardMemberMutations(trx, boardId);
+    const actorRole = await getCurrentWorkspaceRole(
+      trx,
+      board.workspace_id,
+      (req as AuthenticatedRequest).currentUser!.id,
+    );
+    if (!actorRole || roleRank(actorRole) < roleRank('ADMIN')) {
+      return Response.json(
+        { error: { code: 'forbidden', message: 'Requires ADMIN role or higher' } },
+        { status: 403 },
+      );
+    }
+    const updatedCount = await trx('board_guest_access')
+      .where({ user_id: targetUserId, board_id: boardId })
+      .update({ guest_type: validGuestType });
+    if (updatedCount === 0) {
+      return Response.json(
+        { name: 'guest-access-not-found', data: { message: 'Guest access record not found' } },
+        { status: 404 },
+      );
+    }
+    return null;
+  });
+  if (mutationError) return mutationError;
 
   const updated = await db('board_guest_access')
     .join('users', 'board_guest_access.user_id', 'users.id')
@@ -85,7 +112,7 @@ export async function handleUpdateGuestType(
     )
     .first();
 
-  writeEvent({
+  await writeEvent({
     type: 'member_updated',
     boardId,
     entityId: boardId,
@@ -97,7 +124,7 @@ export async function handleUpdateGuestType(
       guestType: validGuestType,
       updatedAt: new Date().toISOString(),
     },
-  }).catch(() => {});
+  });
 
   return Response.json({ data: updated });
 }

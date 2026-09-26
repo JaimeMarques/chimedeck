@@ -7,11 +7,14 @@ import {
   requireRole,
   type WorkspaceScopedRequest,
 } from '../../../../middlewares/permissionManager';
+import { getCurrentWorkspaceRole } from '../../../board/api/members/authorization';
+import { lockWorkspaceMembershipMutations } from './lock';
+import { removeWorkspaceMemberInTransaction } from './removeService';
 
 export async function handleRemoveMember(
   req: Request,
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<Response> {
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
@@ -23,33 +26,28 @@ export async function handleRemoveMember(
   const roleError = requireRole(scopedReq, 'ADMIN');
   if (roleError) return roleError;
 
-  const targetMembership = await db('memberships')
-    .where({ user_id: userId, workspace_id: workspaceId })
-    .first();
+  const currentUserId = scopedReq.currentUser!.id;
 
-  if (!targetMembership) {
-    return Response.json(
-      { error: { code: 'member-not-found', message: 'User is not a member of this workspace' } },
-      { status: 404 },
-    );
-  }
-
-  // Invariant: workspace must always have ≥ 1 OWNER.
-  if (targetMembership.role === 'OWNER') {
-    const ownerCount = await db('memberships')
-      .where({ workspace_id: workspaceId, role: 'OWNER' })
-      .count('user_id as count')
-      .first();
-
-    if (Number(ownerCount?.count ?? 0) <= 1) {
+  const mutationError = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, workspaceId);
+    const currentRole = await getCurrentWorkspaceRole(trx, workspaceId, currentUserId);
+    if (currentRole !== 'OWNER' && currentRole !== 'ADMIN') {
       return Response.json(
-        { error: { code: 'workspace-must-have-one-owner', message: 'A workspace must always have at least one Owner. Promote another member first.' } },
-        { status: 422 },
+        {
+          error: {
+            code: 'forbidden',
+            message: 'Requires ADMIN role or higher',
+            requiredRole: 'ADMIN',
+            currentRole,
+          },
+        },
+        { status: 403 }
       );
     }
-  }
+    return removeWorkspaceMemberInTransaction(trx, workspaceId, userId, currentUserId);
+  });
 
-  await db('memberships').where({ user_id: userId, workspace_id: workspaceId }).del();
+  if (mutationError) return mutationError;
 
   return new Response(null, { status: 204 });
 }

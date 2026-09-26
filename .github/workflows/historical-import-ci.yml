@@ -19,3 +19,75 @@ jobs:
       # raw source HTML out of the DOM. Run its tests on the same push.
       - name: Run comment render sanitizer tests
         run: bun test src/extensions/Comment
+
+  board-members:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: chimedeck_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres@127.0.0.1:5432/chimedeck_test
+      APP_PORT: 3107
+      TEST_BASE_URL: http://127.0.0.1:3107
+      EMAIL_DOMAIN_RESTRICTION_ENABLED: 'false'
+      FEATURE_FLAGS_PROVIDER: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run db:migrate
+      - run: bun test server/extensions/board/api/members server/extensions/mcp/tools/inviteToBoard.test.ts server/mods/events/__tests__/policy.test.ts server/mods/events/__tests__/dispatch.test.ts server/extensions/realtime/mods/rooms/broadcast.test.ts tests/integration/trelloCompat/organizations.test.ts
+      - name: Lint board-member regressions
+        run: >-
+          bunx eslint
+          tests/db/concurrentBoardMemberAdd.ts
+          tests/db/addBoardMemberByEmail.ts
+          server/extensions/mcp/tools/inviteToBoard.test.ts
+          tests/db/concurrentBoardMemberRoleMutation.ts
+          tests/db/workspaceMembershipSecurity.ts
+          tests/e2e/board-members.spec.ts
+          server/mods/events/__tests__/policy.test.ts
+          server/mods/events/__tests__/dispatch.test.ts
+          server/mods/events/__tests__/fixtures/dispatchPolicy.ts
+          server/extensions/board/api/members/__tests__/fixtures/addBoardMember.ts
+          server/extensions/board/access.ts
+          server/extensions/board/api/members/authorization.ts
+          server/extensions/board/api/members/lock.ts
+          server/extensions/board/api/members/role.ts
+          server/extensions/workspace/api/members/lock.ts
+          server/extensions/workspace/api/members/removeService.ts
+          server/mods/events/policy.ts
+      - run: bunx tsc -p tests/tsconfig.json --noEmit
+      - run: bun run test:db:board-members
+      - name: Run board-member HTTP contracts against the real server
+        shell: bash
+        run: |
+          set -euo pipefail
+          JWT_PRIVATE_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
+          JWT_PUBLIC_KEY="$(printf '%s' "$JWT_PRIVATE_KEY" | openssl pkey -pubout 2>/dev/null)"
+          export JWT_PRIVATE_KEY JWT_PUBLIC_KEY
+          bun run server/index.ts > "$RUNNER_TEMP/board-members-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 "$TEST_BASE_URL/health"
+          # This suite uses Playwright's HTTP client, not a browser fixture.
+          bun run test:e2e:board-members --reporter=line
+      - name: Preserve server diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: board-members-server-log
+          path: ${{ runner.temp }}/board-members-server.log

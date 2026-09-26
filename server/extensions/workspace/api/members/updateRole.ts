@@ -7,7 +7,10 @@ import {
   requireRole,
   type WorkspaceScopedRequest,
   type Role,
+  roleRank,
 } from '../../../../middlewares/permissionManager';
+import { getCurrentWorkspaceRole } from '../../../board/api/members/authorization';
+import { lockWorkspaceMembershipMutations } from './lock';
 
 const VALID_ROLES: Role[] = ['OWNER', 'ADMIN', 'MEMBER', 'VIEWER'];
 
@@ -43,37 +46,70 @@ export async function handleUpdateMemberRole(
     );
   }
 
-  const targetMembership = await db('memberships')
-    .where({ user_id: userId, workspace_id: workspaceId })
-    .first();
-
-  if (!targetMembership) {
+  const newRole = body.role as Role;
+  const currentUserId = scopedReq.currentUser?.id;
+  if (!currentUserId) {
     return Response.json(
-      { error: { code: 'member-not-found', message: 'User is not a member of this workspace' } },
-      { status: 404 },
+      { error: { code: 'unauthorized', message: 'Authentication required' } },
+      { status: 401 },
     );
   }
-
-  const newRole = body.role as Role;
-
-  // Invariant: workspace must always have ≥ 1 OWNER.
-  if (targetMembership.role === 'OWNER' && newRole !== 'OWNER') {
-    const ownerCount = await db('memberships')
-      .where({ workspace_id: workspaceId, role: 'OWNER' })
-      .count('user_id as count')
-      .first();
-
-    if (Number(ownerCount?.count ?? 0) <= 1) {
+  const result = await db.transaction(async (trx) => {
+    await lockWorkspaceMembershipMutations(trx, workspaceId);
+    const currentRole = await getCurrentWorkspaceRole(trx, workspaceId, currentUserId);
+    if (currentRole !== 'OWNER' && currentRole !== 'ADMIN') {
       return Response.json(
-        { error: { code: 'workspace-must-have-one-owner', message: 'A workspace must always have at least one Owner. Promote another member first.' } },
-        { status: 422 },
+        { error: { code: 'forbidden', message: 'Requires ADMIN role or higher' } },
+        { status: 403 },
       );
     }
-  }
 
-  const updated = await db('memberships')
-    .where({ user_id: userId, workspace_id: workspaceId })
-    .update({ role: newRole }, ['*']);
+    const targetMembership = await trx('memberships')
+      .where({ user_id: userId, workspace_id: workspaceId })
+      .first();
+    if (!targetMembership) {
+      return Response.json(
+        { error: { code: 'member-not-found', message: 'User is not a member of this workspace' } },
+        { status: 404 },
+      );
+    }
 
-  return Response.json({ data: updated[0] });
+    if (targetMembership.role === 'GUEST') {
+      return Response.json(
+        { error: { code: 'guest-promotion-requires-add-member', message: 'Promote guests through the add-member flow' } },
+        { status: 409 },
+      );
+    }
+
+    if (
+      roleRank(newRole) > roleRank(currentRole) ||
+      roleRank(targetMembership.role as Role) > roleRank(currentRole)
+    ) {
+      return Response.json(
+        { error: { code: 'role-exceeds-caller-privilege', message: 'You cannot assign or modify a role higher than your own' } },
+        { status: 403 },
+      );
+    }
+
+    if (targetMembership.role === 'OWNER' && newRole !== 'OWNER') {
+      const ownerCount = await trx('memberships')
+        .where({ workspace_id: workspaceId, role: 'OWNER' })
+        .count('user_id as count')
+        .first();
+      if (Number(ownerCount?.count ?? 0) <= 1) {
+        return Response.json(
+          { error: { code: 'workspace-must-have-one-owner', message: 'A workspace must always have at least one Owner. Promote another member first.' } },
+          { status: 422 },
+        );
+      }
+    }
+
+    const updated = await trx('memberships')
+      .where({ user_id: userId, workspace_id: workspaceId })
+      .update({ role: newRole }, ['*']);
+    return updated[0];
+  });
+
+  if (result instanceof Response) return result;
+  return Response.json({ data: result });
 }

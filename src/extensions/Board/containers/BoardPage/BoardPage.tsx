@@ -59,7 +59,7 @@ import BoardFilterPanel, {
   applyBoardFilter,
 } from '../../components/BoardFilterPanel';
 import { useGetBoardMembersQuery } from '../../slices/boardMembersSlice';
-import { selectIsGuestInActiveWorkspace } from '~/extensions/Workspace/slices/workspaceSlice';
+import { selectCurrentUserWorkspaceRole, selectIsGuestInActiveWorkspace } from '~/extensions/Workspace/slices/workspaceSlice';
 import {
   selectActiveWorkspaceId,
   setActiveWorkspace,
@@ -88,6 +88,7 @@ const BoardPage = () => {
   const status = useAppSelector(selectBoardStatus);
   const accessToken = useAppSelector(selectAuthToken);
   const currentUser = useAppSelector(selectAuthUser);
+  const currentWorkspaceRole = useAppSelector(selectCurrentUserWorkspaceRole);
   const activeWorkspaceId = useAppSelector(selectActiveWorkspaceId);
   const boardWorkspaceId =
     board?.workspaceId ?? (board as { workspace_id?: string } | null)?.workspace_id;
@@ -165,6 +166,7 @@ const BoardPage = () => {
   const { data: boardMembers = [] } = useGetBoardMembersQuery(boardId ?? '', { skip: !boardId });
   // [why] Joined board members are explicit board participants.
   const isBoardMember = boardMembers.some((m) => m.user_id === currentUser?.id);
+  const canManageBoard = currentWorkspaceRole === 'OWNER' || currentWorkspaceRole === 'ADMIN';
   // [why] Board guests are board-scoped participants and should be able to
   //       configure and receive board notifications like joined members.
   const canManageOwnBoardNotifications = isBoardMember || isGuest;
@@ -939,6 +941,7 @@ const BoardPage = () => {
           isGuest={isGuest}
           isViewerGuest={isViewerGuest}
           isBoardParticipant={canManageOwnBoardNotifications}
+          canManageBoard={canManageBoard}
         />
       )}
       {/* Board members panel (Sprint 79) */}

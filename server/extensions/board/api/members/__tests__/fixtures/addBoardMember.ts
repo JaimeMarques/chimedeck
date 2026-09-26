@@ -11,8 +11,10 @@ type Row = Record<string, unknown>;
 const boardMembers: Row[] = [];
 const memberships: Row[] = [];
 const users: Row[] = [];
+const boards: Row[] = [];
 const inserted: Row[] = [];
 const updated: Row[] = [];
+const dispatched: Row[] = [];
 
 function matches(row: Row, where: Row): boolean {
   return Object.entries(where).every(([key, value]) => row[key.replace(/^bm\./, '')] === value);
@@ -26,9 +28,12 @@ function dbStub(table: string) {
       ? boardMembers
       : table === 'memberships'
         ? memberships
-        : users;
+        : table === 'boards'
+          ? boards
+          : users;
     return source.filter(
-      (row) => matches(row, state.where) && (state.notRole === undefined || row.role !== state.notRole),
+      (row) =>
+        matches(row, state.where) && (state.notRole === undefined || row.role !== state.notRole)
     );
   };
   const builder: Record<string, unknown> = {
@@ -42,13 +47,14 @@ function dbStub(table: string) {
     },
     join: () => builder,
     select: () => builder,
+    then: (resolve: (value: Row[]) => unknown) => Promise.resolve(rows()).then(resolve),
     first: () => Promise.resolve(rows()[0]),
     insert(row: Row) {
       // Model the real UNIQUE (board_id, user_id) constraint so the handler's
       // onConflict(...).ignore() path is exercised rather than stubbed away:
       // a conflicting insert writes nothing and returns no rows.
       const conflict = boardMembers.some(
-        (r) => r['board_id'] === row['board_id'] && r['user_id'] === row['user_id'],
+        (r) => r['board_id'] === row['board_id'] && r['user_id'] === row['user_id']
       );
       const commit = (): Row[] => {
         if (conflict) return [];
@@ -74,14 +80,27 @@ function dbStub(table: string) {
   return builder;
 }
 
-const db = Object.assign(dbStub, { raw: (sql: string) => sql });
+const db = Object.assign(dbStub, {
+  raw: (sql: string) => sql,
+  transaction: (callback: (trx: typeof dbStub) => unknown) => Promise.resolve(callback(db)),
+});
 
 await mock.module('../../../../../../common/db', () => ({ db }));
 await mock.module('../../../../../../middlewares/permissionManager', () => ({
   requireRole: () => null, // caller is a workspace ADMIN throughout this fixture
+  resolveHighestRole: (roles: string[]) => {
+    const rank: Record<string, number> = { GUEST: 0, VIEWER: 1, MEMBER: 2, ADMIN: 3, OWNER: 4 };
+    return roles.reduce<string | null>(
+      (highest, role) => (!highest || (rank[role] ?? -1) > (rank[highest] ?? -1) ? role : highest),
+      null
+    );
+  },
 }));
 await mock.module('../../../../../../mods/events/dispatch', () => ({
-  dispatchEvent: () => Promise.resolve(),
+  dispatchEvent: (event: Row) => {
+    dispatched.push(event);
+    return Promise.resolve();
+  },
 }));
 
 const { handleAddBoardMember } = await import('../../create');
@@ -103,10 +122,16 @@ function reset(): void {
   boardMembers.length = 0;
   memberships.length = 0;
   users.length = 0;
+  boards.length = 0;
   inserted.length = 0;
   updated.length = 0;
-  memberships.push({ user_id: 'user-2', workspace_id: 'ws-1', role: 'MEMBER' });
+  dispatched.length = 0;
+  memberships.push(
+    { user_id: 'user-1', workspace_id: 'ws-1', role: 'ADMIN' },
+    { user_id: 'user-2', workspace_id: 'ws-1', role: 'MEMBER' }
+  );
   users.push({ id: 'user-2', email: 'new@example.com', name: 'New User', nickname: null });
+  boards.push({ id: 'board-1', workspace_id: 'ws-1', visibility: 'PRIVATE' });
 }
 
 async function run(): Promise<void> {
@@ -118,6 +143,15 @@ async function run(): Promise<void> {
   const firstInsert = inserted[0] as Row;
   assert.equal(firstInsert.role, 'MEMBER');
   assert.equal(firstInsert.board_id, 'board-1');
+  assert.deepEqual(dispatched, [
+    {
+      type: 'board_member_added',
+      boardId: 'board-1',
+      entityId: 'board-1',
+      actorId: 'user-1',
+      payload: { memberId: 'user-2', userId: 'user-2', role: 'MEMBER' },
+    },
+  ]);
 
   // 2. Re-adding an existing member is a conflict and never rewrites their role.
   //    This is the regression: it used to demote a board ADMIN to MEMBER.
@@ -137,22 +171,32 @@ async function run(): Promise<void> {
   assert.equal(((await res.json()) as { name?: string }).name, 'invalid-role');
   assert.equal(inserted.length, 0);
 
-  // 4. A valid role is accepted in any case — roles are stored uppercase.
+  // 4. A supplied null role is invalid; only an omitted role defaults to MEMBER.
+  reset();
+  res = await handleAddBoardMember(request({ userId: 'user-2', role: null }), 'board-1');
+  assert.equal(res.status, 400);
+  assert.equal(((await res.json()) as { name?: string }).name, 'invalid-role');
+  assert.equal(inserted.length, 0);
+
+  // 5. A valid role is accepted in any case — roles are stored uppercase.
   reset();
   res = await handleAddBoardMember(request({ userId: 'user-2', role: 'admin' }), 'board-1');
   assert.equal(res.status, 201);
   assert.equal((inserted[0] as Row).role, 'ADMIN');
 
-  // 5. Unchanged: a non-workspace member still cannot be added to a board.
+  // 6. Unchanged: a non-workspace member still cannot be added to a board.
   reset();
-  memberships.length = 0;
+  memberships.splice(1);
   res = await handleAddBoardMember(request({ userId: 'user-2' }), 'board-1');
   assert.equal(res.status, 422);
   assert.equal(((await res.json()) as { name?: string }).name, 'user-not-workspace-member');
   assert.equal(inserted.length, 0);
 
+  // Email resolution requires real SQL joins/distinct and workspace locking;
+  // its coverage lives in the CI-gated tests/db/addBoardMemberByEmail.ts.
+
   console.info(
-    'handleAddBoardMember conflict-on-existing-member, role validation, case-insensitive role, and workspace-membership gate verified',
+    'handleAddBoardMember conflict, role validation, and workspace-membership gate verified'
   );
 }
 

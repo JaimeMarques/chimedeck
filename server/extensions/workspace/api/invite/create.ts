@@ -20,6 +20,13 @@ export async function handleCreateInvite(req: Request, workspaceId: string): Pro
 
   const roleError = requireRole(scopedReq, 'ADMIN');
   if (roleError) return roleError;
+  const actorId = scopedReq.currentUser?.id;
+  if (!actorId) {
+    return Response.json(
+      { error: { code: 'unauthorized', message: 'Authentication required' } },
+      { status: 401 },
+    );
+  }
 
   let body: { email?: string; role?: string };
   try {
@@ -40,11 +47,23 @@ export async function handleCreateInvite(req: Request, workspaceId: string): Pro
 
   const role: Role = (VALID_ROLES.includes(body.role as Role) ? body.role : 'MEMBER') as Role;
 
-  const invite = await createInvite({
-    workspaceId,
-    invitedEmail: body.email.trim().toLowerCase(),
-    role,
-  });
+  let invite;
+  try {
+    invite = await createInvite({
+      workspaceId,
+      invitedEmail: body.email.trim().toLowerCase(),
+      role,
+      actorId,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'InviteRoleForbiddenError') {
+      return Response.json(
+        { error: { code: 'role-exceeds-caller-privilege', message: 'You cannot create this invite with your current role' } },
+        { status: 403 },
+      );
+    }
+    throw error;
+  }
 
   return Response.json({ data: invite }, { status: 201 });
 }
