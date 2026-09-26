@@ -15,6 +15,7 @@ type Store = {
 type TableName = keyof Store;
 
 let store: Store;
+let moveGuardError: (Error & { code: string; constraint: string }) | null = null;
 
 function requireRow(tableName: TableName, id: string): Row {
   const row = store[tableName].find((candidate) => candidate.id === id);
@@ -52,6 +53,9 @@ class QueryBuilder {
   }
 
   update(patch: Row, returning?: string[]): Promise<number | Row[]> {
+    if (this.tableName === 'cards' && patch.list_id === 'list-target' && moveGuardError) {
+      return Promise.reject(moveGuardError);
+    }
     const rows = this.rows();
     rows.forEach((row) => Object.assign(row, patch));
     return Promise.resolve(returning ? rows.map((row) => ({ ...row })) : rows.length);
@@ -149,6 +153,7 @@ function resetStore(): Store {
 
 beforeEach(() => {
   store = resetStore();
+  moveGuardError = null;
   authenticateMock.mockClear();
   requireCardWritableMock.mockClear();
   requireWorkspaceMembershipMock.mockClear();
@@ -162,6 +167,24 @@ beforeEach(() => {
 });
 
 describe('card move destination boundaries', () => {
+  test('maps an assignment-eligibility DB guard to a stable refusal without publishing events', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    moveGuardError = Object.assign(new Error('assignment not eligible'), {
+      code: '23514', constraint: 'card_move_assignment_eligibility',
+    });
+    const request = new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    });
+    const response = await handleMoveCard(request, 'card-source');
+    const body = (await response.json()) as { error?: { code?: string } };
+    expect(response.status).toBe(422);
+    expect(body.error?.code).toBe('assignment-target-ineligible');
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(dispatchEventMock).not.toHaveBeenCalled();
+    expect(emitCardMovedMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
   test('moves across accessible boards in one workspace without changing card identity or relationships', async () => {
     requireRow('boards', 'board-target').workspace_id = 'workspace-source';
     const relationshipSnapshot = JSON.stringify({

@@ -315,14 +315,26 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
   const now = new Date().toISOString();
   // Boundary fallback: if no strict lexicographic slot exists (e.g. prepend
   // before a '!' card), persistMove re-spaces the target list before applying.
-  const updatedCard = await persistMove({
-    cardId,
-    targetListId: body.targetListId,
-    insertIndex,
-    targetCards,
-    now,
-    position,
-  });
+  let updatedCard: CardRow | null;
+  try {
+    updatedCard = await persistMove({
+      cardId,
+      targetListId: body.targetListId,
+      insertIndex,
+      targetCards,
+      now,
+      position,
+    });
+  } catch (error) {
+    const pgError = error as { code?: string; constraint?: string };
+    if (pgError.code === '23514' && pgError.constraint === 'card_move_assignment_eligibility') {
+      return Response.json(
+        { error: { code: 'assignment-target-ineligible', message: 'An assigned member cannot access the target board' } },
+        { status: 422 },
+      );
+    }
+    throw error;
+  }
   if (!updatedCard) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found after move' } },
