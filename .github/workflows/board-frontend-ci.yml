@@ -19,8 +19,12 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - name: Test board switcher, drop handling, and label colours
+      - name: Test board switcher state, drop handling, and label colours
         env:
           NODE_ENV: test
-        run: bun test src/extensions/BoardSwitcher src/extensions/Board/components/__tests__/boardCanvasDrop.test.ts src/extensions/Card/utils/__tests__/labelColors.test.ts
+        run: bun test src/extensions/BoardSwitcher/__tests__ src/extensions/Board/components/__tests__/boardCanvasDrop.test.ts src/extensions/Card/utils/__tests__/labelColors.test.ts
+      - name: Test board switcher interactions in isolated DOM session
+        env:
+          NODE_ENV: test
+        run: bun test src/extensions/BoardSwitcher/components/__tests__/BoardSwitcherBody.create.test.tsx
       - run: bun run build:client
