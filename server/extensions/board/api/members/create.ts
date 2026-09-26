@@ -41,17 +41,8 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
   }
 
   let userId = typeof body.userId === 'string' ? body.userId : undefined;
-  if (!userId && typeof body.email === 'string' && body.email.trim() !== '') {
-    const user = await db('users').where({ email: body.email.trim().toLowerCase() }).first();
-    userId = typeof user?.id === 'string' ? user.id : undefined;
-    if (!userId) {
-      return Response.json(
-        { name: 'user-not-found', data: { message: 'No user found for the supplied email' } },
-        { status: 404 }
-      );
-    }
-  }
-  if (!userId) {
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (!userId && !email) {
     return Response.json(
       { name: 'missing-user-id', data: { message: 'userId or email is required' } },
       { status: 400 }
@@ -89,11 +80,41 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
     );
     if (freshManagerError) return { error: freshManagerError };
 
+    // Resolve only eligible accounts under the workspace lock. Global lookup
+    // leaks account existence; raw email uniqueness does not prevent case-fold
+    // collisions. Never choose an arbitrary recipient for a privilege grant.
+    if (!userId) {
+      const matches = await trx<{ id: string }>('users as u')
+        .join('memberships as m', 'm.user_id', 'u.id')
+        .where('m.workspace_id', board.workspace_id)
+        .whereNot('m.role', 'GUEST')
+        .whereRaw('LOWER(u.email) = ?', [email])
+        .distinct<Array<{ id: string }>>('u.id')
+        .limit(2);
+      if (matches.length > 1) {
+        return {
+          error: Response.json(
+            {
+              name: 'ambiguous-email',
+              data: {
+                message:
+                  'Several accounts in this workspace share that email address. Add the member by userId instead.',
+              },
+            },
+            { status: 409 }
+          ),
+        };
+      }
+      userId = matches[0]?.id;
+    }
+
     // Target eligibility and insertion share the workspace lock with removals.
-    const workspaceMembership = await trx('memberships')
-      .where({ user_id: userId, workspace_id: board.workspace_id })
-      .whereNot('role', 'GUEST')
-      .first();
+    const workspaceMembership = userId
+      ? await trx('memberships')
+          .where({ user_id: userId, workspace_id: board.workspace_id })
+          .whereNot('role', 'GUEST')
+          .first()
+      : undefined;
     if (!workspaceMembership) {
       return {
         error: Response.json(

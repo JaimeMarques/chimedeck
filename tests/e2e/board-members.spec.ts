@@ -83,6 +83,35 @@ test.describe('Board member API flows', () => {
     return ((await res.json()) as { data: Array<{ user_id: string; role: string }> }).data;
   }
 
+  test('board ADMIN adds by email without exposing outside-workspace accounts', async ({
+    request,
+  }) => {
+    const wsId = await createWorkspace(request, owner.token);
+    const boardId = await createBoard(request, owner.token, wsId);
+    await addWorkspaceMember(request, wsId, boardAdmin);
+    await addWorkspaceMember(request, wsId, target);
+    const promoted = await request.post(`${BASE_URL}/api/v1/boards/${boardId}/members`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+      data: { userId: boardAdmin.id, role: 'ADMIN' },
+    });
+    expect(promoted.status()).toBe(201);
+    const add = (email: string) =>
+      request.post(`${BASE_URL}/api/v1/boards/${boardId}/members`, {
+        headers: { Authorization: `Bearer ${boardAdmin.token}` },
+        data: { email, role: 'admin' },
+      });
+    const added = await add(`  ${target.email.toUpperCase()}  `);
+    expect(added.status()).toBe(201);
+    expect(await members(request, boardId)).toContainEqual(
+      expect.objectContaining({ user_id: target.id, role: 'ADMIN' })
+    );
+    const outsider = await add(other.email);
+    const unknown = await add(`unknown-${randomUUID()}@example.com`);
+    expect(outsider.status()).toBe(422);
+    expect(unknown.status()).toBe(422);
+    expect(await unknown.json()).toEqual(await outsider.json());
+  });
+
   test('GET /boards/:id/members returns explicit board members', async ({ request }) => {
     const { token } = owner;
     const wsId = await createWorkspace(request, token);

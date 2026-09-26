@@ -178,7 +178,7 @@ async function waitUntilBothRequestsReachBarrier(): Promise<void> {
   }
 }
 
-async function runScenario(scenario: Scenario): Promise<void> {
+async function runScenario(scenario: Scenario | 'mixed'): Promise<void> {
   const fixture = await seedFixture(scenario);
   const barrier = await db.transaction();
   let pending: Promise<PromiseSettledResult<Response>[]> | undefined;
@@ -194,7 +194,17 @@ async function runScenario(scenario: Scenario): Promise<void> {
     await barrier.raw('LOCK TABLE board_members IN SHARE MODE');
 
     const operations = fixture.adminIds.map((userId) => {
-      if (scenario === 'demote') {
+      if (scenario === 'mixed' && userId === fixture.adminIds[1]) {
+        // Both adapters must use the same lock, not merely serialize themselves.
+        return boardsRouter(
+          trelloMemberRequest(fixture, 'DELETE', userId),
+          `/boards/${fixture.boardId}/members/${userId}`
+        ).then((response) => {
+          assert.ok(response, 'the Trello member route must handle this request');
+          return response;
+        });
+      }
+      if (scenario !== 'remove') {
         return handleUpdateBoardMember(scopedRequest(fixture, 'PATCH'), fixture.boardId, userId);
       }
       return handleRemoveBoardMember(scopedRequest(fixture, 'DELETE'), fixture.boardId, userId);
@@ -666,6 +676,7 @@ async function runGuestPromotionLockOrderScenario(): Promise<void> {
 try {
   await runScenario('demote');
   await runScenario('remove');
+  await runScenario('mixed');
   await runStaleAdminScenario();
   await runStaleWorkspaceAuthorityScenario();
   await runConcurrentWorkspaceAuthorityRevocationScenario();
