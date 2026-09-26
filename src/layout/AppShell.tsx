@@ -18,6 +18,8 @@ import InviteExternalUserModal from '~/extensions/AdminInvite/InviteExternalUser
 import type { SearchResult } from '~/extensions/Search/api';
 import translations from '~/common/translations/en.json';
 import { boardPath, cardPath } from '~/common/routing/shortUrls';
+import BoardSwitcherPanel from '~/extensions/BoardSwitcher/components/BoardSwitcherPanel';
+import { PREFS_STORAGE_KEY, selectSwitcherPrefs } from '~/extensions/BoardSwitcher/boardSwitcher.slice';
 
 export default function AppShell() {
   const dispatch = useAppDispatch();
@@ -30,6 +32,16 @@ export default function AppShell() {
   // Ref for the mobile drawer panel — used by the focus trap
   const drawerRef = useRef<HTMLDivElement>(null);
   const isApiDocsRoute = location.pathname.startsWith('/developer/api-docs');
+  const switcherPrefs = useAppSelector(selectSwitcherPrefs);
+
+  // Persist board switcher prefs (pin state, filter, layout) across reloads
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(switcherPrefs));
+    } catch {
+      // Storage unavailable (private mode / quota) — prefs just won't persist
+    }
+  }, [switcherPrefs]);
 
   // Load workspace list, user profile, and client feature flags once when the shell mounts
   useEffect(() => {
@@ -132,6 +144,9 @@ export default function AppShell() {
           <Sidebar />
         </div>
       )}
+
+      {/* Board switcher pinned as a left column (toggled from the board bottom bar) */}
+      {!isApiDocsRoute && switcherPrefs.pinned && switcherPrefs.pinnedOpen && <BoardSwitcherPanel />}
 
       {/* Mobile sidebar overlay — always rendered to allow CSS transitions */}
       {isApiDocsRoute ? null : (

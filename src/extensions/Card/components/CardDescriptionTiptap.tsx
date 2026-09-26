@@ -1421,7 +1421,7 @@ const CardDescriptionTiptap = ({ boardId, cardId, description, onSave, disabled 
 
   return (
     <section aria-label="Description">
-      <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+      <h3 className="cd-section-heading text-xs font-semibold text-muted uppercase tracking-wider mb-2">
         Description
       </h3>
       {editing && !disabled ? (

@@ -15,6 +15,7 @@ export { default as notificationReducer } from './extensions/Notification/slices
 export { pluginDashboardReducer, pluginRegistryReducer } from './extensions/Plugins/reducers';
 export { adminInviteReducer } from './extensions/AdminInvite/adminInvite.slice';
 export { default as viewPreferenceReducer } from './extensions/BoardViewSwitcher/viewPreference.slice';
+export { default as boardSwitcherReducer } from './extensions/BoardSwitcher/boardSwitcher.slice';
 export { notificationPreferencesApi } from './extensions/Notifications/NotificationPreferences/notificationPreferences.slice';
 export { boardNotificationTypePreferencesApi } from './extensions/Notifications/NotificationPreferences/boardNotificationTypePreferences.slice';
 export { boardMembersApi } from './extensions/Board/slices/boardMembersSlice';

@@ -38,10 +38,13 @@ const config: Config = {
         'bg-surface':  'var(--bg-surface)',
         'bg-overlay':  'var(--bg-overlay)',
         'bg-sunken':   'var(--bg-sunken)',
+        'bg-list':     'var(--bg-list)',
+        'bg-list-bare': 'var(--bg-list-bare)',
 
         /* Borders */
         border:          'var(--border)',
         'border-strong': 'var(--border-strong)',
+        'border-list':   'var(--border-list)',
 
         /* Semantic */
         danger:   'var(--color-danger)',

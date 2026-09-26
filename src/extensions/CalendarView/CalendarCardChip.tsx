@@ -3,6 +3,7 @@
 // Draggable: sets the card id as drag data so CalendarDayCell can handle drops.
 import translations from './translations/en.json';
 import type { CalendarCardChipProps } from './types';
+import { labelStyle } from '~/extensions/Card/utils/labelColors';
 
 const CalendarCardChip = ({ card, onClick }: CalendarCardChipProps) => {
   const firstLabel = card.labels?.[0];
@@ -25,8 +26,8 @@ const CalendarCardChip = ({ card, onClick }: CalendarCardChipProps) => {
     >
       {firstLabel && (
         <span
-          className="inline-block h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: firstLabel.color }}
+          className="cd-label inline-block h-2 w-2 shrink-0 rounded-full"
+          style={labelStyle(firstLabel.color)}
           aria-hidden="true"
         />
       )}

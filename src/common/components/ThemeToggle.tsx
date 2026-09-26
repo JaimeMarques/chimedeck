@@ -1,9 +1,9 @@
-import { SunIcon, MoonIcon, SparklesIcon, BookOpenIcon, StarIcon, ArchiveBoxIcon, ChevronDownIcon, ComputerDesktopIcon, CubeTransparentIcon, Square2StackIcon, SwatchIcon, GlobeAltIcon, BoltIcon } from '@heroicons/react/24/outline';
+import { SunIcon, MoonIcon, SparklesIcon, BookOpenIcon, StarIcon, ArchiveBoxIcon, ChevronDownIcon, ComputerDesktopIcon, CubeTransparentIcon, Square2StackIcon, SwatchIcon, GlobeAltIcon, BoltIcon, ViewColumnsIcon } from '@heroicons/react/24/outline';
 import { useState, useRef, useEffect } from 'react';
 import { useTheme } from '../hooks/useTheme';
 import type { Theme } from '../hooks/useTheme';
 
-const THEME_ORDER: Theme[] = ['light', 'dark', 'elegant', 'elegant-dark', 'paper', 'nordic', 'archive', 'macintosh', 'obsidian', 'next', 'bauhaus', 'moss', 'vapor', 'cyberpunk', 'the-seven', 'hc-light', 'hc-dark'];
+const THEME_ORDER: Theme[] = ['light', 'dark', 'trello', 'elegant', 'elegant-dark', 'paper', 'nordic', 'archive', 'macintosh', 'obsidian', 'next', 'bauhaus', 'moss', 'vapor', 'cyberpunk', 'the-seven', 'hc-light', 'hc-dark'];
 
 const THEME_META: Record<Theme, { icon: React.ReactNode; label: string }> = {
   light:          { icon: <SunIcon className="w-4 h-4" />,                label: 'Light' },
@@ -23,6 +23,7 @@ const THEME_META: Record<Theme, { icon: React.ReactNode; label: string }> = {
   'the-seven':    { icon: <StarIcon className="w-4 h-4" />,               label: 'The Seven' },
   'hc-light':     { icon: <SunIcon className="w-4 h-4" />,                label: 'HC Light' },
   'hc-dark':      { icon: <MoonIcon className="w-4 h-4" />,               label: 'HC Dark' },
+  trello:         { icon: <ViewColumnsIcon className="w-4 h-4" />,        label: 'Trello' },
 };
 
 export function ThemeToggle() {

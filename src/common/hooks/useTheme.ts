@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 
-export type Theme = 'light' | 'dark' | 'elegant' | 'elegant-dark' | 'paper' | 'nordic' | 'archive' | 'macintosh' | 'obsidian' | 'next' | 'bauhaus' | 'moss' | 'vapor' | 'cyberpunk' | 'the-seven' | 'hc-light' | 'hc-dark';
+export type Theme = 'light' | 'dark' | 'elegant' | 'elegant-dark' | 'paper' | 'nordic' | 'archive' | 'macintosh' | 'obsidian' | 'next' | 'bauhaus' | 'moss' | 'vapor' | 'cyberpunk' | 'the-seven' | 'hc-light' | 'hc-dark' | 'trello';
 
-const THEME_CYCLE: Theme[] = ['light', 'dark', 'elegant', 'elegant-dark', 'paper', 'nordic', 'archive', 'macintosh', 'obsidian', 'next', 'bauhaus', 'moss', 'vapor', 'cyberpunk', 'the-seven', 'hc-light', 'hc-dark'];
-const ALL_THEME_CLASSES = ['dark', 'elegant', 'elegant-dark', 'theme-paper', 'theme-nordic', 'theme-archive', 'theme-macintosh', 'theme-obsidian', 'theme-next', 'theme-bauhaus', 'theme-moss', 'theme-vapor', 'theme-cyberpunk', 'theme-the-seven', 'theme-hc-light', 'theme-hc-dark'];
+const THEME_CYCLE: Theme[] = ['light', 'dark', 'elegant', 'elegant-dark', 'paper', 'nordic', 'archive', 'macintosh', 'obsidian', 'next', 'bauhaus', 'moss', 'vapor', 'cyberpunk', 'the-seven', 'hc-light', 'hc-dark', 'trello'];
+const ALL_THEME_CLASSES = ['dark', 'elegant', 'elegant-dark', 'theme-paper', 'theme-nordic', 'theme-archive', 'theme-macintosh', 'theme-obsidian', 'theme-next', 'theme-bauhaus', 'theme-moss', 'theme-vapor', 'theme-cyberpunk', 'theme-the-seven', 'theme-hc-light', 'theme-hc-dark', 'theme-trello'];
 
 function applyTheme(theme: Theme) {
   const html = document.documentElement;
@@ -45,6 +45,8 @@ function applyTheme(theme: Theme) {
     html.classList.add('theme-hc-light');
   } else if (theme === 'hc-dark') {
     html.classList.add('dark', 'theme-hc-dark');
+  } else if (theme === 'trello') {
+    html.classList.add('dark', 'theme-trello');
   }
   // 'light' = no extra class (bare :root)
 }

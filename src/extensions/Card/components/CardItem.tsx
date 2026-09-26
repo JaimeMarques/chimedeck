@@ -144,7 +144,7 @@ const CardItemContent = memo(({
   const colorModePrimaryTextClass = colorModeUsesDarkText ? 'text-slate-900' : 'text-white';
   const colorModeSecondaryTextClass = colorModeUsesDarkText ? 'text-slate-800/90' : 'text-white/90';
   const colorModeDuePillClass = colorModeUsesDarkText ? 'text-slate-900 bg-white/60' : 'text-white bg-black/35';
-  // WHY: image covers should render at full card width and keep their original ratio.
+  // WHY: image covers render at full card width with their ratio, clamped to 64–260px.
   // Color-only FULL mode keeps a compact top strip to avoid oversized cards.
   let coverClass = 'h-20';
   if (!card.cover_image_url && card.cover_size === 'FULL') {
@@ -198,7 +198,7 @@ const CardItemContent = memo(({
           onToggle={onToggleLabels ?? (() => {})}
         />
       )}
-      <p className={`text-sm leading-snug break-words ${titleTextClass}`}>{card.title}</p>
+      <p className={`cd-card-title text-sm leading-snug break-words ${titleTextClass}`}>{card.title}</p>
       {card.amount && (
         <div className="mt-1">
           <CardMoneyBadge amount={card.amount} currency={card.currency} />
@@ -302,29 +302,19 @@ const CardItemContent = memo(({
 
   let contentContainer: React.ReactNode;
   if (useBackgroundImageMode) {
+    // [why] content drives the height; the image only fills the box. Letting the
+    // image size the box clipped text under wide images and blew up tall ones.
     contentContainer = (
-      <div className="relative">
-        {card.cover_image_url ? (
-          <>
-            <img
-              src={card.cover_image_url}
-              alt="Card cover"
-              className="block w-full h-auto"
-              loading="lazy"
-            />
-            <div className="absolute inset-0 bg-black/28" aria-hidden="true" />
-          </>
-        ) : (
-          <div
-            className="w-full min-h-[112px]"
-            style={{ backgroundColor: card.cover_color ?? '#334155' }}
-            aria-hidden="true"
-          />
-        )}
-        <div className="absolute inset-0 overflow-hidden p-2.5 text-white flex items-end">
-          <div className="w-full">
-            {contentBlock}
-          </div>
+      <div className="relative flex min-h-[128px] flex-col justify-end">
+        <img
+          src={card.cover_image_url ?? undefined}
+          alt="Card cover"
+          className="absolute inset-0 h-full w-full object-cover"
+          loading="lazy"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/35 to-black/10" aria-hidden="true" />
+        <div className="relative p-2.5 text-white">
+          {contentBlock}
         </div>
       </div>
     );
@@ -355,7 +345,7 @@ const CardItemContent = memo(({
             <img
               src={card.cover_image_url}
               alt="Card cover"
-              className="block w-full h-auto"
+              className="block w-full h-auto min-h-16 max-h-[260px] object-cover"
               loading="lazy"
             />
           )}

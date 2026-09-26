@@ -60,6 +60,17 @@ body {
   --color-success:  #10b981;  /* emerald-500 */
   --color-warning:  #f59e0b;  /* amber-500 */
   --color-info:     #0ea5e9;  /* sky-500 */
+
+  /* ── Lists ──────────────────────────────────────────── */
+  /* WHY: declared on :root (the same <html> element that carries the theme
+     classes), so each theme's --bg-surface/--border resolves here; only
+     themes that want distinct list chrome override these. */
+  --bg-list:      var(--bg-surface);
+  --border-list:  var(--border);
+  /* WHY: lists on boards without a background image have always rendered
+     see-through (the old bg-bg-surface/90 class generates no CSS for var()
+     colours); themes that want solid columns there override this. */
+  --bg-list-bare: transparent;
 }
 
 .dark {
@@ -614,6 +625,108 @@ body {
   --color-success:  #32d74b;
   --color-warning:  #ff9f0a;
   --color-info:     #0a84ff;
+}
+
+/* ── Trello — Atlassian dark ─────────────────────────────────────────────────── */
+.theme-trello {
+  /* ── Brand ─────────────────────────────────────────── */
+  --color-primary:       #579dff;
+  --color-primary-hover: #85b8ff;
+  --color-secondary:     #9fadbc;
+  --color-accent:        #579dff;
+
+  /* ── Surfaces ───────────────────────────────────────── */
+  --bg-base:     #1d2125;
+  --bg-surface:  #22272b;   /* cards */
+  --bg-overlay:  #2c333a;
+  --bg-sunken:   #38414a;
+  --bg-list:     #101204;   /* near-black list columns */
+  --bg-list-bare: #101204;
+
+  /* ── Text ───────────────────────────────────────────── */
+  --text-base:    #b6c2cf;
+  --text-muted:   #9fadbc;
+  --text-subtle:  #8c9bab;
+  --text-inverse: #1d2125;
+  --text-link:    #579dff;
+
+  /* ── Borders ────────────────────────────────────────── */
+  --border:       #333c43;
+  --border-strong:#454f59;
+  --border-list:  transparent;
+
+  /* ── Semantic ───────────────────────────────────────── */
+  --color-danger:   #f87168;
+  --color-success:  #4bce97;
+  --color-warning:  #f5cd47;
+  --color-info:     #579dff;
+}
+
+/* Trello typography — stack from trello.com; other themes keep Tailwind's default */
+.theme-trello {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Noto Sans", "Ubuntu", "Droid Sans", "Helvetica Neue", sans-serif;
+}
+html.theme-trello,
+.theme-trello body { font-family: var(--font-sans); }
+
+.theme-trello .cd-board-title       { font-size: 18px; font-weight: 700; }
+.theme-trello .cd-list-title        { font-size: 14px; font-weight: 600; line-height: 20px; }
+.theme-trello .cd-card-title        { font-size: 14px; font-weight: 400; line-height: 20px; }
+.theme-trello .cd-card-detail-title { font-size: 20px; font-weight: 600; line-height: 24px; }
+.theme-trello .cd-section-heading {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* ── Label chips ─────────────────────────────────────────────────────────────
+   Colours come from inline vars set by labelStyle() (Card/utils/labelColors.ts):
+   raw hex + fixed contrast by default, Trello dark-mode tones under .theme-trello. */
+.cd-label { background-color: var(--label-bg); color: var(--label-fg); }
+.theme-trello .cd-label { background-color: var(--label-bg-trello); color: var(--label-fg-trello); }
+
+/* Card detail chip: rectangle, remove × reduced to a subtle inline icon */
+.theme-trello .cd-label-detail {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 3px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.theme-trello .cd-label-detail .cd-label-remove {
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  margin-right: -4px;
+  border-radius: 3px;
+  opacity: 0.55;
+  color: inherit;
+  background: transparent;
+}
+.theme-trello .cd-label-detail .cd-label-remove:hover,
+.theme-trello .cd-label-detail .cd-label-remove:focus-visible { opacity: 1; }
+
+/* Card front: expanded chip / collapsed bar */
+.theme-trello .cd-label-front {
+  height: 16px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  max-width: 140px;
+}
+.theme-trello .cd-label-bar {
+  flex: none;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  height: 8px;
+  border-radius: 4px;
 }
 
 /* TipTap editor list/heading styles — applied here to cover both the

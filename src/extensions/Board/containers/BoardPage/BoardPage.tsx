@@ -29,7 +29,7 @@ import CardModalContainer from '../../../Card/containers/CardModal';
 import BoardSettings from '../BoardSettings/BoardSettings';
 import ToastRegion from '~/common/components/ToastRegion';
 import type { ToastItem } from '~/common/components/ToastRegion';
-import { updateBoard, archiveBoard, deleteBoard, starBoard, unstarBoard } from '../../api';
+import { updateBoard, archiveBoard, deleteBoard } from '../../api';
 import { createList, updateList, archiveList, deleteList, reorderLists, sortListCards, updateListColor } from '../../../List/api';
 import type { ListSortBy } from '../../../List/types';
 import { createCard, getCard, copyCard } from '../../../Card/api';
@@ -69,6 +69,8 @@ import { FunnelIcon } from '@heroicons/react/24/outline';
 import HealthCheckTab from '~/extensions/HealthCheck/containers/HealthCheckTab/HealthCheckTab';
 import { HEALTH_CHECK_ENABLED } from '~/extensions/HealthCheck/config/healthCheckConfig';
 import { boardPath, cardPath } from '~/common/routing/shortUrls';
+import BoardBottomBar from '~/extensions/BoardSwitcher/components/BoardBottomBar';
+import { selectSwitcherStarred, toggleStarAndReconcileThunk } from '~/extensions/BoardSwitcher/boardSwitcher.slice';
 
 const BoardPage = () => {
   const dispatch = useAppDispatch();
@@ -645,33 +647,18 @@ const BoardPage = () => {
   }, [api, boardId, board, navigate, addToast, automationPanel]);
 
   // ── Star / unstar board ────────────────────────────────────────────────
-  const [starredOverride, setStarredOverride] = useState<boolean | null>(null);
+  // [why] One authority for stars: the switcher's bookkeeping, shared with its panel and the
+  // board list. Keyed by the board's UUID, not the route's short id.
+  const switcherStarred = useAppSelector((s) => (board ? selectSwitcherStarred(s, board.id) : undefined));
+  const isStarred = switcherStarred ?? board?.isStarred === true;
 
-  // [why] Reset override when navigating to a different board so the fresh
-  // isStarred value from the server is used rather than the previous board's state.
-  useEffect(() => { setStarredOverride(null); }, [boardId]);
-
-  const handleStar = useCallback(async () => {
-    if (!boardId) return;
-    setStarredOverride(true);
-    try {
-      await starBoard({ api, boardId });
-    } catch {
-      setStarredOverride(null);
-      addToast('Failed to star board.', 'error');
-    }
-  }, [api, boardId, addToast]);
-
-  const handleUnstar = useCallback(async () => {
-    if (!boardId) return;
-    setStarredOverride(false);
-    try {
-      await unstarBoard({ api, boardId });
-    } catch {
-      setStarredOverride(null);
-      addToast('Failed to unstar board.', 'error');
-    }
-  }, [api, boardId, addToast]);
+  const toggleStar = useCallback(async (starred: boolean) => {
+    if (!board) return;
+    const res = await dispatch(toggleStarAndReconcileThunk({ boardId: board.id, starred, prev: isStarred }));
+    if (res.payload === false) addToast(starred ? 'Failed to star board.' : 'Failed to unstar board.', 'error');
+  }, [board, dispatch, isStarred, addToast]);
+  const handleStar = useCallback(() => toggleStar(true), [toggleStar]);
+  const handleUnstar = useCallback(() => toggleStar(false), [toggleStar]);
 
   if (status === 'loading' && !board) {
     return (
@@ -812,13 +799,15 @@ const BoardPage = () => {
         <div className="absolute inset-0 bg-black/50 pointer-events-none z-0" aria-hidden="true" />
       )}
       {/* All content above the scrim */}
-      <div className="relative z-10 flex flex-col h-full overflow-hidden">
+      {/* WHY: pb-14 ends the lists and their scrollbar above the floating bottom bar
+          while the background image still extends underneath it */}
+      <div className="relative z-10 flex flex-col h-full overflow-hidden pb-14">
       {/* Unified glass block — one frosted surface using theme tokens so dark mode works */}
       {/* WHY: relative z-10 ensures this stacking context paints above the BoardCanvas sibling,
           preventing the header dropdown from being hidden behind kanban column elements */}
       <div className={`relative z-10 border-b border-border${board.background ? ' bg-bg-surface/75 backdrop-blur-2xl' : ' bg-bg-surface'}`}>
       <BoardHeader
-        board={starredOverride === null ? board : { ...board, isStarred: starredOverride }}
+        board={isStarred === (board.isStarred === true) ? board : { ...board, isStarred }}
         members={boardMembers.map((m) => ({ id: m.user_id, display_name: m.display_name, email: m.email, avatar_url: m.avatar_url }))}
         connectionState={connectionState}
         pollingActive={pollingActive}
@@ -927,6 +916,13 @@ const BoardPage = () => {
 
       {/* Tab content */}
       {tabContent}
+
+      {/* Trello-style bottom bar: Inbox / Planner / Board / Switch boards */}
+      <BoardBottomBar
+        boardId={boardId ?? ''}
+        boardTabActive={activeTab === 'board'}
+        onShowBoardTab={() => { setActiveTab('board'); }}
+      />
 
       {/* Card detail modal — always mounted so ?card= links work from any tab */}
       <CardModalContainer

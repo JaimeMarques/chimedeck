@@ -251,7 +251,7 @@ const ActivityFeed = ({
 
   return (
     <div className="flex flex-col gap-3">
-      <h3 className="text-xs font-semibold uppercase text-muted">Activity</h3>
+      <h3 className="cd-section-heading text-xs font-semibold uppercase text-muted">Activity</h3>
 
       {/* Comment input — hidden for VIEWER guests */}
       {canAddComment && (

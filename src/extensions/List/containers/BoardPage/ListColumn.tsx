@@ -170,15 +170,15 @@ const SortableListColumn = ({
       opacity: isDragging ? 0.5 : 1,
       contentVisibility: 'auto',
       contain: 'layout paint style',
-      containIntrinsicSize: '1px 640px',
+      containIntrinsicSize: 'auto 1px auto 640px',
       ...(listColor ? { backgroundColor: listColor, color: listTextColor } : {}),
     }),
     [transform?.x, transform?.y, transform?.scaleX, transform?.scaleY, transition, isDragging, listColor, listTextColor],
   );
   const columnSurfaceClass = (() => {
     if (listColor) return '';
-    if (hasBackground) return 'bg-bg-surface';
-    return 'bg-bg-surface/90 backdrop-blur-sm';
+    if (hasBackground) return 'bg-bg-list';
+    return 'bg-bg-list-bare backdrop-blur-sm';
   })();
   const loadingTextClass = (() => {
     if (!listColor) return 'text-muted';
@@ -234,7 +234,7 @@ const SortableListColumn = ({
       ref={setNodeRef}
       id={`board-list-${list.id}`}
       style={style}
-      className={`${isCollapsed ? 'w-14 self-start' : 'w-72 h-full'} shrink-0 border rounded-xl flex flex-col ${columnBorderClass} ${columnSurfaceClass}`}
+      className={`${isCollapsed ? 'w-14 self-start' : 'w-72 max-h-full'} shrink-0 border rounded-xl flex flex-col ${columnBorderClass} ${columnSurfaceClass}`}
       role="listitem"
       aria-label={`List: ${list.title}`}
     >
@@ -269,7 +269,7 @@ const SortableListColumn = ({
           <div
             data-dnd-list-scroll-container="true"
             className="scrollbar-contrast relative z-0 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-2"
-            style={{ contentVisibility: 'auto', contain: 'layout paint style', containIntrinsicSize: '1px 900px' }}
+            style={{ contentVisibility: 'auto', contain: 'layout paint style', containIntrinsicSize: 'auto 1px auto 900px' }}
           >
             {listCardObjects.map((card, idx) => (
               <Fragment key={card.id}>

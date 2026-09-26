@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { EllipsisHorizontalIcon } from '@heroicons/react/24/outline';
 import type { CardPreview } from '../types';
 import translations from '../translations/en.json';
+import { labelStyle } from '~/extensions/Card/utils/labelColors';
 
 interface Props {
   readonly attachmentId: string;
@@ -77,8 +78,8 @@ export function CardAttachmentPreview({ attachmentId, card, cardUrl, canWrite, o
             {card.labels.map((label) => (
               <span
                 key={label.id}
-                className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold text-white/90 truncate max-w-full" // [theme-exception] text-white on attachment preview overlay
-                style={{ backgroundColor: label.color }}
+                className="cd-label inline-block px-1.5 py-0.5 rounded text-[9px] font-bold truncate max-w-full"
+                style={labelStyle(label.color)}
                 title={label.name}
               >
                 {label.name}

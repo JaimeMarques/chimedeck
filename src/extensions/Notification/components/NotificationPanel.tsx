@@ -18,6 +18,8 @@ import Button from '~/common/components/Button';
 interface Props {
   onClose: () => void;
   onNavigate: (notification: Notification) => void;
+  /** Overrides the default positioning/size classes (anchored under the header bell). */
+  className?: string | undefined;
 }
 
 function resolveBoardCardTagKey(notification: Notification): string | null {
@@ -59,7 +61,11 @@ function groupContinuousCardDiscussionNotifications(notifications: Notification[
   return groups;
 }
 
-const NotificationPanel: FC<Props> = ({ onClose, onNavigate }) => {
+const NotificationPanel: FC<Props> = ({
+  onClose,
+  onNavigate,
+  className = 'absolute right-0 top-12 w-[380px] max-h-[480px]',
+}) => {
   const dispatch = useAppDispatch();
   const notifications = useAppSelector(selectNotifications);
   const hasMore = useAppSelector(selectNotificationHasMore);
@@ -88,7 +94,7 @@ const NotificationPanel: FC<Props> = ({ onClose, onNavigate }) => {
 
   return (
     <div
-      className="absolute right-0 top-12 w-[380px] max-h-[480px] overflow-y-auto bg-bg-base border border-border rounded-xl shadow-2xl z-50"
+      className={`${className} overflow-y-auto bg-bg-base border border-border rounded-xl shadow-2xl z-50`}
       role="dialog"
       aria-label={translations['Notifications.title']}
     >
