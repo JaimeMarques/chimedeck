@@ -37,6 +37,7 @@ import {
 } from '../boardSwitcher.slice';
 import { boardRouteIdFromPath, filterBoards } from '../helpers';
 import { PinIcon, PinSlashIcon } from './icons';
+import { useIsMdUp } from '../useIsMdUp';
 import translations from '../translations/en.json';
 
 // [why] Outside-click/Escape handlers of the popover skip events from inside this
@@ -68,6 +69,9 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   const loadedBoard = useAppSelector(selectBoard);
   const [query, setQuery] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [createError, setCreateError] = useState<string>();
+  // [why] Below md the pinned panel is hidden, so the popover owns the pin toggle
+  const isMdUp = useIsMdUp();
 
   // Refetch whenever the popover opens / the pinned panel mounts
   useEffect(() => {
@@ -90,32 +94,53 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
       ? b.id === routeBoardId || b.short_id === routeBoardId
       : pathname.startsWith('/c/') && b.id === loadedBoard?.id;
 
-  const openBoard = (b: { id: string; short_id?: string; title: string; workspaceId: string }) => {
+  // Link click: the <a href> navigates; we only sync the workspace and close the popover.
+  // Modified clicks open a new tab/window, so leave this view alone.
+  const onBoardLinkClick = (e: React.MouseEvent, b: Board) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     dispatch(setActiveWorkspace(b.workspaceId));
-    navigate(boardPath(b));
     onDone?.();
   };
 
-  const toggleStar = (e: React.MouseEvent, b: Board) => {
-    e.stopPropagation();
+  const toggleStar = (b: Board) => {
     void dispatch(toggleSwitcherStarThunk({ boardId: b.id, starred: !b.isStarred }));
   };
 
+  // Where "Create new board" lands: the filtered workspace, else the active one
+  const createWorkspaceId =
+    (workspaceFilter !== 'all' ? workspaceFilter : null) ?? activeWorkspaceId ?? workspaces[0]?.id;
+  const createWorkspaceName = workspaces.find((w) => w.id === createWorkspaceId)?.name;
+  const createSubtitle = createWorkspaceName
+    ? translations['BoardSwitcher.createIn'].replace('{workspace}', createWorkspaceName)
+    : undefined;
+
   const handleCreate = async (title: string) => {
-    const workspaceId =
-      (workspaceFilter !== 'all' ? workspaceFilter : null) ?? activeWorkspaceId ?? workspaces[0]?.id;
+    const workspaceId = createWorkspaceId;
     if (!workspaceId) return;
+    setCreateError(undefined);
     const result = await dispatch(createSwitcherBoardThunk({ workspaceId, title }));
-    if (!createSwitcherBoardThunk.fulfilled.match(result)) return;
+    if (!createSwitcherBoardThunk.fulfilled.match(result)) {
+      setCreateError(translations['BoardSwitcher.createFailed']);
+      return;
+    }
     setCreateOpen(false);
     void dispatch(fetchSwitcherBoardsThunk());
-    openBoard({ ...result.payload, workspaceId });
+    dispatch(setActiveWorkspace(workspaceId));
+    navigate(boardPath(result.payload));
+    onDone?.();
   };
 
+  const closeCreate = () => {
+    setCreateOpen(false);
+    setCreateError(undefined);
+  };
+
+  // [why] A sibling of the board link, not inside it: a button nested in a link is
+  // invalid and its Enter/click would also open the board.
   const starButton = (b: Board, onImage = false) => (
     <button
       type="button"
-      onClick={(e) => { toggleStar(e, b); }}
+      onClick={() => { toggleStar(b); }}
       aria-label={b.isStarred ? translations['BoardSwitcher.unstar'] : translations['BoardSwitcher.star']}
       aria-pressed={!!b.isStarred}
       className={cn(
@@ -148,20 +173,20 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
           {empty}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {visibleBoards.map((b) => (
-              <div
-                key={b.id}
-                role="link"
-                tabIndex={0}
-                onClick={() => { openBoard(b); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') openBoard(b); }}
-                className={cn(
-                  'group relative flex cursor-pointer flex-col overflow-hidden rounded-lg border bg-bg-surface hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-                  isCurrent(b) ? 'border-primary' : 'border-border',
-                )}
-              >
-                <BoardThumb board={b} className="h-20 w-full" />
+              <div key={b.id} className="group relative">
+                <Link
+                  to={boardPath(b)}
+                  onClick={(e) => { onBoardLinkClick(e, b); }}
+                  aria-current={isCurrent(b) ? 'page' : undefined}
+                  className={cn(
+                    'flex h-full flex-col overflow-hidden rounded-lg border bg-bg-surface hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                    isCurrent(b) ? 'border-primary' : 'border-border',
+                  )}
+                >
+                  <BoardThumb board={b} className="h-20 w-full" />
+                  <span className="line-clamp-2 px-2 py-1.5 text-xs font-medium text-base">{b.title}</span>
+                </Link>
                 <div className="absolute right-1.5 top-1.5">{starButton(b, true)}</div>
-                <span className="line-clamp-2 px-2 py-1.5 text-xs font-medium text-base">{b.title}</span>
               </div>
             ))}
             <button
@@ -171,6 +196,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
             >
               <PlusIcon className="h-5 w-5" aria-hidden="true" />
               {translations['BoardSwitcher.createBoard']}
+              {createSubtitle && <span className="text-[11px] text-subtle">{createSubtitle}</span>}
             </button>
           </div>
         </>
@@ -183,15 +209,13 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
         {visibleBoards.map((b) => {
           const current = isCurrent(b);
           return (
-            <li key={b.id}>
-              <div
-                role="link"
-                tabIndex={0}
+            <li key={b.id} className="group relative">
+              <Link
+                to={boardPath(b)}
+                onClick={(e) => { onBoardLinkClick(e, b); }}
                 aria-current={current ? 'page' : undefined}
-                onClick={() => { openBoard(b); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') openBoard(b); }}
                 className={cn(
-                  'group relative flex cursor-pointer items-center gap-2.5 rounded-md py-1.5 pl-2.5 pr-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                  'relative flex items-center gap-2.5 rounded-md py-1.5 pl-2.5 pr-8 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                   current ? 'bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)]' : 'hover:bg-bg-overlay',
                 )}
               >
@@ -201,8 +225,8 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
                 <span className={`min-w-0 flex-1 truncate text-sm text-base ${current ? 'font-semibold' : ''}`}>
                   {b.title}
                 </span>
-                {starButton(b)}
-              </div>
+              </Link>
+              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2">{starButton(b)}</div>
             </li>
           );
         })}
@@ -212,8 +236,11 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
             onClick={() => { setCreateOpen(true); }}
             className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-bg-overlay hover:text-base"
           >
-            <PlusIcon className="h-4 w-4" aria-hidden="true" />
-            {translations['BoardSwitcher.createBoard']}
+            <PlusIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">
+              {translations['BoardSwitcher.createBoard']}
+              {createSubtitle && <span className="ml-1.5 text-xs text-subtle">{createSubtitle}</span>}
+            </span>
           </button>
         </li>
       </ul>
@@ -238,26 +265,26 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
         </label>
         {variant === 'popover' && (
           <IconButton
-            aria-label={layout === 'grid' ? translations['BoardSwitcher.showAsList'] : translations['BoardSwitcher.showAsGrid']}
+            aria-label={translations['BoardSwitcher.listLayout']}
             aria-pressed={layout === 'list'}
             onClick={() => dispatch(setSwitcherPrefs({ layout: layout === 'grid' ? 'list' : 'grid' }))}
             icon={layout === 'grid' ? <ListBulletIcon className="h-4 w-4" /> : <Squares2X2Icon className="h-4 w-4" />}
           />
         )}
-        {variant === 'popover' ? (
+        {/* Below md a pinned switcher shows as this popover, so it carries Unpin */}
+        {variant === 'popover' && (isMdUp || !prefs.pinned) ? (
           <IconButton
             aria-label={translations['BoardSwitcher.pin']}
-            aria-pressed={false}
             onClick={() => {
               dispatch(setSwitcherPrefs({ pinned: true, pinnedOpen: true }));
-              onDone?.();
+              // Below md there is no panel to hand over to, so stay open (showing Unpin)
+              if (isMdUp) onDone?.();
             }}
             icon={<PinIcon className="h-4 w-4" />}
           />
         ) : (
           <IconButton
             aria-label={translations['BoardSwitcher.unpin']}
-            aria-pressed
             onClick={() => dispatch(setSwitcherPrefs({ pinned: false }))}
             icon={<PinSlashIcon className="h-4 w-4" />}
           />
@@ -328,7 +355,12 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
       {createOpen &&
         createPortal(
           <div {...{ [SWITCHER_PORTAL_ATTR]: '' }}>
-            <CreateBoardModal onClose={() => { setCreateOpen(false); }} onCreate={(t) => { void handleCreate(t); }} />
+            <CreateBoardModal
+              onClose={closeCreate}
+              onCreate={(t) => { void handleCreate(t); }}
+              subtitle={createSubtitle}
+              error={createError}
+            />
           </div>,
           document.body,
         )}

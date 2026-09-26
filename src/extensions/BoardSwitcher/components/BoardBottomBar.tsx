@@ -23,6 +23,7 @@ import { useNotificationNavigate } from '~/extensions/Notification/hooks/useNoti
 import { selectSwitcherPrefs, setSwitcherPrefs } from '../boardSwitcher.slice';
 import BoardSwitcherPopover from './BoardSwitcherPopover';
 import { SWITCHER_PORTAL_ATTR } from './BoardSwitcherBody';
+import { useIsMdUp } from '../useIsMdUp';
 import translations from '../translations/en.json';
 
 interface Props {
@@ -32,6 +33,8 @@ interface Props {
   onShowBoardTab: () => void;
 }
 
+const badgeLabel = (n: number) => (n > 99 ? '99+' : String(n));
+
 type OpenPopover = 'inbox' | 'switcher' | null;
 
 const isInsidePortal = (target: EventTarget | null) =>
@@ -39,6 +42,7 @@ const isInsidePortal = (target: EventTarget | null) =>
 
 function BarButton({
   label,
+  ariaLabel = label,
   icon,
   active,
   onClick,
@@ -46,6 +50,7 @@ function BarButton({
   expanded,
 }: {
   label: string;
+  ariaLabel?: string;
   icon: ReactNode;
   active: boolean;
   onClick: () => void;
@@ -56,7 +61,7 @@ function BarButton({
     <button
       type="button"
       onClick={onClick}
-      aria-label={label}
+      aria-label={ariaLabel}
       aria-pressed={expanded === undefined ? active : undefined}
       aria-expanded={expanded}
       className={cn(
@@ -66,10 +71,12 @@ function BarButton({
       )}
     >
       {icon}
-      {label}
+      {/* [why] Icon-only below sm so the four buttons fit a phone; aria-label keeps the name */}
+      <span className="hidden sm:inline">{label}</span>
       {!!badge && (
-        <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
-          {badge > 99 ? '99+' : badge}
+        // Same colours as NotificationBell's badge (bg-primary + white failed contrast)
+        <span className="rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-bold leading-none text-inverse" aria-hidden="true">
+          {badgeLabel(badge)}
         </span>
       )}
       {active && <span className="absolute bottom-0.5 left-1/2 h-0.5 w-4 -translate-x-1/2 rounded bg-primary" aria-hidden="true" />}
@@ -86,9 +93,14 @@ export default function BoardBottomBar({ boardId, boardTabActive, onShowBoardTab
   const handleNotificationNavigate = useNotificationNavigate();
   const [open, setOpen] = useState<OpenPopover>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  // [why] The pinned panel is hidden below md, so there pinned behaves like popover mode.
+  const isMdUp = useIsMdUp();
+  const pinned = prefs.pinned && isMdUp;
 
   // Close popovers on navigation
   useEffect(() => { setOpen(null); }, [pathname]);
+  // Growing past md with pinned on shows the panel, so drop the popover
+  useEffect(() => { if (pinned) setOpen((o) => (o === 'switcher' ? null : o)); }, [pinned]);
 
   // Close popovers on outside click and Escape
   useEffect(() => {
@@ -118,7 +130,7 @@ export default function BoardBottomBar({ boardId, boardTabActive, onShowBoardTab
   };
 
   const toggleSwitcher = () => {
-    if (prefs.pinned) {
+    if (pinned) {
       setOpen(null);
       dispatch(setSwitcherPrefs({ pinnedOpen: !prefs.pinnedOpen }));
     } else {
@@ -126,15 +138,23 @@ export default function BoardBottomBar({ boardId, boardTabActive, onShowBoardTab
     }
   };
 
+  // [why] The full-width wrapper is the popovers' containing block, so their
+  // max-width is the board area (not the viewport, which includes the sidebar).
+  // z-20: above the lists and the z-10 header, below the automation scrim (z-30).
   return (
+    <div ref={barRef} className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center">
     <div
-      ref={barRef}
       role="toolbar"
       aria-label={translations['BoardSwitcher.barAriaLabel']}
-      className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-border bg-bg-surface/95 p-1 shadow-lg backdrop-blur"
+      className="pointer-events-auto flex items-center gap-1 rounded-xl border border-border bg-[color-mix(in_srgb,var(--bg-surface)_95%,transparent)] p-1 shadow-lg backdrop-blur"
     >
       <BarButton
         label={translations['BoardSwitcher.inbox']}
+        ariaLabel={
+          unreadCount > 0
+            ? translations['BoardSwitcher.inboxUnread'].replace('{count}', badgeLabel(unreadCount))
+            : translations['BoardSwitcher.inbox']
+        }
         icon={<InboxIcon className="h-4 w-4" aria-hidden="true" />}
         active={open === 'inbox'}
         expanded={open === 'inbox'}
@@ -157,15 +177,16 @@ export default function BoardBottomBar({ boardId, boardTabActive, onShowBoardTab
       <BarButton
         label={translations['BoardSwitcher.switchBoards']}
         icon={<ArrowsRightLeftIcon className="h-4 w-4" aria-hidden="true" />}
-        active={open === 'switcher' || (prefs.pinned && prefs.pinnedOpen)}
-        expanded={open === 'switcher' || (prefs.pinned && prefs.pinnedOpen)}
+        active={open === 'switcher' || (pinned && prefs.pinnedOpen)}
+        expanded={open === 'switcher' || (pinned && prefs.pinnedOpen)}
         onClick={toggleSwitcher}
       />
+    </div>
 
       {open === 'switcher' && <BoardSwitcherPopover onClose={() => { setOpen(null); }} />}
       {open === 'inbox' && (
         <NotificationPanel
-          className="absolute bottom-full left-1/2 mb-2 w-[380px] max-w-[calc(100vw-2rem)] max-h-[60vh] -translate-x-1/2"
+          className="pointer-events-auto absolute bottom-full left-1/2 mb-2 w-[380px] max-w-[calc(100%-2rem)] max-h-[60vh] -translate-x-1/2"
           onClose={() => { setOpen(null); }}
           onNavigate={handleNotificationNavigate}
         />

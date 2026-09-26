@@ -23,6 +23,9 @@ interface BoardSwitcherState {
   boards: Board[];
   status: 'idle' | 'loading' | 'error';
   prefs: BoardSwitcherPrefs;
+  /** Star toggles still in flight, by board id. [why] A board fetch that started
+   *  before the toggle resolves with the old isStarred; these are re-applied over it. */
+  pendingStars: Record<string, boolean>;
 }
 
 const DEFAULT_PREFS: BoardSwitcherPrefs = {
@@ -55,6 +58,7 @@ const initialState: BoardSwitcherState = {
   boards: [],
   status: 'idle',
   prefs: loadPrefs(),
+  pendingStars: {},
 };
 
 // ---------- Thunks ----------
@@ -104,6 +108,10 @@ function setStarred(state: BoardSwitcherState, boardId: string, starred: boolean
   if (board) board.isStarred = starred;
 }
 
+function clearPendingStar(state: BoardSwitcherState, boardId: string) {
+  state.pendingStars = Object.fromEntries(Object.entries(state.pendingStars).filter(([id]) => id !== boardId));
+}
+
 const boardSwitcherSlice = createSlice({
   name: 'boardSwitcher',
   initialState,
@@ -119,7 +127,8 @@ const boardSwitcherSlice = createSlice({
       })
       .addCase(fetchSwitcherBoardsThunk.fulfilled, (state, action) => {
         state.status = 'idle';
-        state.boards = action.payload;
+        const pending = state.pendingStars;
+        state.boards = action.payload.map((b) => (b.id in pending ? { ...b, isStarred: pending[b.id] === true } : b));
       })
       .addCase(fetchSwitcherBoardsThunk.rejected, (state) => {
         state.status = 'error';
@@ -127,8 +136,13 @@ const boardSwitcherSlice = createSlice({
       // Optimistic star toggle with rollback on failure
       .addCase(toggleSwitcherStarThunk.pending, (state, action) => {
         setStarred(state, action.meta.arg.boardId, action.meta.arg.starred);
+        state.pendingStars[action.meta.arg.boardId] = action.meta.arg.starred;
+      })
+      .addCase(toggleSwitcherStarThunk.fulfilled, (state, action) => {
+        clearPendingStar(state, action.meta.arg.boardId);
       })
       .addCase(toggleSwitcherStarThunk.rejected, (state, action) => {
+        clearPendingStar(state, action.meta.arg.boardId);
         setStarred(state, action.meta.arg.boardId, !action.meta.arg.starred);
       });
   },

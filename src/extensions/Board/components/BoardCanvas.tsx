@@ -373,6 +373,35 @@ function getContainingBoardListIdFromRects(
   return containingRect?.listId ?? null;
 }
 
+// Half of the board's gap-3 (12px) column gap, so the gutter splits between lanes.
+const BOARD_LANE_GAP_TOLERANCE_PX = 6;
+
+function getBoardLaneListIdFromRects(
+  clientX: number,
+  rects: BoardListRect[],
+  horizontalScrollDelta: number = 0,
+): string | null {
+  const lane = rects.find((r) => (
+    clientX >= r.left - horizontalScrollDelta - BOARD_LANE_GAP_TOLERANCE_PX
+    && clientX <= r.right - horizontalScrollDelta + BOARD_LANE_GAP_TOLERANCE_PX
+  ));
+  return lane?.listId ?? null;
+}
+
+// WHY: a card released anywhere in a list's lane (including the empty area
+// under a short list) drops into that list; outside the board scroller (e.g.
+// the board header) or beside every list (Add-list column) it does not.
+function getBoardDropLaneListId(
+  clientX: number | null,
+  clientY: number | null,
+  scroller: HTMLElement | null,
+): string | null {
+  if (clientX == null || clientY == null || !scroller) return null;
+  const s = scroller.getBoundingClientRect();
+  if (clientX < s.left || clientX > s.right || clientY < s.top || clientY > s.bottom) return null;
+  return getBoardLaneListIdFromRects(clientX, buildLiveBoardListRects());
+}
+
 function getNearestBoardListIdFromRects(
   clientX: number,
   clientY: number,
@@ -381,17 +410,15 @@ function getNearestBoardListIdFromRects(
 ): string | null {
   if (rects.length === 0) return null;
 
-  const verticalTolerance = 40;
-  const verticallyNearbyRects = rects.filter((r) => (
-    clientY >= r.top - verticalTolerance && clientY <= r.bottom + verticalTolerance
-  ));
-  const nearestCandidates = verticallyNearbyRects.length > 0
-    ? verticallyNearbyRects
-    : rects;
+  // WHY: lists are content-height, so the empty board area under a short list
+  // belongs to that list's vertical lane. Resolve by x only (lane first, then
+  // nearest centre); a vertical filter would hand that area to a taller neighbour.
+  const laneListId = getBoardLaneListIdFromRects(clientX, rects, horizontalScrollDelta);
+  if (laneListId) return laneListId;
 
   let nearestListId: string | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
-  nearestCandidates.forEach((r) => {
+  rects.forEach((r) => {
     const adjustedCenterX = r.centerX - horizontalScrollDelta;
     const distance = Math.abs(clientX - adjustedCenterX);
     if (distance < nearestDistance) {
@@ -1043,7 +1070,22 @@ const BoardCanvas = ({
     (args) => {
       const activeId = String(args.active.id);
       if (!cardsRef.current[activeId]) {
-        return rectIntersection(args);
+        // WHY: lists are content-height, so area-based rectIntersection favours
+        // taller columns. Reorder by x only: the list whose centre is nearest
+        // the dragged list's centre.
+        const { collisionRect } = args;
+        const activeCenterX = collisionRect.left + collisionRect.width / 2;
+        let nearest: { container: (typeof args.droppableContainers)[number]; distance: number } | null = null;
+        for (const container of args.droppableContainers) {
+          if (!listsRef.current[String(container.id)]) continue;
+          const rect = args.droppableRects.get(container.id);
+          if (!rect) continue;
+          const distance = Math.abs(rect.left + rect.width / 2 - activeCenterX);
+          if (!nearest || distance < nearest.distance) nearest = { container, distance };
+        }
+        return nearest
+          ? [{ id: nearest.container.id, data: { droppableContainer: nearest.container, value: nearest.distance } }]
+          : [];
       }
 
       let collisionArgs = args;
@@ -1354,7 +1396,19 @@ const BoardCanvas = ({
       dragStartListRectsRef.current = [];
       dragCardElementsByIdRef.current = {};
 
-      if (!over) {
+      const activeId = String(active.id);
+      // WHY: over is null when a card is released in the empty lane below a
+      // short list (collision uses pre-drag list rects). That is still a drop
+      // into the lane's list; only a release outside every lane rolls back.
+      // Keyboard drags have no live pointer, so they keep relying on `over`.
+      const isPointerCardDrag = Boolean(currentCards[activeId]) && 'clientX' in event.activatorEvent;
+      const dropLaneListId = isPointerCardDrag
+        ? getBoardDropLaneListId(livePointerXRef.current, livePointerYRef.current, boardScrollerRef.current)
+        : null;
+      const hasDropTarget = isPointerCardDrag
+        ? dropLaneListId != null && currentLists[dropLaneListId] !== undefined
+        : over != null;
+      if (!hasDropTarget) {
         setDragCardsByList(null);
         resetQueuedDragPlaceholder();
         dragPlaceholderRef.current = null;
@@ -1368,8 +1422,7 @@ const BoardCanvas = ({
         return;
       }
 
-      const activeId = String(active.id);
-      const overId = String(over.id);
+      const overId = over ? String(over.id) : '';
 
       // List reorder
       if (currentLists[activeId]) {
