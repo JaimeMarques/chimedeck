@@ -45,6 +45,8 @@ const McpDocsPage = () => {
             <NavItem href="#tool-search-cards" label="search_cards" />
             <NavItem href="#tool-search-board" label="search_board" />
             <NavItem href="#tool-get-card" label="get_card" />
+            <NavItem href="#tool-get-card-discussion" label="get_card_discussion" />
+            <NavItem href="#tool-get-comment-replies" label="get_comment_replies" />
             <NavItem href="#tool-get-state-transitions" label="get_state_transitions" />
             <NavItem href="#tool-set-state-transitions" label="set_state_transitions" />
             <NavItem href="#tool-get-state-transition-rules" label="get_state_transition_rules" />
@@ -436,6 +438,22 @@ curl -X POST http://localhost:3000/api/mcp \\
                   ],
                 },
                 {
+                  rowId: 'tool-get-card-discussion',
+                  cells: [
+                    { key: 'tool', content: <Code>get_card_discussion</Code> },
+                    { key: 'desc', content: 'Read comments and replies with explicit completeness status' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId/comments + GET /api/v1/comments/:commentId/replies</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-get-comment-replies',
+                  cells: [
+                    { key: 'tool', content: <Code>get_comment_replies</Code> },
+                    { key: 'desc', content: 'Read one parent’s non-deleted direct replies' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/comments/:commentId/replies</Code> },
+                  ],
+                },
+                {
                   rowId: 'tool-get-state-transitions',
                   cells: [
                     { key: 'tool', content: <Code>get_state_transitions</Code> },
@@ -823,6 +841,22 @@ curl -X POST http://localhost:3000/api/mcp \\
                 },
               ]}
             />
+          </Section>
+
+          <Section id="tool-get-card-discussion">
+            <H3>get_card_discussion</H3>
+            <P>Read the complete discussion using a required <Code>cardId</Code> string (card UUID or short ID). Use this tool for comments; <Code>get_card</Code> is not a comment source.</P>
+            <Pre>{`{"name":"get_card_discussion","arguments":{"cardId":"<card UUID or short ID>"}}`}</Pre>
+            <P>Returns <Code>{'{data, complete, issues}'}</Code>. The flat array preserves author, body, timestamps, reactions and <Code>parent_id</Code>. Parents are oldest first, each followed by their oldest-first replies. Equal timestamps retain server order; threads are grouped rather than globally interleaved.</P>
+            <WarnCallout>Check <Code>complete</Code> before treating results as exhaustive. Failed threads, changed reply counts and unexpected metadata set it to false with per-parent issues. Successful threads remain available; a failed initial read returns an MCP error.</WarnCallout>
+            <P>The current API has one reply level and no pagination. Deleted parent placeholders remain, but deleted replies are unavailable. Reads are not an atomic snapshot; re-read after concurrent edits.</P>
+          </Section>
+
+          <Section id="tool-get-comment-replies">
+            <H3>get_comment_replies</H3>
+            <P>Read one parent’s non-deleted direct replies using a required <Code>commentId</Code> UUID string from <Code>get_card_discussion</Code>. UUID case is normalized. Returns the same <Code>{'{data, complete, issues}'}</Code> envelope, oldest first. The tool does not verify that the requested comment is top-level; a reply itself has no children. Failed reads return MCP errors.</P>
+            <Pre>{`{"name":"get_comment_replies","arguments":{"commentId":"<parent comment UUID>"}}`}</Pre>
+            <InfoCallout>Both tools are read-only and use your existing permissions in stdio and HTTP sessions. Reconnect after deployment and add both names if your client uses an explicit tool allowlist.</InfoCallout>
           </Section>
 
           {/* get_state_transitions */}

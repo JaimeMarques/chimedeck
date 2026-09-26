@@ -1,0 +1,36 @@
+name: MCP discussion reads
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-discussion-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  discussion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+      - run: bun install --frozen-lockfile
+      - name: Test MCP discovery and read-only discussion contracts
+        run: bun test server/extensions/mcp/tools/readDiscussion.test.ts
+      - name: Lint discussion implementation and fixtures
+        run: >-
+          bunx --no-install eslint
+          server/extensions/mcp/tools/readDiscussion.ts
+          server/extensions/mcp/tools/readDiscussion.test.ts
+          server/extensions/mcp/tools/readDiscussion.fixture.ts
+          server/extensions/mcp/registerTools.ts
+      - name: Build client including MCP developer documentation
+        run: bun run build:client

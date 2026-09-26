@@ -10,6 +10,7 @@ import { registerInviteToBoard } from './tools/inviteToBoard';
 import { registerSearchCards } from './tools/searchCards';
 import { registerSearchBoard } from './tools/searchBoard';
 import { registerGetCard } from './tools/getCard';
+import { registerDiscussionReaders } from './tools/readDiscussion';
 import { registerGetStateTransitions } from './tools/getStateTransitions';
 import { registerSetStateTransitions } from './tools/setStateTransitions';
 import { registerGetStateTransitionRules } from './tools/getStateTransitionRules';
@@ -31,6 +32,7 @@ export function registerMcpTools(server: McpServer, token: string): void {
   registerSearchCards(server, token);
   registerSearchBoard(server, token);
   registerGetCard(server, token);
+  registerDiscussionReaders(server, token);
   registerGetStateTransitions(server, token);
   registerSetStateTransitions(server, token);
   registerGetStateTransitionRules(server, token);
