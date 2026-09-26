@@ -7,6 +7,7 @@ import { fetchBoardDataThunk } from '../../Board/slices/boardSlice';
 import { logoutThunk } from '../../Auth/duck/authDuck';
 import reducer, {
   fetchSwitcherBoardsThunk,
+  patchSwitcherBoard,
   selectSwitcherStarred,
   toggleStarAndReconcileThunk,
   toggleSwitcherStarThunk,
@@ -114,6 +115,19 @@ describe('boardSwitcher — the open board fetch reconciles stars', () => {
     expect(starred(state)).toBe(true);
     state = reducer(state, fetchBoardDataThunk.fulfilled(loaded(false), 'g', load));
     expect(starred(state)).toBe(true);
+  });
+
+  it('does not let a metadata edit revert fresh star reads', () => {
+    let state = reducer(undefined, fetchSwitcherBoardsThunk.pending('f0'));
+    state = reducer(state, fetchSwitcherBoardsThunk.fulfilled({ boards: [board(false)], incomplete: false }, 'f0'));
+    state = reducer(state, fetchBoardDataThunk.pending('g', load));
+    state = reducer(state, fetchSwitcherBoardsThunk.pending('f1'));
+    // Renamed while both reads are out: the edit snapshot still carries isStarred=false.
+    state = reducer(state, patchSwitcherBoard({ id: 'b1', title: 'Renamed', background: null, state: 'ACTIVE' }));
+    state = reducer(state, fetchBoardDataThunk.fulfilled(loaded(true), 'g', load));
+    state = reducer(state, fetchSwitcherBoardsThunk.fulfilled({ boards: [board(true)], incomplete: false }, 'f1'));
+    expect(starred(state)).toBe(true);
+    expect(state.boards[0]?.title).toBe('Renamed');
   });
 
   it('ignores a previous session board fetch landing after logout', () => {

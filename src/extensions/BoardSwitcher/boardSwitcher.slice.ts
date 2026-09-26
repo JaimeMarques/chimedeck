@@ -350,7 +350,11 @@ const boardSwitcherSlice = createSlice({
           };
           const fetched = action.payload.boards.flatMap((b) => {
             const e = newer(b.id);
-            return e ? (e.board ? [{ ...e.board }] : []) : [b];
+            if (!e) return [b];
+            if (!e.board) return [];
+            // [why] A local edit covers metadata only; its snapshot's isStarred may be stale, so keep
+            // the fetched star and let the star ordering below decide.
+            return [{ ...e.board, ...(b.isStarred !== undefined ? { isStarred: b.isStarred } : {}) }];
           });
           for (const [id, e] of Object.entries(state.boardEdits)) {
             if (e.board && newer(id) && !fetched.some((b) => b.id === id)) fetched.push({ ...e.board });
