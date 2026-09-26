@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { resolveCardDropDestination } from '../BoardCanvas';
+import { isBoardDropPoint, resolveCardDropDestination } from '../BoardCanvas';
 
 // Lane "B" cards with viewport mid-Ys; active card already excluded.
 const mids: Record<string, number> = { b1: 100, b2: 200, b3: 300 };
@@ -7,6 +7,22 @@ const getMid = (id: string) => mids[id] ?? null;
 const lane = ['b1', 'b2', 'b3'];
 // Previous frame's cache: pointer was still in lane "A" at index 2.
 const stale = { listId: 'A', index: 2 };
+
+describe('isBoardDropPoint', () => {
+  const board = { left: 10, right: 410, top: 20, bottom: 320 };
+
+  it('accepts a release inside the visible board, including its edges', () => {
+    expect(isBoardDropPoint({ x: 200, y: 250 }, board)).toBe(true);
+    expect(isBoardDropPoint({ x: 10, y: 20 }, board)).toBe(true);
+  });
+
+  it('rejects a release above, below, or beside the board', () => {
+    expect(isBoardDropPoint({ x: 200, y: 19 }, board)).toBe(false);
+    expect(isBoardDropPoint({ x: 200, y: 321 }, board)).toBe(false);
+    expect(isBoardDropPoint({ x: 9, y: 100 }, board)).toBe(false);
+    expect(isBoardDropPoint({ x: 411, y: 100 }, board)).toBe(false);
+  });
+});
 
 describe('resolveCardDropDestination', () => {
   it('commits a fallback lane drop to the final lane, not the stale cached one', () => {

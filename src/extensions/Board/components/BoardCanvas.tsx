@@ -379,6 +379,17 @@ function getContainingBoardListIdFromRects(
   return containingRect?.listId ?? null;
 }
 
+// Pointer list drops must remain inside the visible board; horizontal-only
+// collision ranking must not select a list when released over the header/footer.
+export function isBoardDropPoint(
+  point: { x: number; y: number } | null,
+  rect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'> | null,
+): boolean {
+  return point != null && rect != null
+    && point.x >= rect.left && point.x <= rect.right
+    && point.y >= rect.top && point.y <= rect.bottom;
+}
+
 // Half of the board's gap-3 (12px) column gap, so the gutter splits between lanes.
 const BOARD_LANE_GAP_TOLERANCE_PX = 6;
 
@@ -1115,8 +1126,12 @@ const BoardCanvas = ({
       const activeId = String(args.active.id);
       if (!cardsRef.current[activeId]) {
         // WHY: lists are content-height, so area-based rectIntersection favours
-        // taller columns. Reorder by x only: the list whose centre is nearest
-        // the dragged list's centre.
+        // taller columns. Reorder by x only while the pointer is still in the
+        // visible board; otherwise a release over the header reorders a list.
+        if (args.pointerCoordinates && !isBoardDropPoint(
+          args.pointerCoordinates,
+          boardScrollerRef.current?.getBoundingClientRect() ?? null,
+        )) return [];
         const { collisionRect } = args;
         const activeCenterX = collisionRect.left + collisionRect.width / 2;
         let nearest: { container: (typeof args.droppableContainers)[number]; distance: number } | null = null;
@@ -1484,6 +1499,19 @@ const BoardCanvas = ({
         dragStartSourceListScrollTopRef.current = null;
         const oldIndex = listOrder.indexOf(activeId);
         const newIndex = listOrder.indexOf(overId);
+        // A stale `over` from the previous frame must not commit a pointer
+        // release outside the board. Keyboard sorting has no pointer release.
+        const pointerListDropOutside = 'clientX' in event.activatorEvent
+          && !isBoardDropPoint(
+            livePointerXRef.current != null && livePointerYRef.current != null
+              ? { x: livePointerXRef.current, y: livePointerYRef.current }
+              : null,
+            boardScrollerRef.current?.getBoundingClientRect() ?? null,
+          );
+        if (pointerListDropOutside) {
+          onDragRollback();
+          return;
+        }
         if (oldIndex !== newIndex && newIndex >= 0) {
           const newOrder = [...listOrder];
           newOrder.splice(oldIndex, 1);

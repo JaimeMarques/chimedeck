@@ -1,0 +1,26 @@
+name: Board frontend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  board-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Test board switcher, drop handling, and label colours
+        env:
+          NODE_ENV: test
+        run: bun test src/extensions/BoardSwitcher src/extensions/Board/components/__tests__/boardCanvasDrop.test.ts src/extensions/Card/utils/__tests__/labelColors.test.ts
+      - run: bun run build:client
