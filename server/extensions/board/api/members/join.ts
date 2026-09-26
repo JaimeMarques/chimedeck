@@ -4,23 +4,36 @@
 // PRIVATE boards are rejected — only admins can add members to those.
 import { randomUUID } from 'node:crypto';
 import { db } from '../../../../common/db';
-import type { AuthenticatedRequest } from '../../../auth/middlewares/authentication';
 import type { BoardVisibilityScopedRequest } from '../../../../middlewares/boardVisibility';
 import { dispatchEvent } from '../../../../mods/events/dispatch';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 import { lockBoardMemberMutations } from './lock';
 
+type JoinBoardRequest = BoardVisibilityScopedRequest & {
+  board: NonNullable<BoardVisibilityScopedRequest['board']>;
+  currentUser: { id: string };
+};
+type MembershipRow = { user_id: string; workspace_id: string; role: string };
+type JoinedMemberRow = {
+  id: string;
+  email: string;
+  name: string;
+  nickname: string | null;
+  role: string;
+  created_at: Date | string;
+};
+
 export async function handleJoinBoard(req: Request, boardId: string): Promise<Response> {
-  const scopedReq = req as BoardVisibilityScopedRequest;
-  const board = scopedReq.board!;
-  const currentUser = (req as AuthenticatedRequest).currentUser!;
+  const scopedReq = req as JoinBoardRequest;
+  const board = scopedReq.board;
+  const currentUser = scopedReq.currentUser;
 
   const result = await db.transaction(async (trx) => {
     await lockWorkspaceMembershipMutations(trx, board.workspace_id);
     await lockBoardMemberMutations(trx, boardId);
-    const freshBoard = await trx('boards')
+    const freshBoard = await trx<NonNullable<BoardVisibilityScopedRequest['board']>>('boards')
       .where({ id: boardId, workspace_id: board.workspace_id })
-      .first();
+      .first<NonNullable<BoardVisibilityScopedRequest['board']> | undefined>();
     if (!freshBoard) {
       return {
         error: Response.json(
@@ -32,10 +45,10 @@ export async function handleJoinBoard(req: Request, boardId: string): Promise<Re
 
     // Re-read membership after the workspace lock. A request queued behind
     // removal must not insert a board row using authority it no longer has.
-    const membership = await trx('memberships')
+    const membership = await trx<MembershipRow>('memberships')
       .where({ user_id: currentUser.id, workspace_id: board.workspace_id })
       .whereNot('role', 'GUEST')
-      .first();
+      .first<MembershipRow | undefined>();
 
     if (!membership) {
       return {
@@ -77,7 +90,7 @@ export async function handleJoinBoard(req: Request, boardId: string): Promise<Re
       .returning('id');
     const created = inserted.length > 0;
 
-    const member = await trx('board_members as bm')
+    const member = await trx<JoinedMemberRow>('board_members as bm')
       .join('users as u', 'bm.user_id', 'u.id')
       .where({ 'bm.board_id': boardId, 'bm.user_id': currentUser.id })
       .select(
@@ -88,11 +101,11 @@ export async function handleJoinBoard(req: Request, boardId: string): Promise<Re
         'bm.role',
         'bm.created_at'
       )
-      .first();
+      .first<JoinedMemberRow>();
     return { created, member };
   });
 
-  if ('error' in result && result.error) return result.error;
+  if ('error' in result) return result.error;
   const { created, member } = result;
 
   if (created) {

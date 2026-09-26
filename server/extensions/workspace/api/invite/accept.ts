@@ -5,8 +5,10 @@ import { consumeInvite } from '../../mods/invite/consume';
 import { writeEvent } from '../../../../mods/events/index';
 import { db } from '../../../../common/db';
 
+type UserDisplayNameRow = { name: string | null };
+
 export async function handleAcceptInvite(req: Request, token: string): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
   const { currentUser } = req as AuthenticatedRequest;
@@ -32,15 +34,13 @@ export async function handleAcceptInvite(req: Request, token: string): Promise<R
         { status: 410 },
       );
     }
-    if (result.reason === 'invite-already-used') {
-      return Response.json(
-        { error: { code: 'invite-already-used', message: 'Invite has already been used' } },
-        { status: 409 },
-      );
-    }
+    return Response.json(
+      { error: { code: 'invite-already-used', message: 'Invite has already been used' } },
+      { status: 409 },
+    );
   }
 
-  const { invite } = result as Extract<typeof result, { ok: true }>;
+  const { invite } = result;
 
   if (invite.invited_email.trim().toLowerCase() !== currentUser.email.trim().toLowerCase()) {
     return Response.json(
@@ -59,21 +59,22 @@ export async function handleAcceptInvite(req: Request, token: string): Promise<R
 
   // Emit real-time event so connected clients learn about the new workspace member (§8).
   // Resolve displayName from the users table since the JWT only carries id + email.
-  const user = await db('users').where({ id: currentUser.id }).first();
-  const displayName = (user?.name as string | undefined) ?? currentUser.email;
-  await writeEvent({
-    type: 'member_joined',
-    boardId: null,
-    entityId: invite.workspace_id,
-    actorId: currentUser.id,
-    payload: {
-      scope: 'workspace',
-      userId: currentUser.id,
-      displayName,
-      role: invite.role,
-      joinedAt: new Date().toISOString(),
-    },
-  });
+  db('users').where({ id: currentUser.id }).first().then((user) => {
+    const displayName = (user as UserDisplayNameRow | undefined)?.name ?? currentUser.email;
+    return writeEvent({
+      type: 'member_joined',
+      boardId: null,
+      entityId: invite.workspace_id,
+      actorId: currentUser.id,
+      payload: {
+        scope: 'workspace',
+        userId: currentUser.id,
+        displayName,
+        role: invite.role,
+        joinedAt: new Date().toISOString(),
+      },
+    });
+  }).catch(() => {});
 
   return Response.json({
     data: {

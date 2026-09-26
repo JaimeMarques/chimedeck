@@ -15,6 +15,11 @@ import { getCurrentWorkspaceRole } from '../members/authorization';
 import { lockBoardMemberMutations } from '../members/lock';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 
+type ResolvedBoardAccessRequest = BoardScopedRequest & { board: { workspace_id: string } };
+type AuthenticatedUserRequest = AuthenticatedRequest & { currentUser: { id: string } };
+type GuestAccessRow = { user_id: string; board_id: string; guest_type: GuestType };
+type GuestResponseRow = Record<string, unknown>;
+
 export async function handleUpdateGuestType(
   req: Request,
   boardId: string,
@@ -23,11 +28,11 @@ export async function handleUpdateGuestType(
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const boardReq = req as BoardScopedRequest;
+  const boardReq = req as ResolvedBoardAccessRequest;
   const accessError = await requireBoardAccess(boardReq, boardId);
   if (accessError) return accessError;
 
-  const board = boardReq.board!;
+  const board = boardReq.board;
   const scopedReq = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
   if (membershipError) return membershipError;
@@ -37,7 +42,7 @@ export async function handleUpdateGuestType(
 
   let body: { guestType?: string };
   try {
-    body = await req.json();
+    body = (await req.json()) as typeof body;
   } catch {
     return Response.json(
       { name: 'invalid-request-body', data: { message: 'Request body must be JSON' } },
@@ -61,9 +66,9 @@ export async function handleUpdateGuestType(
 
   const validGuestType = guestType as GuestType;
 
-  const existing = await db('board_guest_access')
+  const existing = await db<GuestAccessRow>('board_guest_access')
     .where({ user_id: targetUserId, board_id: boardId })
-    .first();
+    .first<GuestAccessRow | undefined>();
 
   if (!existing) {
     return Response.json(
@@ -99,7 +104,7 @@ export async function handleUpdateGuestType(
   });
   if (mutationError) return mutationError;
 
-  const updated = await db('board_guest_access')
+  const updated = (await db('board_guest_access')
     .join('users', 'board_guest_access.user_id', 'users.id')
     .where({ 'board_guest_access.user_id': targetUserId, 'board_guest_access.board_id': boardId })
     .select(
@@ -110,13 +115,13 @@ export async function handleUpdateGuestType(
       'board_guest_access.granted_at as grantedAt',
       'board_guest_access.granted_by as grantedBy',
     )
-    .first();
+    .first()) as GuestResponseRow | undefined;
 
   await writeEvent({
     type: 'member_updated',
     boardId,
     entityId: boardId,
-    actorId: (req as AuthenticatedRequest).currentUser!.id,
+    actorId: (req as AuthenticatedUserRequest).currentUser.id,
     payload: {
       scope: 'board',
       userId: targetUserId,

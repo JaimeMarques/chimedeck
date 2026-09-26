@@ -41,7 +41,7 @@ export async function apiCall<T>({
     } | null;
     return {
       error: {
-        name: errPayload?.name ?? errPayload?.error?.code ?? `http-${res.status}`,
+        name: errPayload?.name ?? errPayload?.error?.code ?? `http-${String(res.status)}`,
         data: errPayload?.data ?? errPayload?.error ?? payload,
       },
     };

@@ -42,7 +42,7 @@ type BoardRow = {
 
 type UserRow = {
   id: string;
-  email: string;
+  email?: string;
   name?: string | null;
   avatar_url?: string | null;
 };
@@ -55,10 +55,21 @@ type BoardMemberRow = {
   updated_at?: string | Date | null;
 };
 
-type BoardGuestAccessRow = {
+type GuestAccessRow = {
   id: string;
+};
+
+type BoardGuestAccessRow = GuestAccessRow & {
   board_id: string;
   user_id: string;
+};
+
+type ListRow = {
+  id: string;
+  board_id: string;
+  title: string;
+  archived: boolean;
+  color?: string | null;
 };
 
 type MembershipRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER' | 'GUEST';
@@ -132,7 +143,9 @@ async function getWorkspaceRole(
 }
 
 async function isBoardMember(userId: string, boardId: string): Promise<boolean> {
-  const row = await db('board_members').where({ user_id: userId, board_id: boardId }).first();
+  const row = (await db('board_members').where({ user_id: userId, board_id: boardId }).first()) as
+    | BoardMemberRow
+    | undefined;
   return !!row;
 }
 
@@ -141,14 +154,16 @@ async function hasBoardAdminRole(
   boardId: string,
   connection: Knex | Knex.Transaction = db
 ): Promise<boolean> {
-  const row = await connection('board_members')
+  const row = (await connection('board_members')
     .where({ user_id: userId, board_id: boardId })
-    .first();
+    .first()) as BoardMemberRow | undefined;
   return row?.role === 'ADMIN';
 }
 
 async function hasGuestAccess(userId: string, boardId: string): Promise<boolean> {
-  const row = await db('board_guest_access').where({ user_id: userId, board_id: boardId }).first();
+  const row = (await db('board_guest_access')
+    .where({ user_id: userId, board_id: boardId })
+    .first()) as GuestAccessRow | undefined;
   return !!row;
 }
 
@@ -220,11 +235,11 @@ async function listBoardMemberships(boardId: string): Promise<TrelloBoardMembers
 }
 
 async function resolveBoardCreatorId(boardId: string): Promise<string> {
-  const admin = await db('board_members')
+  const admin = (await db('board_members')
     .where({ board_id: boardId })
     .orderBy('created_at', 'asc')
-    .first();
-  return (admin?.user_id as string | undefined) ?? '';
+    .first()) as BoardMemberRow | undefined;
+  return admin?.user_id ?? '';
 }
 
 function serializeCard(card: {
@@ -440,7 +455,7 @@ export async function boardsRouter(
       payload: { workspaceId: idOrganization },
     });
 
-    const board = await db('boards').where({ id: boardId }).first();
+    const board = (await db('boards').where({ id: boardId }).first()) as BoardRow | undefined;
     const memberships = await listBoardMemberships(boardId);
     return Response.json(
       serializeBoard({
@@ -504,7 +519,7 @@ export async function boardsRouter(
       if (updated === 'denied') return TRELLO_PERMISSION_DENIED();
     }
 
-    const updated = await db('boards').where({ id: board.id }).first();
+    const updated = (await db('boards').where({ id: board.id }).first()) as BoardRow | undefined;
     if (Object.keys(updates).length > 0) {
       await dispatchEvent({
         type: 'board_updated',
@@ -627,20 +642,10 @@ export async function boardsRouter(
       archived: false,
     });
 
-    const created = await db('lists').where({ id: listId }).first();
-    return Response.json(
-      serializeList({
-        ...(created as {
-          id: string;
-          board_id: string;
-          title: string;
-          archived: boolean;
-          color?: string | null;
-        }),
-        _rank: existing.length,
-      }),
-      { status: 200 }
-    );
+    const created = (await db('lists').where({ id: listId }).first()) as ListRow | undefined;
+    return Response.json(serializeList({ ...(created as ListRow), _rank: existing.length }), {
+      status: 200,
+    });
   }
 
   const cardsPathMatch = subPath.match(/^cards(?:\/(open|closed|all))?$/);
@@ -671,14 +676,14 @@ export async function boardsRouter(
 
     const result = [];
     for (const [memberId, memberType] of membersById.entries()) {
-      const dbUser = await db('users').where({ id: memberId }).first();
+      const dbUser = (await db('users').where({ id: memberId }).first()) as UserRow | undefined;
       if (!dbUser) continue;
       result.push(
         serializeMember({
-          id: dbUser.id as string,
-          email: (dbUser.email as string) ?? '',
-          name: (dbUser.name as string) ?? (dbUser.email as string),
-          avatar_url: (dbUser.avatar_url as string | null | undefined) ?? null,
+          id: dbUser.id,
+          email: dbUser.email ?? '',
+          name: (dbUser.name ?? dbUser.email) as string,
+          avatar_url: dbUser.avatar_url ?? null,
           memberType,
         })
       );

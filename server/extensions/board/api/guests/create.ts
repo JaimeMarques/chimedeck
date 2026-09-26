@@ -17,19 +17,35 @@ import { getCurrentWorkspaceRole } from '../members/authorization';
 import { lockBoardMemberMutations } from '../members/lock';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 
+type AuthenticatedUserRequest = AuthenticatedRequest & {
+  currentUser: NonNullable<AuthenticatedRequest['currentUser']>;
+};
+type ResolvedBoardRequest = BoardScopedRequest & { board: { workspace_id: string } };
+type InviteGuestBody = { email?: string; guestType?: string };
+type UserRow = { id: string; name: string | null };
+type ExistingRow = { id: string };
+type GuestGrantRow = {
+  id: string;
+  email: string;
+  name: string;
+  guestType: GuestType;
+  grantedAt: string;
+  grantedBy: string;
+};
+
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 export async function handleInviteGuestByEmail(req: Request, boardId: string): Promise<Response> {
-  const authError = await authenticate(req as AuthenticatedRequest);
+  const authError = await authenticate(req);
   if (authError) return authError;
 
-  const boardReq = req as BoardScopedRequest;
+  const boardReq = req as ResolvedBoardRequest;
   const accessError = await requireBoardAccess(boardReq, boardId);
   if (accessError) return accessError;
 
-  const board = boardReq.board!;
+  const board = boardReq.board;
   const scopedReq = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
   if (membershipError) return membershipError;
@@ -37,9 +53,9 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
   const roleError = requireRole(scopedReq, 'ADMIN');
   if (roleError) return roleError;
 
-  let body: { email?: string; guestType?: string };
+  let body: InviteGuestBody;
   try {
-    body = await req.json();
+    body = (await req.json()) as InviteGuestBody;
   } catch {
     return Response.json(
       { name: 'invalid-request-body', data: { message: 'Request body must be JSON' } },
@@ -63,14 +79,14 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
       { status: 400 },
     );
   }
-  const guestType: GuestType = (rawGuestType as GuestType | undefined) ?? 'VIEWER';
+  const guestType: GuestType = rawGuestType ?? 'VIEWER';
 
   // Prevent inviting existing workspace members (non-GUEST) as guests.
   const existingMember = await db('memberships')
     .join('users', 'memberships.user_id', 'users.id')
     .where({ 'users.email': normalizedEmail, 'memberships.workspace_id': board.workspace_id })
     .whereNot('memberships.role', 'GUEST')
-    .first();
+    .first() as ExistingRow | undefined;
 
   if (existingMember) {
     return Response.json(
@@ -80,7 +96,7 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
   }
 
   // Resolve or create user.
-  let user = await db('users').where({ email: normalizedEmail }).first();
+  let user = (await db('users').where({ email: normalizedEmail }).first()) as UserRow | undefined;
   if (!user) {
     // [why] Stub account: minimal row so the invite can be stored.
     // The user can claim the account later via a future invite-acceptance flow.
@@ -93,15 +109,16 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
       })
       .onConflict('email')
       .ignore();
-    user = await db('users').where({ email: normalizedEmail }).first();
+    user = (await db('users').where({ email: normalizedEmail }).first()) as UserRow | undefined;
   }
 
-  const userId = user.id as string;
+  const resolvedUser = user as UserRow;
+  const userId = resolvedUser.id;
 
   // Check for duplicate board guest access.
   const existing = await db('board_guest_access')
     .where({ user_id: userId, board_id: boardId })
-    .first();
+    .first() as ExistingRow | undefined;
 
   if (existing) {
     return Response.json(
@@ -116,7 +133,7 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
     await lockBoardMemberMutations(trx, boardId);
     const freshBoard = await trx('boards')
       .where({ id: boardId, workspace_id: board.workspace_id })
-      .first();
+      .first() as ExistingRow | undefined;
     if (!freshBoard) {
       return Response.json(
         { error: { code: 'board-not-found', message: 'Board not found' } },
@@ -126,7 +143,7 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
     const actorRole = await getCurrentWorkspaceRole(
       trx,
       board.workspace_id,
-      (req as AuthenticatedRequest).currentUser!.id,
+      (req as AuthenticatedUserRequest).currentUser.id,
     );
     if (!actorRole || roleRank(actorRole) < roleRank('ADMIN')) {
       return Response.json(
@@ -136,7 +153,7 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
     }
     const freshMembership = await trx('memberships')
       .where({ user_id: userId, workspace_id: board.workspace_id })
-      .first();
+      .first() as { role: string } | undefined;
     if (freshMembership && freshMembership.role !== 'GUEST') {
       return Response.json(
         { name: 'user-already-workspace-member', data: { message: 'This user is already a workspace member' } },
@@ -145,7 +162,7 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
     }
     const freshGrant = await trx('board_guest_access')
       .where({ user_id: userId, board_id: boardId })
-      .first();
+      .first() as ExistingRow | undefined;
     if (freshGrant) {
       return Response.json(
         { name: 'already-invited', data: { message: 'This user is already a guest on this board' } },
@@ -165,13 +182,13 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
       user_id: userId,
       board_id: boardId,
       guest_type: guestType,
-      granted_by: (req as AuthenticatedRequest).currentUser!.id,
+      granted_by: (req as AuthenticatedUserRequest).currentUser.id,
     });
     return null;
   });
   if (mutationError) return mutationError;
 
-  const grantRow = await db('board_guest_access')
+  const grantRow = (await db('board_guest_access')
     .join('users', 'board_guest_access.user_id', 'users.id')
     .where({ 'board_guest_access.user_id': userId, 'board_guest_access.board_id': boardId })
     .select(
@@ -182,17 +199,17 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
       'board_guest_access.granted_at as grantedAt',
       'board_guest_access.granted_by as grantedBy',
     )
-    .first();
+    .first()) as GuestGrantRow | undefined;
 
   await writeEvent({
     type: 'member_joined',
     boardId,
     entityId: boardId,
-    actorId: (req as AuthenticatedRequest).currentUser!.id,
+    actorId: (req as AuthenticatedUserRequest).currentUser.id,
     payload: {
       scope: 'board',
       userId,
-      displayName: (user.name as string | undefined) ?? normalizedEmail,
+      displayName: resolvedUser.name ?? normalizedEmail,
       role: 'GUEST',
       joinedAt: new Date().toISOString(),
     },

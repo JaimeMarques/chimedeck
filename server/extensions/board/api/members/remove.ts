@@ -13,6 +13,12 @@ import {
 } from './lock';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 
+type BoardMemberRow = {
+  board_id: string;
+  user_id: string;
+  role: string;
+};
+
 export async function handleRemoveBoardMember(
   req: Request,
   boardId: string,
@@ -51,9 +57,9 @@ export async function handleRemoveBoardMember(
     );
     if (reauthorizationError) return reauthorizationError;
 
-    const existing = await trx('board_members')
+    const existing = await trx<BoardMemberRow>('board_members')
       .where({ board_id: boardId, user_id: userId })
-      .first();
+      .first<BoardMemberRow | undefined>();
     if (!existing) {
       return Response.json(
         {

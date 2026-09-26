@@ -11,7 +11,15 @@ import { countEligibleBoardAdmins, lockBoardMemberMutations } from './lock';
 import { normalizeBoardMemberRole } from './role';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
 
-type UpdatedBoardMember = Record<string, unknown> | undefined;
+type BoardMemberRow = { board_id: string; user_id: string; role: string };
+type MemberResponseRow = {
+  id: string;
+  email: string;
+  name: string;
+  nickname: string | null;
+  role: string;
+  updated_at: Date | string;
+};
 
 export async function handleUpdateBoardMember(
   req: Request,
@@ -41,7 +49,7 @@ export async function handleUpdateBoardMember(
 
   let body: { role?: unknown };
   try {
-    body = await req.json();
+    body = (await req.json()) as typeof body;
   } catch {
     return Response.json(
       { name: 'invalid-request-body', data: { message: 'Request body must be valid JSON' } },
@@ -72,9 +80,9 @@ export async function handleUpdateBoardMember(
     );
     if (reauthorizationError) return { response: reauthorizationError };
 
-    const existing = await trx('board_members')
+    const existing = await trx<BoardMemberRow>('board_members')
       .where({ board_id: boardId, user_id: userId })
-      .first();
+      .first<BoardMemberRow | undefined>();
     if (!existing) {
       return {
         response: Response.json(
@@ -114,7 +122,7 @@ export async function handleUpdateBoardMember(
       .where({ board_id: boardId, user_id: userId })
       .update({ role: newRole, updated_at: new Date().toISOString() });
 
-    const member = await trx('board_members as bm')
+    const member = await trx<MemberResponseRow>('board_members as bm')
       .join('users as u', 'bm.user_id', 'u.id')
       .where({ 'bm.board_id': boardId, 'bm.user_id': userId })
       .select(
@@ -125,18 +133,18 @@ export async function handleUpdateBoardMember(
         'bm.role',
         'bm.updated_at'
       )
-      .first();
+      .first<MemberResponseRow>();
 
-    return { member: member as UpdatedBoardMember };
+    return { member };
   });
 
-  if ('response' in result && result.response) return result.response;
+  if ('response' in result) return result.response;
 
   await writeEvent({
     type: 'board_member_role_updated',
     boardId,
     entityId: boardId,
-    actorId: (req as AuthenticatedRequest).currentUser!.id,
+    actorId: currentUserId,
     payload: { userId, role: newRole },
   });
 

@@ -18,12 +18,34 @@ interface CardContext {
   workspaceId: string;
 }
 
+interface CardRow {
+  id: string;
+  list_id: string;
+  title: string;
+}
+
+interface ListRow {
+  id: string;
+  board_id: string;
+}
+
+interface BoardRow {
+  id: string;
+  workspace_id: string;
+}
+
+interface UserRow {
+  id: string;
+  name: string | null;
+  email: string | null;
+}
+
 async function resolveCardContext(cardId: string): Promise<CardContext | null> {
-  const card = await db('cards').where({ id: cardId }).first();
+  const card = await db<CardRow>('cards').where({ id: cardId }).first();
   if (!card) return null;
-  const list = await db('lists').where({ id: card.list_id }).first();
+  const list = await db<ListRow>('lists').where({ id: card.list_id }).first();
   if (!list) return null;
-  const board = await db('boards').where({ id: list.board_id }).first();
+  const board = await db<BoardRow>('boards').where({ id: list.board_id }).first();
   if (!board) return null;
   return { boardId: board.id, workspaceId: board.workspace_id };
 }
@@ -32,7 +54,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const card = await db('cards').where({ id: cardId }).first();
+  const card = await db<CardRow>('cards').where({ id: cardId }).first();
   if (!card) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found' } },
@@ -73,7 +95,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
   }
 
   // Ensure the target user is a workspace member
-  const targetMembership = await db('memberships')
+  const targetMembership = await db<Record<string, unknown>>('memberships')
     .where({ user_id: body.userId, workspace_id: context.workspaceId })
     .first();
 
@@ -85,7 +107,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
   }
 
   // Idempotency: already assigned → return 200 without emitting a duplicate event
-  const existing = await db('card_members').where({ card_id: cardId, user_id: body.userId }).first();
+  const existing = await db<Record<string, unknown>>('card_members').where({ card_id: cardId, user_id: body.userId }).first();
   if (existing) {
     return Response.json({ data: { card_id: cardId, user_id: body.userId } });
   }
@@ -97,7 +119,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
       { status: 401 },
     );
   }
-  const assigneeUser = await db('users').where({ id: body.userId }).select('name', 'email').first();
+  const assigneeUser = await db<UserRow>('users').where({ id: body.userId }).select('name', 'email').first();
   const assigneeName = assigneeUser?.name ?? assigneeUser?.email ?? body.userId;
 
   const assignmentError = await db.transaction(async (trx) => {
@@ -111,7 +133,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
       );
     }
     if (actorRole === 'GUEST') {
-      const actorGrant = await trx('board_guest_access')
+      const actorGrant = await trx<Record<string, unknown>>('board_guest_access')
         .where({ board_id: context.boardId, user_id: actorId, guest_type: 'MEMBER' })
         .first();
       if (!actorGrant) {
@@ -121,7 +143,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
         );
       }
     }
-    const freshTargetMembership = await trx('memberships')
+    const freshTargetMembership = await trx<Record<string, unknown>>('memberships')
       .where({ user_id: body.userId, workspace_id: context.workspaceId })
       .first();
     if (!freshTargetMembership) {
@@ -131,7 +153,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
       );
     }
     if (freshTargetMembership.role === 'GUEST') {
-      const targetGrant = await trx('board_guest_access')
+      const targetGrant = await trx<Record<string, unknown>>('board_guest_access')
         .where({ board_id: context.boardId, user_id: body.userId })
         .first();
       if (!targetGrant) {
@@ -141,7 +163,7 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
         );
       }
     }
-    await trx('card_members')
+    await trx<Record<string, unknown>>('card_members')
       .insert({ card_id: cardId, user_id: body.userId })
       .onConflict(['card_id', 'user_id'])
       .ignore();
@@ -172,7 +194,7 @@ export async function handleRemoveMember(
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const card = await db('cards').where({ id: cardId }).first();
+  const card = await db<CardRow>('cards').where({ id: cardId }).first();
   if (!card) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found' } },
@@ -196,12 +218,12 @@ export async function handleRemoveMember(
   if (roleError) return roleError;
 
   // Only emit an event if the membership actually existed (avoid phantom unassign events)
-  const existing = await db('card_members').where({ card_id: cardId, user_id: userId }).first();
-  await db('card_members').where({ card_id: cardId, user_id: userId }).delete();
+  const existing = await db<Record<string, unknown>>('card_members').where({ card_id: cardId, user_id: userId }).first();
+  await db<Record<string, unknown>>('card_members').where({ card_id: cardId, user_id: userId }).delete();
 
   if (existing) {
-    const actorId = (req as AuthenticatedRequest).currentUser!.id;
-    const assigneeUser = await db('users').where({ id: userId }).select('name', 'email').first();
+    const actorId = (req as AuthenticatedRequest & { currentUser: { id: string } }).currentUser.id;
+    const assigneeUser = await db<UserRow>('users').where({ id: userId }).select('name', 'email').first();
     const assigneeName = assigneeUser?.name ?? assigneeUser?.email ?? userId;
     await emitCardMemberUnassigned({
       actorId,

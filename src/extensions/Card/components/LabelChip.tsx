@@ -3,6 +3,9 @@ import type { Label } from '../api';
 import Button from '../../../common/components/Button';
 import { labelStyle } from '../utils/labelColors';
 
+// Keep the upstream named export while sharing the WCAG-contrast implementation.
+export { contrastText } from '../utils/labelColors';
+
 interface Props {
   label: Label;
   onRemove?: () => void;

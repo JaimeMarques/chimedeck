@@ -23,6 +23,49 @@ import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lo
 
 interface CardContext { boardId: string; workspaceId: string; }
 
+interface CardRow extends Record<string, unknown> {
+  id: string;
+  list_id: string;
+  title: string;
+  position: string;
+  archived: boolean;
+  cover_attachment_id: string | null;
+}
+
+interface ListRow {
+  id: string;
+  board_id: string;
+}
+
+interface BoardRow {
+  id: string;
+  workspace_id: string;
+}
+
+interface ChecklistRow extends Record<string, unknown> {
+  id: string;
+  card_id: string;
+  title: string;
+}
+
+interface ChecklistItemRow extends Record<string, unknown> {
+  id: string;
+  card_id: string;
+  title: string;
+  position: string;
+  checked: boolean;
+  checklist_id: string | null;
+  assigned_member_id: string | null;
+  due_date: string | null;
+  linked_card_id: string | null;
+}
+
+interface UserRow {
+  id: string;
+  name: string | null;
+  email: string | null;
+}
+
 interface ChecklistItemPatchBody {
   title?: string;
   checked?: boolean;
@@ -33,17 +76,17 @@ interface ChecklistItemPatchBody {
 }
 
 async function resolveContextFromCard(cardId: string): Promise<CardContext | null> {
-  const card = await db('cards').where({ id: cardId }).first();
+  const card = await db<CardRow>('cards').where({ id: cardId }).first();
   if (!card) return null;
-  const list = await db('lists').where({ id: card.list_id }).first();
+  const list = await db<ListRow>('lists').where({ id: card.list_id }).first();
   if (!list) return null;
-  const board = await db('boards').where({ id: list.board_id }).first();
+  const board = await db<BoardRow>('boards').where({ id: list.board_id }).first();
   if (!board) return null;
   return { boardId: board.id, workspaceId: board.workspace_id };
 }
 
 async function resolveContextFromItem(itemId: string): Promise<{ context: CardContext | null; cardId: string | null }> {
-  const item = await db('checklist_items').where({ id: itemId }).first();
+  const item = await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).first();
   if (!item) return { context: null, cardId: null };
   const context = await resolveContextFromCard(item.card_id);
   return { context, cardId: item.card_id };
@@ -53,7 +96,7 @@ export async function handleCreateChecklistItem(req: Request, cardId: string): P
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const card = await db('cards').where({ id: cardId }).first();
+  const card = await db<CardRow>('cards').where({ id: cardId }).first();
   if (!card) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found' } },
@@ -94,7 +137,7 @@ export async function handleCreateChecklistItem(req: Request, cardId: string): P
   }
 
   // Append to end of checklist
-  const lastItem = await db('checklist_items')
+  const lastItem = await db<ChecklistItemRow>('checklist_items')
     .where({ card_id: cardId })
     .orderBy('position', 'desc')
     .first();
@@ -102,14 +145,14 @@ export async function handleCreateChecklistItem(req: Request, cardId: string): P
   const position = between(lastItem ? lastItem.position : '', HIGH_SENTINEL);
 
   const id = randomUUID();
-  await db('checklist_items').insert({
+  await db<ChecklistItemRow>('checklist_items').insert({
     id,
     card_id: cardId,
     title: body.title.trim(),
     position,
   });
 
-  const item = await db('checklist_items').where({ id }).first();
+  const item = await db<ChecklistItemRow>('checklist_items').where({ id }).first();
   return Response.json({ data: item }, { status: 201 });
 }
 
@@ -117,7 +160,7 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const item = await db('checklist_items').where({ id: itemId }).first();
+  const item = await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).first();
   if (!item) {
     return Response.json(
       { error: { code: 'checklist-item-not-found', message: 'Checklist item not found' } },
@@ -198,7 +241,7 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
     }
 
     if (typeof body.checklist_id === 'string') {
-      const targetChecklist = await db('checklists')
+      const targetChecklist = await db<ChecklistRow>('checklists')
         .where({ id: body.checklist_id })
         .first();
 
@@ -229,10 +272,10 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
     }
 
     if (typeof body.assigned_member_id === 'string') {
-      const boardMember = await db('board_members')
+      const boardMember = await db<Record<string, unknown>>('board_members')
         .where({ board_id: updateContext.boardId, user_id: body.assigned_member_id })
         .first();
-      const boardGuest = await db('board_guest_access')
+      const boardGuest = await db<Record<string, unknown>>('board_guest_access')
         .where({ board_id: updateContext.boardId, user_id: body.assigned_member_id })
         .first();
 
@@ -320,13 +363,13 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
           );
         }
       }
-      await trx('checklist_items').where({ id: itemId }).update(updates);
+      await trx<ChecklistItemRow>('checklist_items').where({ id: itemId }).update(updates);
       return null;
     });
     if (updateError) return updateError;
   }
 
-  const updated = await db('checklist_items').where({ id: itemId }).first();
+  const updated = await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).first();
 
   const checkedChanged = updates.checked !== undefined && item.checked !== updated?.checked;
   const assigneeChanged =
@@ -336,12 +379,12 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
     updates.due_date !== undefined
     && (item.due_date ?? null) !== (updated?.due_date ?? null);
 
-  if ((checkedChanged || assigneeChanged || dueDateChanged) && updateCardId && updateContext) {
-    const actorId = (req as AuthenticatedRequest).currentUser!.id;
+  if ((checkedChanged || assigneeChanged || dueDateChanged) && updateCardId) {
+    const actorId = (req as AuthenticatedRequest & { currentUser: { id: string } }).currentUser.id;
     const [card, checklist] = await Promise.all([
-      db('cards').where({ id: updateCardId }).select('title').first(),
+      db<CardRow>('cards').where({ id: updateCardId }).select('title').first(),
       updated?.checklist_id
-        ? db('checklists').where({ id: updated.checklist_id }).select('title').first()
+        ? db<ChecklistRow>('checklists').where({ id: updated.checklist_id }).select('title').first()
         : Promise.resolve(null),
     ]);
 
@@ -378,7 +421,7 @@ export async function handleUpdateChecklistItem(req: Request, itemId: string): P
       const nextAssigneeId = updated?.assigned_member_id ?? null;
       let assigneeName = '';
       if (nextAssigneeId) {
-        const assignee = await db('users')
+        const assignee = await db<UserRow>('users')
           .where({ id: nextAssigneeId })
           .select('name', 'email')
           .first();
@@ -452,7 +495,7 @@ export async function handleDeleteChecklistItem(req: Request, itemId: string): P
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const item = await db('checklist_items').where({ id: itemId }).first();
+  const item = await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).first();
   if (!item) {
     return Response.json(
       { error: { code: 'checklist-item-not-found', message: 'Checklist item not found' } },
@@ -475,7 +518,7 @@ export async function handleDeleteChecklistItem(req: Request, itemId: string): P
   const roleError = await requireMemberOrBoardGuestMember(scopedReq, deleteContext.boardId);
   if (roleError) return roleError;
 
-  await db('checklist_items').where({ id: itemId }).delete();
+  await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).delete();
   return new Response(null, { status: 204 });
 }
 
@@ -484,7 +527,7 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const item = await db('checklist_items').where({ id: itemId }).first();
+  const item = await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).first();
   if (!item) {
     return Response.json(
       { error: { code: 'checklist-item-not-found', message: 'Checklist item not found' } },
@@ -508,7 +551,7 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
   if (roleError) return roleError;
 
   if (item.linked_card_id) {
-    const existingCard = await db('cards').where({ id: item.linked_card_id }).first();
+    const existingCard = await db<CardRow>('cards').where({ id: item.linked_card_id }).first();
     if (existingCard) {
       const existingWithCover = await resolveCoverImageUrl(
         existingCard as { id: string; cover_attachment_id?: string | null },
@@ -523,7 +566,7 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
     }
   }
 
-  const parentCard = await db('cards').where({ id: item.card_id }).first();
+  const parentCard = await db<CardRow>('cards').where({ id: item.card_id }).first();
   if (!parentCard) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Parent card not found' } },
@@ -531,7 +574,7 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
     );
   }
 
-  const lastCard = await db('cards')
+  const lastCard = await db<CardRow>('cards')
     .where({ list_id: parentCard.list_id, archived: false })
     .orderBy('position', 'desc')
     .first();
@@ -539,7 +582,7 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
 
   const newCardId = randomUUID();
   const shortId = await generateUniqueShortId('cards');
-  await db('cards').insert({
+  await db<CardRow>('cards').insert({
     id: newCardId,
     short_id: shortId,
     list_id: parentCard.list_id,
@@ -549,9 +592,9 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
     archived: false,
   });
 
-  await db('checklist_items').where({ id: itemId }).delete();
+  await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).delete();
 
-  const createdCard = await db('cards').where({ id: newCardId }).first();
+  const createdCard = await db<CardRow>('cards').where({ id: newCardId }).first();
   const cardWithCover = await resolveCoverImageUrl(
     createdCard as { id: string; cover_attachment_id?: string | null },
   );

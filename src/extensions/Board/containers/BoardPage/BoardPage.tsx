@@ -224,7 +224,6 @@ const BoardPage = () => {
   );
 
   const initialCardsPerList = useMemo(() => {
-    if (globalThis.window === undefined) return 50;
     if (globalThis.window.innerWidth < 900) return 25;
     return 50;
   }, []);
@@ -270,11 +269,12 @@ const BoardPage = () => {
     token: accessToken ?? '',
     lastSequence,
     onEvent: handleEvent,
-    onMutationConflict: () =>
-      addToast('A mutation conflicted with a remote change and was discarded.', 'conflict'),
+    onMutationConflict: () => {
+      addToast('A mutation conflicted with a remote change and was discarded.', 'conflict');
+    },
     onQueueOverflow: () => {
       // Full reload on overflow so state is not stale
-      if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+      if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
     },
   });
 
@@ -283,11 +283,13 @@ const BoardPage = () => {
     boardId: realtimeBoardId,
     active: pollingActive,
     lastSequence,
-    onEvents: (events) => { events.forEach(handleEvent); },
+    onEvents: (events) => {
+      events.forEach(handleEvent);
+    },
   });
 
   useEffect(() => {
-    if (boardId) dispatch(fetchBoardDataThunk({ boardId, initialCardsPerList }));
+    if (boardId) void dispatch(fetchBoardDataThunk({ boardId, initialCardsPerList }));
   }, [dispatch, boardId, initialCardsPerList]);
 
   useEffect(() => {
@@ -308,7 +310,7 @@ const BoardPage = () => {
 
       const targetCard = cards[cardId] as { short_id?: string | null; title?: string | null } | undefined;
       const routeCardId = targetCard?.short_id ?? cardId;
-      const boardRouteTarget = (board?.short_id as string | undefined) ?? resolvedBoardRouteId ?? boardId;
+      const boardRouteTarget = board?.short_id ?? resolvedBoardRouteId ?? boardId;
 
       // Keep the board route mounted and open the modal via query param so
       // board-local UI state (e.g. active filters) is not reset.
@@ -330,7 +332,7 @@ const BoardPage = () => {
   );
 
   const handleRouteCardClose = useCallback(() => {
-    const boardRouteTarget = (board?.short_id as string | undefined) ?? resolvedBoardRouteId ?? boardId;
+    const boardRouteTarget = board?.short_id ?? resolvedBoardRouteId ?? boardId;
     if (!boardRouteTarget) return;
     navigate(boardPath({
       id: boardRouteTarget,
@@ -346,7 +348,7 @@ const BoardPage = () => {
         await updateBoard({ api, boardId, title });
       } catch {
         // Rollback — re-fetch authoritative state
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
       }
     },
     [api, board, boardId, dispatch],
@@ -441,7 +443,7 @@ const BoardPage = () => {
       // Optimistic: update local state; fire API in background
       updateList({ api, listId, title }).catch(() => {
         // On failure, re-fetch to restore authoritative state
-        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
       });
     },
     [api, boardId, dispatch],
@@ -452,7 +454,7 @@ const BoardPage = () => {
     async (listId: string) => {
       try {
         await archiveList({ api, listId });
-        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
         // TODO: surface error to user
       }
@@ -464,7 +466,7 @@ const BoardPage = () => {
     async (listId: string) => {
       try {
         await deleteList({ api, listId });
-        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
       } catch (err: unknown) {
         // 409 means the list has cards — open confirmation dialog.
         const resp = (err as { response?: { status?: number; data?: { name?: string; data?: { cardCount?: number } } } }).response;
@@ -490,7 +492,7 @@ const BoardPage = () => {
         const response = await sortListCards({ api, listId, sortBy });
         dispatch(boardSliceActions.applySortedListFromServer({ listId, cards: response.data }));
       } catch {
-        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to sort list.', 'error');
       }
     },
@@ -506,7 +508,7 @@ const BoardPage = () => {
       try {
         await updateListColor({ api, listId, color });
       } catch {
-        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to update list color.', 'error');
       }
     },
@@ -528,7 +530,7 @@ const BoardPage = () => {
       try {
         await reorderLists({ api, boardId, order: newOrder });
       } catch {
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to move list.', 'error');
       }
     },
@@ -555,9 +557,9 @@ const BoardPage = () => {
           // Chain moves so cards keep their original relative order in the destination list.
           afterCardId = cardId;
         }
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to move all cards.', 'error');
       }
     },
@@ -571,9 +573,9 @@ const BoardPage = () => {
       if (cardIds.length === 0) return;
       try {
         await Promise.all(cardIds.map((cardId) => archiveCard({ api, cardId })));
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to archive all cards in this list.', 'error');
       }
     },
@@ -602,7 +604,7 @@ const BoardPage = () => {
             keepMembers: true,
           });
         }
-        dispatch(fetchBoardDataThunk({ boardId }));
+        void dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
         addToast('Failed to copy list.', 'error');
       }
@@ -615,7 +617,7 @@ const BoardPage = () => {
     if (!boardId || !board) return;
     try {
       await archiveBoard({ api, boardId });
-      dispatch(fetchBoardDataThunk({ boardId }));
+      void dispatch(fetchBoardDataThunk({ boardId }));
     } catch {
       addToast('Failed to archive board.', 'error');
     }
@@ -629,7 +631,7 @@ const BoardPage = () => {
       setSettingsOpen(false);
       setMembersOpen(false);
       automationPanel.closePanel();
-      navigate(`/workspace/${board?.workspaceId}/boards`, {
+      navigate(`/workspace/${board?.workspaceId ?? ''}/boards`, {
         state: { successToast: 'Board deleted' },
       });
     } catch (err: unknown) {
@@ -707,15 +709,33 @@ const BoardPage = () => {
                 onDragRollback={handleDragRollback}
                 onAddCard={handleAddCard}
                 onAddList={handleAddList}
-                onRenameList={handleRenameList}
-                onCopyList={handleCopyList}
-                onMoveList={handleMoveList}
-                onMoveAllCards={handleMoveAllCards}
-                onArchiveList={handleArchiveList}
-                onArchiveAllCards={handleArchiveAllCards}
-                onDeleteList={handleDeleteList}
-                onChangeListColor={handleChangeListColor}
-                onSortList={handleSortList}
+                onRenameList={(listId, title) => {
+                  handleRenameList(listId, title);
+                }}
+                onCopyList={(listId) => {
+                  void handleCopyList(listId);
+                }}
+                onMoveList={(listId, targetIndex) => {
+                  void handleMoveList(listId, targetIndex);
+                }}
+                onMoveAllCards={(fromListId, targetListId) => {
+                  void handleMoveAllCards(fromListId, targetListId);
+                }}
+                onArchiveList={(listId) => {
+                  void handleArchiveList(listId);
+                }}
+                onArchiveAllCards={(listId) => {
+                  void handleArchiveAllCards(listId);
+                }}
+                onDeleteList={(listId) => {
+                  void handleDeleteList(listId);
+                }}
+                onChangeListColor={(listId, color) => {
+                  void handleChangeListColor(listId, color);
+                }}
+                onSortList={(listId, sortBy) => {
+                  void handleSortList(listId, sortBy);
+                }}
                 listColors={listColors}
                 listSummaries={listSummaries}
                 onCardClick={handleCardClick}
@@ -739,14 +759,14 @@ const BoardPage = () => {
                 onCardClick={handleCardClick}
                 addToast={addToast}
               />
-            ) : activeView === 'TIMELINE' ? (
+            ) : (
               <TimelineView
                 cards={Object.values(filteredCards)}
                 lists={lists}
                 onCardClick={handleCardClick}
                 addToast={addToast}
               />
-            ) : null}
+            )}
             <AutomationPanel
               boardId={boardId ?? ''}
               isOpen={automationPanel.isOpen}
@@ -780,7 +800,7 @@ const BoardPage = () => {
           <BoardArchivedCardsPanel
             boardId={boardId ?? ''}
             onCardUnarchived={() => {
-              if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+              if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
               setActiveTab('board');
             }}
           />
@@ -816,14 +836,26 @@ const BoardPage = () => {
         hasBackground={!!board.background}
         useParentGlass={!!board.background}
         isGuest={isGuest}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenMembers={() => setMembersOpen(true)}
+        onOpenSettings={() => {
+          setSettingsOpen(true);
+        }}
+        onOpenMembers={() => {
+          setMembersOpen(true);
+        }}
         {...(!isGuest && {
-          onArchive: handleBoardArchive,
-          onDelete: handleBoardDelete,
+          onArchive: () => {
+            void handleBoardArchive();
+          },
+          onDelete: () => {
+            void handleBoardDelete();
+          },
         })}
-        onStar={handleStar}
-        onUnstar={handleUnstar}
+        onStar={() => {
+          void handleStar();
+        }}
+        onUnstar={() => {
+          void handleUnstar();
+        }}
       />
       {board.state === 'ARCHIVED' && (
         <div className="mx-6 mt-1 rounded border border-yellow-700 bg-yellow-900/30 px-4 py-2 text-sm text-yellow-400">
@@ -851,7 +883,9 @@ const BoardPage = () => {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                }}
                 className={`px-3 py-2.5 text-sm font-medium ${tabClass}`}
               >
                 {tab.label}
@@ -886,7 +920,9 @@ const BoardPage = () => {
                 return (
                   <button
                     type="button"
-                    onClick={() => setFilterPanelOpen((v) => !v)}
+                    onClick={() => {
+                      setFilterPanelOpen((value) => !value);
+                    }}
                     className={`${btnBase} ${btnVariant}`}
                   >
                     <FunnelIcon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -900,7 +936,9 @@ const BoardPage = () => {
               {filterPanelOpen && (
                 <BoardFilterPanel
                   containerRef={filterContainerRef}
-                  onClose={() => setFilterPanelOpen(false)}
+                  onClose={() => {
+                    setFilterPanelOpen(false);
+                  }}
                   filters={filters}
                   onChange={setFilters}
                   boardMembers={boardMembers}
@@ -933,7 +971,9 @@ const BoardPage = () => {
       {/* Board settings panel */}
       {settingsOpen && (
         <BoardSettings
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => {
+            setSettingsOpen(false);
+          }}
           isGuest={isGuest}
           isViewerGuest={isViewerGuest}
           isBoardParticipant={canManageOwnBoardNotifications}
@@ -942,7 +982,9 @@ const BoardPage = () => {
       )}
       {/* Board members panel (Sprint 79) */}
       {membersOpen && (
-        <BoardMembersPanel onClose={() => setMembersOpen(false)} isGuest={isGuest} />
+        <BoardMembersPanel onClose={() => {
+          setMembersOpen(false);
+        }} isGuest={isGuest} />
       )}
 
       {/* Board delete confirmation dialog — shown when server returns 409 with nested content counts */}
@@ -952,9 +994,10 @@ const BoardPage = () => {
           listCount={boardDeleteDialog.listCount}
           cardCount={boardDeleteDialog.cardCount}
           onConfirm={async () => {
+            if (!boardId) return;
             setBoardDeleteDialog(null);
             try {
-              await deleteBoard({ api, boardId: boardId!, confirm: true });
+              await deleteBoard({ api, boardId, confirm: true });
               setSettingsOpen(false);
               setMembersOpen(false);
               automationPanel.closePanel();
@@ -965,7 +1008,9 @@ const BoardPage = () => {
               addToast('Failed to delete board.', 'error');
             }
           }}
-          onCancel={() => setBoardDeleteDialog(null)}
+          onCancel={() => {
+            setBoardDeleteDialog(null);
+          }}
         />
       )}
 
@@ -978,9 +1023,11 @@ const BoardPage = () => {
             const { listId } = listDeleteDialog;
             setListDeleteDialog(null);
             await deleteList({ api, listId, confirm: true });
-            if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+            if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
           }}
-          onCancel={() => setListDeleteDialog(null)}
+          onCancel={() => {
+            setListDeleteDialog(null);
+          }}
         />
       )}
     </div>
