@@ -1,0 +1,22 @@
+{
+  "BoardSwitcher.barAriaLabel": "Board navigation",
+  "BoardSwitcher.inbox": "Inbox",
+  "BoardSwitcher.planner": "Planner",
+  "BoardSwitcher.board": "Board",
+  "BoardSwitcher.switchBoards": "Switch boards",
+  "BoardSwitcher.searchPlaceholder": "Search your boards",
+  "BoardSwitcher.showAsGrid": "Show boards as grid",
+  "BoardSwitcher.showAsList": "Show boards as list",
+  "BoardSwitcher.pin": "Pin board switcher to the side",
+  "BoardSwitcher.unpin": "Unpin board switcher",
+  "BoardSwitcher.allWorkspacesChip": "All",
+  "BoardSwitcher.yourBoards": "Your boards",
+  "BoardSwitcher.createBoard": "Create new board",
+  "BoardSwitcher.star": "Star board",
+  "BoardSwitcher.unstar": "Unstar board",
+  "BoardSwitcher.noBoards": "No boards found",
+  "BoardSwitcher.loading": "Loading…",
+  "BoardSwitcher.members": "Members",
+  "BoardSwitcher.allBoards": "All boards",
+  "BoardSwitcher.allWorkspaces": "All workspaces"
+}

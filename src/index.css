@@ -60,6 +60,17 @@ body {
   --color-success:  #10b981;  /* emerald-500 */
   --color-warning:  #f59e0b;  /* amber-500 */
   --color-info:     #0ea5e9;  /* sky-500 */
+
+  /* ── Lists ──────────────────────────────────────────── */
+  /* WHY: declared on :root (the same <html> element that carries the theme
+     classes), so each theme's --bg-surface/--border resolves here; only
+     themes that want distinct list chrome override these. */
+  --bg-list:      var(--bg-surface);
+  --border-list:  var(--border);
+  /* WHY: lists on boards without a background image have always rendered
+     see-through (the old bg-bg-surface/90 class generates no CSS for var()
+     colours); themes that want solid columns there override this. */
+  --bg-list-bare: transparent;
 }
 
 .dark {
@@ -614,6 +625,41 @@ body {
   --color-success:  #32d74b;
   --color-warning:  #ff9f0a;
   --color-info:     #0a84ff;
+}
+
+/* ── Trello — Atlassian dark ─────────────────────────────────────────────────── */
+.theme-trello {
+  /* ── Brand ─────────────────────────────────────────── */
+  --color-primary:       #579dff;
+  --color-primary-hover: #85b8ff;
+  --color-secondary:     #9fadbc;
+  --color-accent:        #579dff;
+
+  /* ── Surfaces ───────────────────────────────────────── */
+  --bg-base:     #1d2125;
+  --bg-surface:  #22272b;   /* cards */
+  --bg-overlay:  #2c333a;
+  --bg-sunken:   #38414a;
+  --bg-list:     #101204;   /* near-black list columns */
+  --bg-list-bare: #101204;
+
+  /* ── Text ───────────────────────────────────────────── */
+  --text-base:    #b6c2cf;
+  --text-muted:   #9fadbc;
+  --text-subtle:  #8c9bab;
+  --text-inverse: #1d2125;
+  --text-link:    #579dff;
+
+  /* ── Borders ────────────────────────────────────────── */
+  --border:       #333c43;
+  --border-strong:#454f59;
+  --border-list:  transparent;
+
+  /* ── Semantic ───────────────────────────────────────── */
+  --color-danger:   #f87168;
+  --color-success:  #4bce97;
+  --color-warning:  #f5cd47;
+  --color-info:     #579dff;
 }
 
 /* TipTap editor list/heading styles — applied here to cover both the

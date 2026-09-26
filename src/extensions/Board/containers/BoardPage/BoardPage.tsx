@@ -69,6 +69,7 @@ import { FunnelIcon } from '@heroicons/react/24/outline';
 import HealthCheckTab from '~/extensions/HealthCheck/containers/HealthCheckTab/HealthCheckTab';
 import { HEALTH_CHECK_ENABLED } from '~/extensions/HealthCheck/config/healthCheckConfig';
 import { boardPath, cardPath } from '~/common/routing/shortUrls';
+import BoardBottomBar from '~/extensions/BoardSwitcher/components/BoardBottomBar';
 
 const BoardPage = () => {
   const dispatch = useAppDispatch();
@@ -812,7 +813,9 @@ const BoardPage = () => {
         <div className="absolute inset-0 bg-black/50 pointer-events-none z-0" aria-hidden="true" />
       )}
       {/* All content above the scrim */}
-      <div className="relative z-10 flex flex-col h-full overflow-hidden">
+      {/* WHY: pb-14 ends the lists and their scrollbar above the floating bottom bar
+          while the background image still extends underneath it */}
+      <div className="relative z-10 flex flex-col h-full overflow-hidden pb-14">
       {/* Unified glass block — one frosted surface using theme tokens so dark mode works */}
       {/* WHY: relative z-10 ensures this stacking context paints above the BoardCanvas sibling,
           preventing the header dropdown from being hidden behind kanban column elements */}
@@ -927,6 +930,13 @@ const BoardPage = () => {
 
       {/* Tab content */}
       {tabContent}
+
+      {/* Trello-style bottom bar: Inbox / Planner / Board / Switch boards */}
+      <BoardBottomBar
+        boardId={boardId ?? ''}
+        boardTabActive={activeTab === 'board'}
+        onShowBoardTab={() => { setActiveTab('board'); }}
+      />
 
       {/* Card detail modal — always mounted so ?card= links work from any tab */}
       <CardModalContainer

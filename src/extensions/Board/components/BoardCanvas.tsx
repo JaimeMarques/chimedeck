@@ -1592,7 +1592,7 @@ const BoardCanvas = ({
       <SortableContext items={listOrder} strategy={horizontalListSortingStrategy}>
         <div
           ref={boardScrollerRef}
-          className="flex gap-3 p-4 overflow-x-auto overflow-y-hidden flex-1"
+          className="flex items-start gap-3 p-4 overflow-x-auto overflow-y-hidden flex-1"
           role="list"
           aria-label="Board lists"
         >
