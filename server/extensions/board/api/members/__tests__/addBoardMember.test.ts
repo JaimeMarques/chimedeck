@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test';
 // with a recording Knex-style chain in a subprocess so this fixture cannot leak
 // state into (or be replaced by) adjacent test files that mock
 // '../../../../common/db' differently. Fake DB rows only — no live PostgreSQL.
-test('handleAddBoardMember enforces role, duplicate, workspace, and email contracts', async () => {
+test('handleAddBoardMember enforces role, duplicate, and workspace contracts', async () => {
   const child = Bun.spawn(
     [process.execPath, new URL('./fixtures/addBoardMember.ts', import.meta.url).pathname],
     { stdout: 'pipe', stderr: 'pipe' }
@@ -17,6 +17,6 @@ test('handleAddBoardMember enforces role, duplicate, workspace, and email contra
   expect(stderr).toBe('');
   expect(exitCode).toBe(0);
   expect(stdout).toContain(
-    'handleAddBoardMember conflict, role validation, email lookup, and workspace-membership gate verified'
+    'handleAddBoardMember conflict, role validation, and workspace-membership gate verified'
   );
 });

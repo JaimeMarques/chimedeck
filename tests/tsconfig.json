@@ -7,6 +7,7 @@
   },
   "include": [
     "db/concurrentBoardMemberAdd.ts",
+    "db/addBoardMemberByEmail.ts",
     "db/concurrentBoardMemberRoleMutation.ts",
     "db/workspaceMembershipSecurity.ts",
     "e2e/board-members.spec.ts",

@@ -49,11 +49,13 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun run db:migrate
-      - run: bun test server/extensions/board/api/members server/mods/events/__tests__/policy.test.ts server/mods/events/__tests__/dispatch.test.ts server/extensions/realtime/mods/rooms/broadcast.test.ts tests/integration/trelloCompat/organizations.test.ts
+      - run: bun test server/extensions/board/api/members server/extensions/mcp/tools/inviteToBoard.test.ts server/mods/events/__tests__/policy.test.ts server/mods/events/__tests__/dispatch.test.ts server/extensions/realtime/mods/rooms/broadcast.test.ts tests/integration/trelloCompat/organizations.test.ts
       - name: Lint board-member regressions
         run: >-
           bunx eslint
           tests/db/concurrentBoardMemberAdd.ts
+          tests/db/addBoardMemberByEmail.ts
+          server/extensions/mcp/tools/inviteToBoard.test.ts
           tests/db/concurrentBoardMemberRoleMutation.ts
           tests/db/workspaceMembershipSecurity.ts
           tests/e2e/board-members.spec.ts

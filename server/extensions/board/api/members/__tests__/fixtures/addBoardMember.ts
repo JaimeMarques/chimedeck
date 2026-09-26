@@ -192,17 +192,11 @@ async function run(): Promise<void> {
   assert.equal(((await res.json()) as { name?: string }).name, 'user-not-workspace-member');
   assert.equal(inserted.length, 0);
 
-  // 7. First-party CLI/MCP clients identify members by email.
-  reset();
-  res = await handleAddBoardMember(
-    request({ email: 'new@example.com', role: 'member' }),
-    'board-1'
-  );
-  assert.equal(res.status, 201);
-  assert.equal((inserted[0] as Row).user_id, 'user-2');
+  // Email resolution requires real SQL joins/distinct and workspace locking;
+  // its coverage lives in the CI-gated tests/db/addBoardMemberByEmail.ts.
 
   console.info(
-    'handleAddBoardMember conflict, role validation, email lookup, and workspace-membership gate verified'
+    'handleAddBoardMember conflict, role validation, and workspace-membership gate verified'
   );
 }
 
