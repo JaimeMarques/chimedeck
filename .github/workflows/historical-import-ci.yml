@@ -14,6 +14,10 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun test tests/integration/historicalImport tests/unit/server/extensions/historicalImport
+      # [why] FILE-import preflight reads object bytes; public presign endpoint can
+      # reject server-side GET even while the internal endpoint succeeds.
+      - name: Verify historical FILE reads use internal S3 endpoint
+        run: bun test server/extensions/attachment/common/config/s3.test.ts
       # [why] Imported historical comment content is persisted verbatim, so the render-time
       # sanitizer (src/extensions/Comment/utils/sanitizeCommentHtml.ts) is the defence that keeps
       # raw source HTML out of the DOM. Run its tests on the same push.

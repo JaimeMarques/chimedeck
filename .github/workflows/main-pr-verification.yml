@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify npm lockfile installability
+        run: npm ci --dry-run --ignore-scripts --no-audit --no-fund --silent
+
       - name: Build client
         run: bun run build:client
 

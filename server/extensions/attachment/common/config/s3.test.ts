@@ -36,6 +36,8 @@ if (INNER) {
   const { s3Client, s3ServerClient, s3Config } = await import('./s3');
   const { presignGetUrl } = await import('../presign');
   const { headObject } = await import('../../mods/s3/headObject');
+  const { verifyAttachmentObjectPrecondition } = await import('../../../historicalImport/core/objectPrecondition');
+  const { sha256Hex } = await import('../../../historicalImport/core/payload');
 
   async function resolvedEndpoint(clientInput: unknown): Promise<string | undefined> {
     const config = (clientInput as { config?: { endpoint?: unknown } }).config;
@@ -100,6 +102,41 @@ if (INNER) {
         expect(publicSends).toBe(0);
         expect(serverSends[0]?.Bucket).toBe(s3Config.bucket);
         expect(serverSends[0]?.Key).toBe('attachments/card/file.png');
+      } finally {
+        serverSpy['send'] = originalServerSend;
+        publicSpy['send'] = originalPublicSend;
+      }
+    });
+
+    test('historical FILE preconditions read through the internal client, not the public proxy', async () => {
+      const bytes = new TextEncoder().encode('historical attachment');
+      const serverSends: unknown[] = [];
+      let publicSends = 0;
+      const serverSpy = s3ServerClient as unknown as Record<string, unknown>;
+      const publicSpy = s3Client as unknown as Record<string, unknown>;
+      const originalServerSend = s3ServerClient.send.bind(s3ServerClient);
+      const originalPublicSend = s3Client.send.bind(s3Client);
+      serverSpy['send'] = (command: unknown) => {
+        serverSends.push(command);
+        return Promise.resolve({ Body: { transformToByteArray: () => Promise.resolve(bytes) } });
+      };
+      publicSpy['send'] = () => {
+        publicSends += 1;
+        return Promise.reject(new Error('public proxy rejected a server-side GetObject'));
+      };
+      try {
+        const precondition = {
+          bucket: 'qa-imports', key: 'imports/trello/file.bin',
+          byte_count: bytes.byteLength, sha256: sha256Hex(bytes),
+        };
+        const result = await verifyAttachmentObjectPrecondition({
+          entity_type: 'attachment', source_id: 'trello-1',
+          fields: { s3_bucket: precondition.bucket, s3_key: precondition.key, size_bytes: bytes.byteLength },
+          object_precondition: precondition,
+        });
+        expect(result).toEqual(precondition);
+        expect(serverSends).toHaveLength(1);
+        expect(publicSends).toBe(0);
       } finally {
         serverSpy['send'] = originalServerSend;
         publicSpy['send'] = originalPublicSend;
