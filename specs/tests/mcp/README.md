@@ -26,5 +26,6 @@ Use `response.data.token` as `$token`.
 | `mcp-07-move-card.md` | `move_card` | 2 lists + card |
 | `mcp-08-search-cards.md` | `search_cards` | cards with content |
 | `mcp-09-add-comment.md` | `add_comment` | card exists |
+| `mcp-10-discussion.md` | `get_card_discussion`, `get_comment_replies` | existing threaded card |
 
 Run main flows 05–08 before running MCP flows — they provide the board, lists, and cards used here.

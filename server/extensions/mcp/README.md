@@ -237,6 +237,8 @@ Returns `204 No Content` on success.
 | `search_cards` | Full-text search over cards within a workspace | `GET /api/v1/workspaces/:workspaceId/search` |
 | `search_board` | Full-text search over cards and lists scoped to a single board | `GET /api/v1/boards/:boardId/search` |
 | `get_card` | Retrieve the full details of a single card by its ID | `GET /api/v1/cards/:cardId` |
+| `get_card_discussion` | Read top-level comments and their replies with completeness status | `GET /api/v1/cards/:cardId/comments` + `GET /api/v1/comments/:commentId/replies` |
+| `get_comment_replies` | Read one parent's non-deleted direct replies | `GET /api/v1/comments/:commentId/replies` |
 | `get_state_transitions` | Retrieve state transition graph and enabled flag for a board | `GET /api/v1/boards/:boardId/state-transitions` |
 | `set_state_transitions` | Update state transition graph and/or enabled flag for a board | `PUT /api/v1/boards/:boardId/state-transitions` |
 | `get_state_transition_rules` | Retrieve enforceable state-transition rules for a board | `GET /api/v1/boards/:boardId/state-transitions/rules` |
@@ -331,6 +333,51 @@ The existing list API enforces board writable-member permission checks.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card to retrieve |
+
+#### `get_card_discussion`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `cardId` | string | ✅ | Card UUID or 8-character short ID |
+
+Call this tool for a card's discussion; `get_card` is not a comment source.
+It returns `{data, complete, issues}`. `data` is a flat array preserving every
+comment field, including `parent_id`, body, author, timestamps and reactions.
+Parents are oldest first, with each parent's oldest-first replies immediately
+after it. Equal timestamps keep server order; this is thread order, not global
+chronological order. Existing tools and response contracts are unchanged.
+
+Always check `complete`. Failed reply reads, count mismatches and unexpected
+response metadata produce `complete: false` and per-parent `issues`, while
+successful threads are retained. An initial read failure or malformed root
+response returns a normal MCP error. Unknown pagination metadata is reported;
+no invented cursor or offset requests are sent.
+
+The server currently supports one reply level and neither comment GET endpoint
+is paginated. Deleted top-level placeholders are retained; deleted replies are
+excluded by the API. Only positive `reply_count` parents trigger reply reads.
+`complete` applies to the observed API responses, not an atomic snapshot:
+concurrent comments/deletions can require a fresh read.
+
+```json
+{"name":"get_card_discussion","arguments":{"cardId":"<card UUID or short ID>"}}
+```
+
+#### `get_comment_replies`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `commentId` | UUID string | ✅ | Parent comment `id` from `get_card_discussion` |
+
+Returns the same `{data, complete, issues}` envelope for non-deleted direct
+replies, oldest first. UUIDs are case-insensitive. This tool does not verify
+that the requested comment is top-level; a reply itself has no children under
+the current one-level contract. A failed standalone read is an MCP error.
+
+Both readers are registered for stdio and HTTP sessions with `readOnlyHint`.
+They use the session's caller token and existing REST authorization, and issue
+GETs only. Reconnect existing MCP sessions after deploying to reload the tool
+catalogue; clients with an explicit tool allowlist must add both names.
 
 #### `get_state_transitions`
 | Parameter | Type | Required | Description |
