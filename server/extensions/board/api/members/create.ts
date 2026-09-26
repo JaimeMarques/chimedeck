@@ -175,7 +175,7 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
     return { member };
   });
 
-  if ('error' in result) return result.error;
+  if ('error' in result && result.error) return result.error;
   const { member } = result;
 
   await dispatchEvent({

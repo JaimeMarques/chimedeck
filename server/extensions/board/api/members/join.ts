@@ -105,7 +105,7 @@ export async function handleJoinBoard(req: Request, boardId: string): Promise<Re
     return { created, member };
   });
 
-  if ('error' in result) return result.error;
+  if ('error' in result && result.error) return result.error;
   const { created, member } = result;
 
   if (created) {

@@ -138,7 +138,7 @@ export async function handleUpdateBoardMember(
     return { member };
   });
 
-  if ('response' in result) return result.response;
+  if ('response' in result && result.response) return result.response;
 
   await writeEvent({
     type: 'board_member_role_updated',
