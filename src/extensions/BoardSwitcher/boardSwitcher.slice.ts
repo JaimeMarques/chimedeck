@@ -18,6 +18,7 @@ import {
   unstarBoardThunk,
 } from '../Board/containers/BoardListPage/BoardListPage.duck';
 import { deleteBoardOptimisticThunk } from '../Board/slices/boardsSlice';
+import { fetchBoardDataThunk } from '../Board/slices/boardSlice';
 import { boardStarSet } from '../Board/boardStarEvents';
 import type { WorkspaceFilter } from './helpers';
 
@@ -70,6 +71,9 @@ interface BoardSwitcherState {
   /** [why] A fetch that overlaps a board's toggle may carry the old isStarred, so that
    *  board keeps its in-state value; only the latest toggle may roll back. */
   starMutations: Record<string, StarMutation>;
+  /** seq at which each in-flight open-board fetch (BoardPage) started, by requestId.
+   *  [why] Its isStarred is server truth for that board unless a toggle overlapped it. */
+  boardFetchAt: Record<string, number>;
   /** Bumped on every session reset, so async work can tell it outlived its session. */
   session: number;
   /** requestId of the create in flight this session. [why] In the slice, not the component:
@@ -119,6 +123,7 @@ const initialState: BoardSwitcherState = {
   fetchStartedAt: {},
   appliedFetchAt: 0,
   starMutations: {},
+  boardFetchAt: {},
   session: 0,
   creatingId: null,
   boardEdits: {},
@@ -207,12 +212,15 @@ function setStarred(state: BoardSwitcherState, boardId: string, starred: boolean
   if (board) board.isStarred = starred;
 }
 
+const omitKey = <T>(record: Record<string, T>, key: string) =>
+  Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
+
 /** Drops a settled fetch and returns its start seq, or null for an untracked one
  *  (started before a session reset), whose result must be ignored. */
 function forgetFetch(state: BoardSwitcherState, requestId: string): number | null {
   const startedAt = state.fetchStartedAt[requestId];
   if (startedAt === undefined) return null;
-  state.fetchStartedAt = Object.fromEntries(Object.entries(state.fetchStartedAt).filter(([id]) => id !== requestId));
+  state.fetchStartedAt = omitKey(state.fetchStartedAt, requestId);
   return startedAt;
 }
 
@@ -255,12 +263,18 @@ function applyExternalStar(state: BoardSwitcherState, boardId: string, starred: 
     m.burstSize += 1; // overlapping toggles → starNeedsReconcile re-reads the server
     return;
   }
+  adoptStar(state, boardId, starred, requestId, ++state.seq); // an older in-flight fetch keeps this value
+}
+
+/** Records a settled server value as the board's star, replacing any settled toggle burst.
+ *  `at`: the seq it is current from; fetches started before it keep this value. */
+function adoptStar(state: BoardSwitcherState, boardId: string, starred: boolean, requestId: string, at: number) {
   state.starMutations[boardId] = {
     latestId: requestId,
     prev: starred,
     desired: starred,
     pendingIds: [],
-    touchedAt: ++state.seq, // an older in-flight fetch keeps this value
+    touchedAt: at,
     burstSize: 0,
     burstFailed: false,
   };
@@ -379,6 +393,24 @@ const boardSwitcherSlice = createSlice({
       })
       .addCase(toggleSwitcherStarThunk.rejected, (state, action) => {
         settleStar(state, action.meta.arg.boardId, action.meta.requestId, false);
+      })
+      // The open board's fresh load: adopt its isStarred unless a toggle overlapped the fetch
+      // (still pending, or touched after it started), whose value then stands.
+      .addCase(fetchBoardDataThunk.pending, (state, action) => {
+        state.boardFetchAt[action.meta.requestId] = ++state.seq;
+      })
+      .addCase(fetchBoardDataThunk.fulfilled, (state, action) => {
+        const startedAt = state.boardFetchAt[action.meta.requestId];
+        if (startedAt === undefined) return; // started before a session reset
+        state.boardFetchAt = omitKey(state.boardFetchAt, action.meta.requestId);
+        const { id, isStarred } = action.payload.data;
+        if (typeof isStarred !== 'boolean') return;
+        const m = state.starMutations[id];
+        if (m && (m.pendingIds.length > 0 || m.touchedAt > startedAt)) return;
+        adoptStar(state, id, isStarred, action.meta.requestId, startedAt);
+      })
+      .addCase(fetchBoardDataThunk.rejected, (state, action) => {
+        state.boardFetchAt = omitKey(state.boardFetchAt, action.meta.requestId);
       })
       .addCase(createSwitcherBoardThunk.pending, (state, action) => {
         state.creatingId = action.meta.requestId;
