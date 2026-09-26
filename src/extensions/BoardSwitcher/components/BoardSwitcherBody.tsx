@@ -31,6 +31,7 @@ import type { Board } from '~/extensions/Board/api';
 import {
   createSwitcherBoardThunk,
   fetchSwitcherBoardsThunk,
+  patchSwitcherBoard,
   selectSwitcherBoards,
   selectSwitcherCreating,
   selectSwitcherIncomplete,
@@ -73,12 +74,16 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   const workspaces = useAppSelector(selectWorkspaces);
   const activeWorkspaceId = useAppSelector(selectActiveWorkspaceId);
   const loadedBoard = useAppSelector(selectBoard);
+  const prevLoadedRef = useRef(loadedBoard);
   const [query, setQuery] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string>();
   // [why] From the slice: a create started before this switcher was closed and reopened still counts.
   const creating = useAppSelector(selectSwitcherCreating);
   const mountedRef = useRef(false);
+  /** Bumped per create submit and whenever that create is abandoned (modal closed, route changed).
+   *  [why] The pinned panel outlives both, so only the latest live submit may act on its result. */
+  const createTokenRef = useRef(0);
   // [why] Below md the pinned panel is hidden, so the popover owns the pin toggle
   const isMdUp = useIsMdUp();
 
@@ -91,6 +96,53 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   useEffect(() => {
     void dispatch(fetchSwitcherBoardsThunk());
   }, [dispatch]);
+
+  // [why] The pinned panel stays mounted, so pick up changes made elsewhere (other tabs, other
+  // users) when the window comes back. Skipped while a fetch is out: focus and visibilitychange
+  // both fire on return, and a fetch that is already running is fresh enough.
+  useEffect(() => {
+    const refetch = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (Object.keys(store.getState().boardSwitcher.fetchStartedAt).length > 0) return;
+      void dispatch(fetchSwitcherBoardsThunk());
+    };
+    window.addEventListener('focus', refetch);
+    document.addEventListener('visibilitychange', refetch);
+    return () => {
+      window.removeEventListener('focus', refetch);
+      document.removeEventListener('visibilitychange', refetch);
+    };
+  }, [dispatch, store]);
+
+  // [why] A route change abandons a pending create: close its modal too, or the user is left
+  // with an idle form for a board that may already exist and could submit it twice.
+  useEffect(() => {
+    createTokenRef.current += 1;
+    setCreateOpen(false);
+    setCreateError(undefined);
+  }, [pathname]);
+
+  // [why] Some board mutations (BoardPage header delete/star) are plain API calls with no
+  // Redux action; the delete navigates away, so refresh the (pinned) list on in-app
+  // navigation. The first run is the mount, which the effect above already fetches for.
+  const seenPathRef = useRef(pathname);
+  useEffect(() => {
+    if (seenPathRef.current === pathname) return;
+    seenPathRef.current = pathname;
+    if (Object.keys(store.getState().boardSwitcher.fetchStartedAt).length > 0) return;
+    void dispatch(fetchSwitcherBoardsThunk());
+  }, [pathname, dispatch, store]);
+
+  // [why] BoardPage's rename/background/archive changes carry no board id in Redux, so mirror the
+  // open board's title/background/state into the list when they change (not on first sight: it may be stale).
+  useEffect(() => {
+    const prev = prevLoadedRef.current;
+    prevLoadedRef.current = loadedBoard;
+    if (!loadedBoard || prev?.id !== loadedBoard.id) return;
+    const { id, title, background, state } = loadedBoard;
+    if (prev.title === title && prev.background === background && prev.state === state) return;
+    dispatch(patchSwitcherBoard({ id, title, background: background ?? null, state }));
+  }, [dispatch, loadedBoard]);
 
   // A saved filter may point at a workspace the user no longer belongs to
   const workspaceFilter = workspaces.some((w) => w.id === prefs.workspaceFilter) ? prefs.workspaceFilter : 'all';
@@ -136,10 +188,12 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
     const workspaceId = createWorkspaceId;
     if (!workspaceId) return;
     const session = store.getState().boardSwitcher.session;
+    const token = ++createTokenRef.current;
     setCreateError(undefined);
     const result = await dispatch(createSwitcherBoardThunk({ workspaceId, title }));
-    // [why] The user closed the switcher or changed account meanwhile: don't pull them away.
-    if (!mountedRef.current || store.getState().boardSwitcher.session !== session) return;
+    // [why] The user closed the switcher, cancelled the create, navigated elsewhere or changed
+    // account meanwhile: don't pull them away (the thunk still refreshes the list).
+    if (!mountedRef.current || createTokenRef.current !== token || store.getState().boardSwitcher.session !== session) return;
     if (!createSwitcherBoardThunk.fulfilled.match(result)) {
       // A refused duplicate (another create in flight) is not a failure.
       if (!result.meta.condition) setCreateError(translations['BoardSwitcher.createFailed']);
@@ -152,6 +206,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   };
 
   const closeCreate = () => {
+    createTokenRef.current += 1;
     setCreateOpen(false);
     setCreateError(undefined);
   };

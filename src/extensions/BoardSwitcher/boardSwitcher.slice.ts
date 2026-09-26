@@ -8,6 +8,16 @@ import type { apiClient } from '~/common/api/client';
 import { listWorkspaces } from '../Workspace/api';
 import { listBoards, createBoard, starBoard, unstarBoard, type Board } from '../Board/api';
 import { clearAuth, loginThunk, logoutThunk, setCredentials, signupThunk } from '../Auth/duck/authDuck';
+import {
+  archiveBoardThunk,
+  boardRemovedByRealtime,
+  createBoardThunk,
+  deleteBoardThunk,
+  duplicateBoardThunk,
+  starBoardThunk,
+  unstarBoardThunk,
+} from '../Board/containers/BoardListPage/BoardListPage.duck';
+import { deleteBoardOptimisticThunk } from '../Board/slices/boardsSlice';
 import type { WorkspaceFilter } from './helpers';
 
 export const PREFS_STORAGE_KEY = 'board_switcher_prefs';
@@ -64,6 +74,12 @@ interface BoardSwitcherState {
   /** requestId of the create in flight this session. [why] In the slice, not the component:
    *  closing and reopening the switcher must not allow a second concurrent create. */
   creatingId: string | null;
+  /** Local board writes (null = removed) made while a fetch was in flight, with their seq.
+   *  [why] A fetch that started before the write must not resurrect, drop or revert it. */
+  boardEdits: Record<string, { at: number; board: Board | null }>;
+  /** requestIds of other features' board mutations started this session. [why] One from a
+   *  previous account settling late must not star or insert boards into the next one's list. */
+  externalIds: string[];
 }
 
 const DEFAULT_PREFS: BoardSwitcherPrefs = {
@@ -104,6 +120,8 @@ const initialState: BoardSwitcherState = {
   starMutations: {},
   session: 0,
   creatingId: null,
+  boardEdits: {},
+  externalIds: [],
 };
 
 // ---------- Thunks ----------
@@ -186,7 +204,61 @@ function forgetFetch(state: BoardSwitcherState, requestId: string): number | nul
 
 function settleStatus(state: BoardSwitcherState) {
   if (Object.keys(state.fetchStartedAt).length > 0) state.status = 'loading';
-  else state.status = state.loadFailed ? 'error' : 'idle';
+  else {
+    state.status = state.loadFailed ? 'error' : 'idle';
+    // Every later fetch starts after these edits, so none of them can be overtaken.
+    state.boardEdits = {};
+  }
+}
+
+/** Writes (or with null removes) one board, remembering the write while a fetch is in flight. */
+function writeBoard(state: BoardSwitcherState, id: string, board: Board | null) {
+  const i = state.boards.findIndex((b) => b.id === id);
+  if (board === null) {
+    if (i >= 0) state.boards.splice(i, 1);
+  } else if (i >= 0) state.boards[i] = board;
+  else state.boards.push(board);
+  if (Object.keys(state.fetchStartedAt).length > 0) state.boardEdits[id] = { at: ++state.seq, board };
+}
+
+/** A board another feature created, duplicated or (un)archived: add it while ACTIVE, drop it otherwise. */
+function upsertExternal(state: BoardSwitcherState, board: Board, workspaceId: string | undefined) {
+  if (board.state !== 'ACTIVE') {
+    writeBoard(state, board.id, null);
+    return;
+  }
+  if (state.boards.some((b) => b.id === board.id)) return;
+  // [why] Same stamping as fetchSwitcherBoardsThunk: raw rows carry workspace_id, not workspaceId.
+  const raw = (board as Board & { workspace_id?: string }).workspace_id;
+  writeBoard(state, board.id, { ...board, workspaceId: workspaceId ?? raw ?? board.workspaceId });
+}
+
+/** A star change settled elsewhere is server truth, unless the switcher's own toggles on that
+ *  board are still out: then the order is unknown, so leave the value to their reconcile. */
+function applyExternalStar(state: BoardSwitcherState, boardId: string, starred: boolean, requestId: string) {
+  const m = state.starMutations[boardId];
+  if (m && m.pendingIds.length > 0) {
+    m.burstSize += 1; // overlapping toggles → starNeedsReconcile re-reads the server
+    return;
+  }
+  state.starMutations[boardId] = {
+    latestId: requestId,
+    prev: starred,
+    desired: starred,
+    pendingIds: [],
+    touchedAt: ++state.seq, // an older in-flight fetch keeps this value
+    burstSize: 0,
+    burstFailed: false,
+  };
+  setStarred(state, boardId, starred);
+}
+
+/** True (and forgets it) when an external mutation started in this session. */
+function takeExternal(state: BoardSwitcherState, requestId: string): boolean {
+  const i = state.externalIds.indexOf(requestId);
+  if (i < 0) return false;
+  state.externalIds.splice(i, 1);
+  return true;
 }
 
 function settleStar(state: BoardSwitcherState, boardId: string, requestId: string, ok: boolean) {
@@ -209,6 +281,17 @@ const boardSwitcherSlice = createSlice({
     setSwitcherPrefs(state, action: PayloadAction<Partial<BoardSwitcherPrefs>>) {
       state.prefs = { ...state.prefs, ...action.payload };
     },
+    /** The open board was renamed, got a new background or was archived (BoardPage's own
+     *  actions carry no id). */
+    patchSwitcherBoard(
+      state,
+      action: PayloadAction<{ id: string; title: string; background: string | null; state: Board['state'] }>,
+    ) {
+      const { id, title, background } = action.payload;
+      const board = state.boards.find((b) => b.id === id);
+      if (!board) return;
+      writeBoard(state, id, action.payload.state === 'ACTIVE' ? { ...board, title, background } : null);
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -223,8 +306,20 @@ const boardSwitcherSlice = createSlice({
           state.appliedFetchAt = startedAt;
           state.incomplete = action.payload.incomplete;
           const current = new Map(state.boards.map((b) => [b.id, b.isStarred === true]));
+          // Local writes newer than this fetch win over what it read.
+          const newer = (id: string) => {
+            const e = state.boardEdits[id];
+            return e && e.at > startedAt ? e : undefined;
+          };
+          const fetched = action.payload.boards.flatMap((b) => {
+            const e = newer(b.id);
+            return e ? (e.board ? [{ ...e.board }] : []) : [b];
+          });
+          for (const [id, e] of Object.entries(state.boardEdits)) {
+            if (e.board && newer(id) && !fetched.some((b) => b.id === id)) fetched.push({ ...e.board });
+          }
           // [why] New objects: the fetched payload is frozen.
-          state.boards = action.payload.boards.map((b) => {
+          state.boards = fetched.map((b) => {
             const m = state.starMutations[b.id];
             if (!m || (m.pendingIds.length === 0 && m.touchedAt < startedAt)) return b;
             return { ...b, isStarred: current.get(b.id) ?? m.desired };
@@ -269,6 +364,62 @@ const boardSwitcherSlice = createSlice({
       .addCase(createSwitcherBoardThunk.pending, (state, action) => {
         state.creatingId = action.meta.requestId;
       })
+      // Keep the list in step with board mutations made elsewhere (list page, realtime).
+      .addCase(createBoardThunk.fulfilled, (state, action) => {
+        if (takeExternal(state, action.meta.requestId)) upsertExternal(state, action.payload, action.meta.arg.workspaceId);
+      })
+      .addCase(duplicateBoardThunk.fulfilled, (state, action) => {
+        if (!takeExternal(state, action.meta.requestId)) return;
+        // [why] The arg has only the source board; the copy lands in its workspace.
+        const source = state.boards.find((b) => b.id === action.meta.arg.boardId);
+        upsertExternal(state, action.payload, source?.workspaceId);
+      })
+      .addCase(archiveBoardThunk.fulfilled, (state, action) => {
+        // [why] The same endpoint unarchives, so an ACTIVE result brings the board back.
+        if (takeExternal(state, action.meta.requestId)) upsertExternal(state, action.payload, undefined);
+      })
+      .addCase(starBoardThunk.fulfilled, (state, action) => {
+        if (takeExternal(state, action.meta.requestId)) applyExternalStar(state, action.meta.arg.boardId, true, action.meta.requestId);
+      })
+      .addCase(unstarBoardThunk.fulfilled, (state, action) => {
+        if (takeExternal(state, action.meta.requestId)) applyExternalStar(state, action.meta.arg.boardId, false, action.meta.requestId);
+      })
+      // [why] Removal is not account-specific (a deleted board is gone for everyone), so no session check.
+      .addCase(boardRemovedByRealtime, (state, action) => {
+        writeBoard(state, action.payload.boardId, null);
+      })
+      .addMatcher(isAnyOf(deleteBoardThunk.fulfilled, deleteBoardOptimisticThunk.fulfilled), (state, action) => {
+        takeExternal(state, action.meta.requestId);
+        writeBoard(state, action.meta.arg.boardId, null);
+      })
+      .addMatcher(
+        isAnyOf(
+          createBoardThunk.pending,
+          duplicateBoardThunk.pending,
+          archiveBoardThunk.pending,
+          starBoardThunk.pending,
+          unstarBoardThunk.pending,
+          deleteBoardThunk.pending,
+          deleteBoardOptimisticThunk.pending,
+        ),
+        (state, action) => {
+          state.externalIds.push(action.meta.requestId);
+        },
+      )
+      .addMatcher(
+        isAnyOf(
+          createBoardThunk.rejected,
+          duplicateBoardThunk.rejected,
+          archiveBoardThunk.rejected,
+          starBoardThunk.rejected,
+          unstarBoardThunk.rejected,
+          deleteBoardThunk.rejected,
+          deleteBoardOptimisticThunk.rejected,
+        ),
+        (state, action) => {
+          takeExternal(state, action.meta.requestId);
+        },
+      )
       // [why] Match the requestId: a previous session's create settling late must not
       // release the current session's guard.
       .addMatcher(isAnyOf(createSwitcherBoardThunk.fulfilled, createSwitcherBoardThunk.rejected), (state, action) => {
@@ -283,7 +434,7 @@ const boardSwitcherSlice = createSlice({
   },
 });
 
-export const { setSwitcherPrefs } = boardSwitcherSlice.actions;
+export const { setSwitcherPrefs, patchSwitcherBoard } = boardSwitcherSlice.actions;
 export default boardSwitcherSlice.reducer;
 
 // ---------- Selectors ----------

@@ -18,7 +18,7 @@ for (const key of ['window', 'document', 'navigator', 'location'] as const) {
 
 const { configureStore } = await import('@reduxjs/toolkit');
 const { Provider } = await import('react-redux');
-const { MemoryRouter, useLocation } = await import('react-router-dom');
+const { MemoryRouter, useLocation, useNavigate } = await import('react-router-dom');
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const { default: boardSwitcher } = await import('../../boardSwitcher.slice');
 const { default: BoardSwitcherBody } = await import('../BoardSwitcherBody');
@@ -60,7 +60,13 @@ function makeStore() {
 }
 
 let path = '';
-const PathProbe = () => { path = useLocation().pathname; return null; };
+let nav: (to: string) => void = () => {};
+const PathProbe = () => {
+  path = useLocation().pathname;
+  const navigate = useNavigate();
+  nav = (to) => { navigate(to); };
+  return null;
+};
 
 function mount(store: ReturnType<typeof makeStore>['store']) {
   return render(
@@ -148,5 +154,58 @@ describe('BoardSwitcherBody create', () => {
     expect(actions).not.toContain('workspaceShell/setActiveWorkspace');
     // No refresh on behalf of the previous account.
     expect(actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length).toBe(fetchesBefore);
+  });
+
+  it('does not navigate after the create modal was cancelled, but still lists the board', async () => {
+    const { store, settle, actions } = makeStore();
+    const screen = mount(store);
+    const { create } = await openCreate(screen);
+    act(() => { fireEvent.click(create); });
+    act(() => { fireEvent.click(screen.getByRole('button', { name: 'Cancel' })); });
+    settle[0]?.();
+    await flush();
+    expect(path).toBe('/b/b1');
+    expect(actions).not.toContain('workspaceShell/setActiveWorkspace');
+    expect(store.getState().boardSwitcher.boards.map((b) => b.id)).toContain('new1');
+  });
+
+  it('does not override a navigation made while the create was in flight', async () => {
+    const { store, settle, actions } = makeStore();
+    const screen = mount(store);
+    const { create } = await openCreate(screen);
+    act(() => { fireEvent.click(create); });
+    act(() => { nav('/workspaces'); });
+    expect(screen.queryByPlaceholderText('Board title')).toBeNull(); // abandoned: modal closed
+    settle[0]?.();
+    await flush();
+    expect(path).toBe('/workspaces');
+    expect(actions).not.toContain('workspaceShell/setActiveWorkspace');
+  });
+
+  it('refetches on window focus, once while a fetch is in flight', async () => {
+    const { store, actions } = makeStore();
+    mount(store);
+    await flush();
+    const fetches = () => actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length;
+    const before = fetches();
+    act(() => {
+      window.dispatchEvent(new window.Event('focus'));
+      window.dispatchEvent(new window.Event('focus'));
+    });
+    expect(fetches()).toBe(before + 1);
+    await flush();
+    act(() => { window.dispatchEvent(new window.Event('focus')); });
+    expect(fetches()).toBe(before + 2);
+  });
+
+  it('refetches once per in-app navigation, not twice on mount', async () => {
+    const { store, actions } = makeStore();
+    mount(store);
+    const fetches = () => actions.filter((t) => t === 'boardSwitcher/fetchBoards/pending').length;
+    expect(fetches()).toBe(1); // the mount fetch only
+    await flush();
+    // e.g. BoardPage's header delete: a plain API call, then navigation to the boards page
+    act(() => { nav('/workspaces/w1/boards'); });
+    expect(fetches()).toBe(2);
   });
 });
