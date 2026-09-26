@@ -49,7 +49,7 @@ function request(body: unknown): Request {
     workspaceId: ws,
     callerRole: 'ADMIN',
     board: { id: boardId, workspace_id: ws, visibility: 'PRIVATE' },
-  }) as Request;
+  });
 }
 
 async function boardMemberIds(): Promise<string[]> {
