@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 type Row = Record<string, unknown>;
 type Store = {
+  memberships: Row[];
+  board_members: Row[];
+  board_guest_access: Row[];
   boards: Row[];
   lists: Row[];
   cards: Row[];
@@ -19,6 +22,8 @@ type TableName = keyof Store;
 
 let store: Store;
 let moveGuardError: (Error & { code: string; constraint: string }) | null = null;
+let inTransaction = false;
+const lockOrder: string[] = [];
 
 function requireRow(tableName: TableName, id: string): Row {
   const row = store[tableName].find((candidate) => candidate.id === id);
@@ -60,6 +65,7 @@ class QueryBuilder {
   }
 
   update(patch: Row, returning?: string[]): Promise<number | Row[]> {
+    if (this.tableName === 'cards' && !inTransaction) throw new Error('card updated outside transaction');
     if (this.tableName === 'cards' && patch.list_id === 'list-target' && moveGuardError) {
       return Promise.reject(moveGuardError);
     }
@@ -83,7 +89,10 @@ class QueryBuilder {
 const dbMock = Object.assign(
   (tableName: TableName) => new QueryBuilder(tableName),
   {
-    transaction: async (callback: (trx: typeof dbMock) => Promise<void>) => callback(dbMock),
+    transaction: async <T>(callback: (trx: typeof dbMock) => Promise<T>): Promise<T> => {
+      inTransaction = true;
+      try { return await callback(dbMock); } finally { inTransaction = false; }
+    },
   },
 );
 
@@ -103,11 +112,23 @@ const requireWorkspaceMembershipMock = mock((req: Request & { callerRole?: strin
   return Promise.resolve(null);
 });
 const requireMemberOrBoardGuestMemberMock = mock(() => Promise.resolve(null));
-const validateCardMoveMock = mock(() => Promise.resolve(undefined));
 const applyBoardVisibilityMock = mock((_req?: Request, _boardId?: string): Promise<Response | null> => Promise.resolve(null));
-const dispatchEventMock = mock(() => Promise.resolve());
-const emitCardMovedMock = mock(() => Promise.resolve());
-const publishMock = mock((_boardId: string, _payload: string): Promise<void> => Promise.resolve());
+const dispatchEventMock = mock(() => {
+  if (inTransaction) throw new Error('event emitted before commit');
+  return Promise.resolve();
+});
+const emitCardMovedMock = mock((_event: { toListName: string | null }) => {
+  if (inTransaction) throw new Error('activity emitted before commit');
+  return Promise.resolve();
+});
+const emitCardMoveBlockedActivityMock = mock((_event: { cardId: string }) => {
+  if (inTransaction) throw new Error('blocked activity emitted before transaction closes');
+  return Promise.resolve();
+});
+const publishMock = mock((_boardId: string, _payload: string): Promise<void> => {
+  if (inTransaction) throw new Error('realtime event emitted before commit');
+  return Promise.resolve();
+});
 
 void mock.module('../../../common/db', () => ({ db: dbMock }));
 void mock.module('../../auth/middlewares/authentication', () => ({ authenticate: authenticateMock }));
@@ -115,19 +136,26 @@ void mock.module('../middlewares/requireCardWritable', () => ({ requireCardWrita
 void mock.module('../../../middlewares/permissionManager', () => ({
   requireWorkspaceMembership: requireWorkspaceMembershipMock,
   requireMemberOrBoardGuestMember: requireMemberOrBoardGuestMemberMock,
+  resolveHighestRole: (roles: string[]) => ['OWNER', 'ADMIN', 'MEMBER', 'VIEWER', 'GUEST'].find((role) => roles.includes(role)) ?? null,
+  hasRole: (role: string, minRole: string) => ['GUEST', 'VIEWER', 'MEMBER', 'ADMIN', 'OWNER'].indexOf(role) >= ['GUEST', 'VIEWER', 'MEMBER', 'ADMIN', 'OWNER'].indexOf(minRole),
 }));
+void mock.module('../../../config/featureFlags', () => ({ featureFlags: { STATE_TRANSITIONS_ENABLED: true } }));
+void mock.module('../../stateTransitions/common/activityLog', () => ({ emitCardMoveBlockedActivity: emitCardMoveBlockedActivityMock }));
 void mock.module('../../../middlewares/boardVisibility', () => ({ applyBoardVisibility: applyBoardVisibilityMock }));
-void mock.module('../../stateTransitions/enforcement', () => ({ validateCardMove: validateCardMoveMock }));
+void mock.module('../../workspace/api/members/lock', () => ({ lockWorkspaceMembershipMutations: (_trx: unknown, id: string) => { lockOrder.push(`workspace:${id}`); return Promise.resolve(); } }));
+void mock.module('../../board/api/members/lock', () => ({ lockBoardMemberMutations: (_trx: unknown, id: string) => { lockOrder.push(`board:${id}`); return Promise.resolve(); } }));
 void mock.module('../../../mods/events/dispatch', () => ({ dispatchEvent: dispatchEventMock }));
 void mock.module('../../activity/mods/createActivityEvent', () => ({ emitCardMoved: emitCardMovedMock }));
 void mock.module('../../../mods/pubsub/publisher', () => ({ publisher: { publish: publishMock } }));
 void mock.module('../../realtime/mods/conflictHandler', () => ({ recordConflict: mock(() => undefined) }));
 
 const { handleMoveCard } = await import('./move');
-const { StateTransitionForbiddenError } = await import('../../stateTransitions/common/errors');
 
 function resetStore(): Store {
   return {
+    memberships: [{ user_id: 'user-1', workspace_id: 'workspace-source', role: 'MEMBER' }],
+    board_members: [{ user_id: 'user-1', board_id: 'board-source' }, { user_id: 'user-1', board_id: 'board-target' }],
+    board_guest_access: [],
     boards: [
       { id: 'board-source', workspace_id: 'workspace-source', state: 'ACTIVE', visibility: 'PRIVATE' },
       { id: 'board-target', workspace_id: 'workspace-target', state: 'ACTIVE', visibility: 'PRIVATE' },
@@ -164,15 +192,17 @@ function resetStore(): Store {
 beforeEach(() => {
   store = resetStore();
   moveGuardError = null;
+  inTransaction = false;
+  lockOrder.length = 0;
   authenticateMock.mockClear();
   requireCardWritableMock.mockClear();
   requireWorkspaceMembershipMock.mockClear();
   requireMemberOrBoardGuestMemberMock.mockClear();
-  validateCardMoveMock.mockClear();
   applyBoardVisibilityMock.mockReset();
   applyBoardVisibilityMock.mockImplementation(() => Promise.resolve(null));
   dispatchEventMock.mockClear();
   emitCardMovedMock.mockClear();
+  emitCardMoveBlockedActivityMock.mockClear();
   publishMock.mockClear();
 });
 
@@ -213,6 +243,77 @@ describe('card move destination boundaries', () => {
     expect(body.error?.code).toBe('card-location-changed');
     expect(store.cards[0]?.list_id).toBe('list-private');
     expect(dispatchEventMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('rechecks destination access after a queued guest grant is revoked', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    applyBoardVisibilityMock.mockImplementation(() => {
+      store.board_members = store.board_members.filter((entry) => entry.board_id !== 'board-target');
+      return Promise.resolve(null);
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    expect(response.status).toBe(403);
+    expect(lockOrder).toEqual(['workspace:workspace-source', 'board:board-source', 'board:board-target']);
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(dispatchEventMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('refuses a revoked guest grant despite cached guestType MEMBER', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    const membership = store.memberships[0];
+    if (!membership) throw new Error('Missing membership fixture');
+    membership.role = 'GUEST';
+    store.board_guest_access = [
+      { user_id: 'user-1', board_id: 'board-source', guest_type: 'MEMBER' },
+      { user_id: 'user-1', board_id: 'board-target', guest_type: 'MEMBER' },
+    ];
+    store.card_labels = [];
+    applyBoardVisibilityMock.mockImplementation((req) => {
+      (req as Request & { guestType?: string }).guestType = 'MEMBER';
+      store.board_guest_access = store.board_guest_access.filter((row) => row.board_id !== 'board-target');
+      return Promise.resolve(null);
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    expect(response.status).toBe(403);
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('rechecks newly enabled transition rules after both board locks', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    applyBoardVisibilityMock.mockImplementation(() => {
+      store.board_state_transitions.push({ board_id: 'board-target', enabled: true });
+      return Promise.resolve(null);
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    expect(response.status).toBe(422);
+    expect(lockOrder).toEqual(['workspace:workspace-source', 'board:board-source', 'board:board-target']);
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('refuses a revoked workspace membership despite stale middleware role', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    applyBoardVisibilityMock.mockImplementation(() => {
+      store.memberships = [];
+      return Promise.resolve(null);
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    expect(response.status).toBe(403);
+    expect(store.cards[0]?.list_id).toBe('list-source');
     expect(publishMock).not.toHaveBeenCalled();
   });
 
@@ -267,9 +368,9 @@ describe('card move destination boundaries', () => {
       labels: store.card_labels,
     })).toBe(relationshipSnapshot);
     // Source-board transition graphs cannot contain a destination-board list.
-    expect(validateCardMoveMock).not.toHaveBeenCalled();
     expect(dispatchEventMock).toHaveBeenCalledTimes(1);
     expect(emitCardMovedMock).toHaveBeenCalledTimes(1);
+    expect(emitCardMovedMock.mock.calls[0]?.[0]).toMatchObject({ toListName: null });
     expect(publishMock).toHaveBeenCalledTimes(2);
     expect(publishMock.mock.calls[0]?.[0]).toBe('board-source');
     expect(publishMock.mock.calls[1]?.[0]).toBe('board-target');
@@ -328,6 +429,7 @@ describe('card move destination boundaries', () => {
     expect(body.data.id).toBe('card-source');
     expect(body.data.list_id).toBe('list-target');
     expect(applyBoardVisibilityMock).not.toHaveBeenCalled();
+    expect(emitCardMovedMock.mock.calls[0]?.[0]).toMatchObject({ toListName: 'Target' });
     expect(publishMock).toHaveBeenCalledTimes(1);
     expect(publishMock.mock.calls[0]?.[0]).toBe('board-source');
   });
@@ -385,14 +487,12 @@ describe('card move destination boundaries', () => {
 
   test('enforces source-board state transitions for same-board moves', async () => {
     requireRow('lists', 'list-target').board_id = 'board-source';
-    validateCardMoveMock.mockImplementationOnce(() => Promise.reject(new StateTransitionForbiddenError({
-      boardId: 'board-source',
-      fromListId: 'list-source',
-      fromListName: 'Source',
-      toListId: 'list-target',
-      toListName: 'Target',
-      allowedNextStates: [],
-    })));
+    store.board_state_transitions.push({ board_id: 'board-source', enabled: true, graph_data: {
+      nodes: [
+        { id: 'list-source', listId: 'list-source', label: 'Source', positionX: 0, positionY: 0 },
+        { id: 'list-target', listId: 'list-target', label: 'Target', positionX: 100, positionY: 0 },
+      ], edges: [], notes: [],
+    } });
     const request = new Request('http://localhost/api/v1/cards/card-source/move', {
       method: 'PATCH',
       body: JSON.stringify({ targetListId: 'list-target' }),
@@ -404,6 +504,7 @@ describe('card move destination boundaries', () => {
     expect(response.status).toBe(422);
     expect(body.name).toBe('state-transition-forbidden');
     expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(emitCardMoveBlockedActivityMock).toHaveBeenCalledTimes(1);
     expect(dispatchEventMock).not.toHaveBeenCalled();
     expect(emitCardMovedMock).not.toHaveBeenCalled();
     expect(publishMock).not.toHaveBeenCalled();
@@ -442,7 +543,6 @@ describe('card move destination boundaries', () => {
     expect(response.status).toBe(403);
     expect(body.error?.code).toBe('board-access-denied');
     expect(applyBoardVisibilityMock).toHaveBeenCalledWith(request, 'board-target');
-    expect(validateCardMoveMock).not.toHaveBeenCalled();
     expect(store.cards[0]?.list_id).toBe('list-source');
   });
 

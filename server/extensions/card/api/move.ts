@@ -6,6 +6,8 @@ import { publisher } from '../../../mods/pubsub/publisher';
 import {
   requireWorkspaceMembership,
   requireMemberOrBoardGuestMember,
+  resolveHighestRole,
+  hasRole,
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { requireCardWritable, type CardScopedRequest } from '../middlewares/requireCardWritable';
@@ -13,8 +15,15 @@ import { applyBoardVisibility } from '../../../middlewares/boardVisibility';
 import { between, HIGH_SENTINEL, generatePositions } from '../../list/mods/fractional';
 import { recordConflict } from '../../realtime/mods/conflictHandler';
 import { emitCardMoved } from '../../activity/mods/createActivityEvent';
-import { validateCardMove } from '../../stateTransitions/enforcement';
 import { StateTransitionForbiddenError } from '../../stateTransitions/common/errors';
+import { emitCardMoveBlockedActivity } from '../../stateTransitions/common/activityLog';
+import { validateGraphShape } from '../../stateTransitions/common/validator';
+import { syncGraphWithLists } from '../../stateTransitions/common/sync';
+import { deriveRulesFromGraph } from '../../stateTransitions/common/serializer';
+import { featureFlags } from '../../../config/featureFlags';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
+import { lockBoardMemberMutations } from '../../board/api/members/lock';
+import type { Knex } from 'knex';
 import { buildAvatarProxyUrlsInCollection } from '../../../common/avatar/resolveAvatarUrl';
 import { resolveCoverImageUrl } from '../../../common/cards/cover';
 
@@ -40,7 +49,51 @@ type BoardRow = {
   id: string;
   workspace_id: string;
   state: 'ACTIVE' | 'ARCHIVED';
+  visibility: 'PRIVATE' | 'WORKSPACE' | 'PUBLIC';
 };
+
+function denied(code: string, message: string, status = 403): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
+
+// Run only after the workspace and board locks. The request's callerRole and
+// guestType are snapshots from middleware and can be revoked while waiting.
+async function authorizeBoardMove(trx: Knex.Transaction, board: BoardRow, userId: string, role: NonNullable<ReturnType<typeof resolveHighestRole>>): Promise<Response | null> {
+  if (role === 'GUEST') {
+    const grant = await trx('board_guest_access').where({ user_id: userId, board_id: board.id }).first() as { guest_type?: string } | undefined;
+    return grant?.guest_type?.toUpperCase() === 'MEMBER'
+      ? null : denied('insufficient-role', 'Requires at least MEMBER role');
+  }
+  if (!hasRole(role, 'MEMBER')) return denied('insufficient-role', 'Requires at least MEMBER role');
+  if (board.visibility === 'PRIVATE' && role !== 'OWNER' && role !== 'ADMIN') {
+    const member = await trx<{ user_id: string; board_id: string }>('board_members').where({ user_id: userId, board_id: board.id }).first();
+    if (!member) return denied('board-access-denied', 'You do not have access to this board');
+  }
+  return null;
+}
+
+async function checkFreshTransition(trx: Knex.Transaction, boardId: string, sourceList: ListRow, targetList: ListRow): Promise<Response | null> {
+  if (!featureFlags.STATE_TRANSITIONS_ENABLED || sourceList.id === targetList.id) return null;
+  // Plain SELECT: transition UPDATE locks its row before its advisory-lock trigger.
+  // A FOR SHARE here would invert that order and deadlock.
+  const row = await trx('board_state_transitions').where({ board_id: boardId }).first() as { enabled: boolean; graph_data: unknown } | undefined;
+  if (!row?.enabled) return null;
+  const parsed = validateGraphShape(row.graph_data);
+  if (!parsed.ok) return denied('state-transition-rules-invalid', 'Enabled board transition rules are invalid', 422);
+  const activeLists = await trx('lists').where({ board_id: boardId, archived: false }).orderBy('position', 'asc').select('id', 'title') as Array<{ id: string; title: string }>;
+  const graph = syncGraphWithLists(parsed.graph, activeLists).graph;
+  if (!graph.nodes.some((node) => node.listId === sourceList.id)) return null;
+  const rules = deriveRulesFromGraph(graph);
+  const rule = rules.find((candidate) => candidate.current_state_id === sourceList.id);
+  if (rule?.allowed_next_state_ids.includes(targetList.id)) return null;
+  const names = new Map(graph.nodes.map((node) => [node.listId, node.label]));
+  throw new StateTransitionForbiddenError({
+    boardId, fromListId: sourceList.id, toListId: targetList.id,
+    fromListName: names.get(sourceList.id) ?? sourceList.title ?? sourceList.id,
+    toListName: names.get(targetList.id) ?? targetList.title ?? targetList.id,
+    allowedNextStates: (rule?.allowed_next_state_ids ?? []).map((id) => ({ id, name: names.get(id) ?? id })),
+  });
+}
 
 async function parseMoveBody(req: Request): Promise<MoveBody | Response> {
   try {
@@ -113,6 +166,7 @@ function computeStrictPositionBetween({ left, right }: { left: string; right: st
 class CardLocationChangedError extends Error {}
 
 async function rebalanceAndMoveCard({
+  connection,
   cardId,
   expectedListId,
   targetListId,
@@ -120,6 +174,7 @@ async function rebalanceAndMoveCard({
   targetCards,
   now,
 }: {
+  connection: Knex.Transaction;
   cardId: string;
   expectedListId: string;
   targetListId: string;
@@ -134,28 +189,26 @@ async function rebalanceAndMoveCard({
   ];
   const newPositions = generatePositions(orderedIds.length);
 
-  await db.transaction(async (trx) => {
-    const activePosition = newPositions[insertIndex];
-    if (!activePosition) throw new Error('Failed to generate card position');
-    // Compare-and-swap the source location before touching neighbouring cards;
-    // a competing move must roll this whole rebalance back, not reuse old auth.
-    const moved = await trx('cards')
-      .where({ id: cardId, list_id: expectedListId })
-      .update({ list_id: targetListId, position: activePosition, updated_at: now });
-    if (!moved) throw new CardLocationChangedError('Card location changed during move');
-    for (const [idx, id] of orderedIds.entries()) {
-      if (id === cardId) continue;
-      const nextPosition = newPositions[idx];
-      if (!nextPosition) throw new Error('Failed to generate card position');
-      await trx('cards').where({ id }).update({ position: nextPosition, updated_at: now });
-    }
-  });
+  const activePosition = newPositions[insertIndex];
+  if (!activePosition) throw new Error('Failed to generate card position');
+  // The caller holds the workspace/board locks and one outer transaction.
+  const moved = await connection('cards')
+    .where({ id: cardId, list_id: expectedListId })
+    .update({ list_id: targetListId, position: activePosition, updated_at: now });
+  if (!moved) throw new CardLocationChangedError('Card location changed during move');
+  for (const [idx, id] of orderedIds.entries()) {
+    if (id === cardId) continue;
+    const nextPosition = newPositions[idx];
+    if (!nextPosition) throw new Error('Failed to generate card position');
+    await connection('cards').where({ id }).update({ position: nextPosition, updated_at: now });
+  }
 
-  const refreshed = await db<CardRow>('cards').where({ id: cardId }).first();
+  const refreshed = await connection<CardRow>('cards').where({ id: cardId }).first();
   return refreshed ?? null;
 }
 
 async function persistMove({
+  connection,
   cardId,
   expectedListId,
   targetListId,
@@ -164,6 +217,7 @@ async function persistMove({
   now,
   position,
 }: {
+  connection: Knex.Transaction;
   cardId: string;
   expectedListId: string;
   targetListId: string;
@@ -173,10 +227,10 @@ async function persistMove({
   position: string | null;
 }): Promise<CardRow | null> {
   if (position === null) {
-    return rebalanceAndMoveCard({ cardId, expectedListId, targetListId, insertIndex, targetCards, now });
+    return rebalanceAndMoveCard({ connection, cardId, expectedListId, targetListId, insertIndex, targetCards, now });
   }
 
-  const updated = (await db<CardRow>('cards')
+  const updated = (await connection<CardRow>('cards')
     .where({ id: cardId, list_id: expectedListId })
     .update({ list_id: targetListId, position, updated_at: now }, ['*'])) as CardRow[];
   return updated[0] ?? null;
@@ -272,169 +326,119 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
     if (targetRoleError) return targetRoleError;
   }
 
-  if (targetList.archived) {
-    return Response.json(
-      { error: { code: 'target-list-archived', message: 'The target list is archived' } },
-      { status: 403 },
-    );
-  }
-
-  if (isCrossBoard) {
-    // A transition graph contains only its own board's lists. Do not bypass an
-    // enabled source/destination workflow by moving out and back through another board.
-    const enabledTransitions = await db<{ id: string; board_id: string; enabled: boolean }>('board_state_transitions')
-      .whereIn('board_id', [board.id, targetList.board_id])
-      .where({ enabled: true })
-      .first<{ id: string } | undefined>();
-    if (enabledTransitions) {
-      return Response.json(
-        { error: { code: 'cross-board-transition-unsupported', message: 'Disable board transition rules before moving cards between these boards' } },
-        { status: 422 },
-      );
-    }
-  }
-
+  // The preflight above is deliberately cheap; all decisions governing the write
+  // must be made again inside one transaction after the membership/board locks.
+  let outcome: Response | { updatedCard: CardRow; sourceList: ListRow; targetList: ListRow; board: BoardRow; isCrossBoard: boolean; fromListId: string };
   try {
-    // Transition graphs are board-local. A destination on another board is
-    // never an edge of the source board's graph; apply rules only within it.
-    if (!isCrossBoard) {
-      await validateCardMove({
-        boardId: board.id,
-        fromListId: card.list_id,
-        toListId: body.targetListId,
-        cardId,
+    outcome = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+      for (const boardId of [...new Set([board.id, targetList.board_id])].sort()) {
+        await lockBoardMemberMutations(trx, boardId);
+      }
+
+      const currentCard = await trx<CardRow>('cards').where({ id: cardId }).first();
+      if (!currentCard) return denied('card-not-found', 'Card not found', 404);
+      if (currentCard.list_id !== card.list_id) return denied('card-location-changed', 'Card location changed; reload and retry', 409);
+      if (currentCard.archived) return denied('card-archived', 'Card is archived and cannot be modified');
+      const currentSource = await trx<ListRow>('lists').where({ id: currentCard.list_id }).first();
+      const currentTarget = await trx<ListRow>('lists').where({ id: body.targetListId }).first();
+      if (!currentSource || currentSource.board_id !== board.id) return denied('card-location-changed', 'Card location changed; reload and retry', 409);
+      if (!currentTarget) return denied('target-list-not-found', 'Target list not found', 404);
+      if (currentTarget.board_id !== targetList.board_id) return denied('target-list-changed', 'Target list changed; reload and retry', 409);
+      const currentBoard = await trx<BoardRow>('boards').where({ id: currentSource.board_id }).first();
+      const currentTargetBoard = currentTarget.board_id === currentSource.board_id
+        ? currentBoard : await trx<BoardRow>('boards').where({ id: currentTarget.board_id }).first();
+      if (!currentBoard || !currentTargetBoard) return denied('board-not-found', 'Board not found', 404);
+      if (currentBoard.workspace_id !== board.workspace_id || currentTargetBoard.workspace_id !== board.workspace_id) {
+        return denied('cross-workspace-move-forbidden', 'Cards can only be moved between boards in the same workspace');
+      }
+      if (currentBoard.state === 'ARCHIVED') return denied('board-is-archived', 'This board is archived and cannot be modified.');
+      const userId = (req as AuthenticatedRequest).currentUser?.id;
+      if (!userId) return denied('unauthorized', 'Authentication required', 401);
+      const memberships = await trx('memberships').where({ user_id: userId, workspace_id: board.workspace_id }).select('role') as Array<{ role: string }>;
+      const role = resolveHighestRole(memberships.map((membership) => membership.role));
+      if (!role) return denied('insufficient-role', 'You are not a member of this workspace');
+      const sourceAccess = await authorizeBoardMove(trx, currentBoard, userId, role);
+      if (sourceAccess) return sourceAccess;
+      const crossBoard = currentSource.board_id !== currentTarget.board_id;
+      if (crossBoard) {
+        const targetAccess = await authorizeBoardMove(trx, currentTargetBoard, userId, role);
+        if (targetAccess) return targetAccess;
+        if (currentTargetBoard.state === 'ARCHIVED') return denied('board-is-archived', 'The target board is archived and cannot be modified');
+      }
+      if (currentTarget.archived) return denied('target-list-archived', 'The target list is archived');
+
+      if (crossBoard) {
+        // Plain SELECT under A/B advisory locks, never FOR SHARE (row-lock inversion).
+        const enabled = await trx<{ board_id: string; enabled: boolean }>('board_state_transitions')
+          .whereIn('board_id', [currentBoard.id, currentTargetBoard.id])
+          .where({ enabled: true }).first();
+        if (enabled) return denied('cross-board-transition-unsupported', 'Disable board transition rules before moving cards between these boards', 422);
+      } else {
+        const transitionError = await checkFreshTransition(trx, currentBoard.id, currentSource, currentTarget);
+        if (transitionError) return transitionError;
+      }
+
+      const targetCards = await trx<CardRow>('cards')
+        .where({ list_id: body.targetListId, archived: false })
+        .whereNot({ id: cardId }).orderBy('position', 'asc');
+      const insertIndex = resolveInsertIndex({ afterCardId: body.afterCardId, targetCards });
+      if (insertIndex === null) return denied('card-not-found', 'afterCardId not found in target list', 404);
+      if (currentCard.list_id === body.targetListId) {
+        const currentIds = await trx('cards').where({ list_id: currentCard.list_id, archived: false })
+          .orderBy('position', 'asc').select('id') as Array<{ id: string }>;
+        if (currentIds.findIndex((entry) => entry.id === cardId) === insertIndex) {
+          return Response.json({ data: currentCard });
+        }
+      }
+      const left = insertIndex > 0 ? targetCards[insertIndex - 1]?.position ?? '' : '';
+      const right = insertIndex < targetCards.length ? targetCards[insertIndex]?.position ?? HIGH_SENTINEL : HIGH_SENTINEL;
+      const position = computeStrictPositionBetween({ left, right });
+      if (crossBoard) {
+        const cardLabels = await trx('card_labels').where({ card_id: cardId }) as Array<{ label_id: string }>;
+        if (cardLabels.length) {
+          const labels = await trx('labels').whereIn('id', cardLabels.map((label) => label.label_id)) as Array<{ board_id: string }>;
+          if (labels.length !== cardLabels.length || labels.some((label) => label.board_id !== currentTarget.board_id)) {
+            return denied('label-target-ineligible', 'Card labels must belong to the target board', 422);
+          }
+        }
+      }
+      const fromListId = currentCard.list_id;
+      const updatedCard = await persistMove({ connection: trx, cardId, expectedListId: fromListId,
+        targetListId: body.targetListId, insertIndex, targetCards, now: new Date().toISOString(), position });
+      if (!updatedCard) throw new CardLocationChangedError('Card location changed during move');
+      return { updatedCard, sourceList: currentSource, targetList: currentTarget, board: currentBoard,
+        isCrossBoard: crossBoard, fromListId };
+    });
+  } catch (error) {
+    if (error instanceof StateTransitionForbiddenError) {
+      await emitCardMoveBlockedActivity({
+        cardId, boardId: error.boardId,
         actorId: (req as AuthenticatedRequest).currentUser?.id ?? 'system',
+        fromListId: error.fromListId, fromListName: error.fromListName,
+        toListId: error.toListId, toListName: error.toListName,
         ipAddress: req.headers.get('x-forwarded-for') ?? req.headers.get('cf-connecting-ip') ?? null,
         userAgent: req.headers.get('user-agent') ?? null,
       });
+      return Response.json({ name: 'state-transition-forbidden', data: {
+        boardId: error.boardId, fromListId: error.fromListId, fromListName: error.fromListName,
+        toListId: error.toListId, toListName: error.toListName,
+        allowedNextStates: error.allowedNextStates,
+      } }, { status: 422 });
     }
-  } catch (error) {
-    if (error instanceof StateTransitionForbiddenError) {
-      return Response.json(
-        {
-          name: 'state-transition-forbidden',
-          data: {
-            boardId: error.boardId,
-            fromListId: error.fromListId,
-            fromListName: sourceList.title ?? error.fromListName,
-            toListId: error.toListId,
-            toListName: targetList.title ?? error.toListName,
-            allowedNextStates: error.allowedNextStates,
-          },
-        },
-        { status: 422 },
-      );
-    }
-    throw error;
-  }
-
-  // Compute new position within target list
-  const targetCards = await db<CardRow>('cards')
-    .where({ list_id: body.targetListId, archived: false })
-    .whereNot({ id: cardId }) // exclude the card being moved
-    .orderBy('position', 'asc');
-
-  const insertIndex = resolveInsertIndex({ afterCardId: body.afterCardId, targetCards });
-  if (insertIndex === null) {
-    return Response.json(
-      { error: { code: 'card-not-found', message: 'afterCardId not found in target list' } },
-      { status: 404 },
-    );
-  }
-
-  const isSameListMove = card.list_id === body.targetListId;
-  if (isSameListMove) {
-    // [why] Drag/drop can commit even when card stays at the same index.
-    // Treat this as a no-op: skip writes, events, and notifications.
-    const currentListCardIds = await db('cards')
-      .where({ list_id: card.list_id, archived: false })
-      .orderBy('position', 'asc')
-      .select('id');
-    const currentIndex = currentListCardIds.findIndex((entry: { id: string }) => entry.id === cardId);
-    if (currentIndex === insertIndex) {
-      const unchangedCard = await db<CardRow>('cards').where({ id: cardId }).first();
-      if (!unchangedCard) {
-        return Response.json(
-          { error: { code: 'card-not-found', message: 'Card not found after move' } },
-          { status: 404 },
-        );
-      }
-      return Response.json({ data: unchangedCard });
-    }
-  }
-
-  const left = insertIndex > 0 ? targetCards[insertIndex - 1]?.position ?? '' : '';
-  const right = insertIndex < targetCards.length
-    ? targetCards[insertIndex]?.position ?? HIGH_SENTINEL
-    : HIGH_SENTINEL;
-
-  const position = computeStrictPositionBetween({ left, right });
-
-  if (isCrossBoard) {
-    // Labels are board-owned; do not silently carry foreign labels into another
-    // board or discard them. The caller can detach/remap them and retry.
-    const cardLabels = await db('card_labels').where({ card_id: cardId }) as Array<{ label_id: string }>;
-    if (cardLabels.length > 0) {
-      const labels = await db('labels')
-        .whereIn('id', cardLabels.map((label) => label.label_id)) as Array<{ id: string; board_id: string }>;
-      if (labels.length !== cardLabels.length || labels.some((label) => label.board_id !== targetList.board_id)) {
-        return Response.json(
-          { error: { code: 'label-target-ineligible', message: 'Card labels must belong to the target board' } },
-          { status: 422 },
-        );
-      }
-    }
-  }
-
-  const now = new Date().toISOString();
-  // Boundary fallback: if no strict lexicographic slot exists (e.g. prepend
-  // before a '!' card), persistMove re-spaces the target list before applying.
-  let updatedCard: CardRow | null;
-  try {
-    updatedCard = await persistMove({
-      cardId,
-      expectedListId: card.list_id,
-      targetListId: body.targetListId,
-      insertIndex,
-      targetCards,
-      now,
-      position,
-    });
-  } catch (error) {
-    if (error instanceof CardLocationChangedError) {
-      return Response.json(
-        { error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } },
-        { status: 409 },
-      );
-    }
+    if (error instanceof CardLocationChangedError) return denied('card-location-changed', 'Card location changed; reload and retry', 409);
     const pgError = error as { code?: string; constraint?: string };
     if (pgError.code === '23514' && pgError.constraint === 'card_move_assignment_eligibility') {
-      return Response.json(
-        { error: { code: 'assignment-target-ineligible', message: 'An assigned member cannot access the target board' } },
-        { status: 422 },
-      );
+      return denied('assignment-target-ineligible', 'An assigned member cannot access the target board', 422);
     }
     if (pgError.code === '23514' && pgError.constraint === 'card_move_label_ownership') {
-      return Response.json(
-        { error: { code: 'label-target-ineligible', message: 'Card labels must belong to the target board' } },
-        { status: 422 },
-      );
+      return denied('label-target-ineligible', 'Card labels must belong to the target board', 422);
     }
     throw error;
   }
-  if (!updatedCard) {
-    const stillExists = await db<CardRow>('cards').where({ id: cardId }).first<CardRow | undefined>();
-    if (stillExists) {
-      return Response.json(
-        { error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } },
-        { status: 409 },
-      );
-    }
-    return Response.json(
-      { error: { code: 'card-not-found', message: 'Card not found after move' } },
-      { status: 404 },
-    );
-  }
+  if (outcome instanceof Response) return outcome;
+  const { updatedCard, sourceList: committedSourceList, targetList: committedTargetList,
+    board: committedBoard, isCrossBoard: committedCrossBoard, fromListId } = outcome;
   const updatedPosition = updatedCard.position;
 
   // Detect position collision: if another card already occupies the computed position
@@ -443,25 +447,24 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
     .where({ list_id: body.targetListId, position: updatedPosition, archived: false })
     .whereNot({ id: cardId })
     .first();
-  if (collision) recordConflict({ boardId: board.id, entityType: 'card' });
+  if (collision) recordConflict({ boardId: committedBoard.id, entityType: 'card' });
 
   // Client expects { card, fromListId } to update both card slice and board slice
-  const fromListId = card.list_id;
   const actorId = (req as AuthenticatedRequest).currentUser?.id ?? 'system';
 
   if (fromListId !== updatedCard.list_id) {
     await Promise.all([
-      dispatchEvent({ type: 'card.moved', boardId: board.id, entityId: cardId, actorId, payload: { card: updatedCard, fromListId, toListId: updatedCard.list_id } }),
+      dispatchEvent({ type: 'card.moved', boardId: committedBoard.id, entityId: cardId, actorId, payload: { card: updatedCard, fromListId, toListId: updatedCard.list_id } }),
       emitCardMoved({
         actorId,
         cardId,
         cardTitle: updatedCard.title,
         fromListId,
-        fromListName: sourceList.title ?? null,
+        fromListName: committedSourceList.title ?? null,
         toListId: updatedCard.list_id,
-        toListName: targetList.title ?? null,
-        boardId: board.id,
-        workspaceId: board.workspace_id,
+        toListName: committedCrossBoard ? null : committedTargetList.title ?? null,
+        boardId: committedBoard.id,
+        workspaceId: committedBoard.workspace_id,
         ipAddress: req.headers.get('x-forwarded-for') ?? req.headers.get('cf-connecting-ip') ?? null,
         userAgent: req.headers.get('user-agent') ?? null,
       }),
@@ -470,15 +473,15 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
 
   // Broadcast to the source board so its kanban view removes/moves the card in real time.
   publisher.publish(
-    board.id,
+    committedBoard.id,
     JSON.stringify({ type: 'card_moved', payload: { card: updatedCard, fromListId } }),
   ).catch(() => {});
 
   // For cross-board moves also notify the target board's subscribers.
-  if (isCrossBoard) {
+  if (committedCrossBoard) {
     const destinationCard = await cardForDestination(updatedCard);
     publisher.publish(
-      targetList.board_id,
+      committedTargetList.board_id,
       JSON.stringify({ type: 'card_moved', payload: { card: destinationCard, fromListId } }),
     ).catch(() => {});
   }
