@@ -122,53 +122,65 @@ export async function handleAssignMember(req: Request, cardId: string): Promise<
   const assigneeUser = await db<UserRow>('users').where({ id: body.userId }).select('name', 'email').first();
   const assigneeName = assigneeUser?.name ?? assigneeUser?.email ?? body.userId;
 
-  const assignmentError = await db.transaction(async (trx) => {
-    await lockWorkspaceMembershipMutations(trx, context.workspaceId);
-    await lockBoardMemberMutations(trx, context.boardId);
-    const actorRole = await getCurrentWorkspaceRole(trx, context.workspaceId, actorId);
-    if (!actorRole) {
-      return Response.json(
-        { error: { code: 'forbidden', message: 'Workspace membership is no longer active' } },
-        { status: 403 },
-      );
-    }
-    if (actorRole === 'GUEST') {
-      const actorGrant = await trx<Record<string, unknown>>('board_guest_access')
-        .where({ board_id: context.boardId, user_id: actorId, guest_type: 'MEMBER' })
-        .first();
-      if (!actorGrant) {
+  let assignmentError: Response | null;
+  try {
+    assignmentError = await db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, context.workspaceId);
+      await lockBoardMemberMutations(trx, context.boardId);
+      const actorRole = await getCurrentWorkspaceRole(trx, context.workspaceId, actorId);
+      if (!actorRole) {
         return Response.json(
-          { error: { code: 'forbidden', message: 'Write access is no longer active' } },
+          { error: { code: 'forbidden', message: 'Workspace membership is no longer active' } },
           { status: 403 },
         );
       }
-    }
-    const freshTargetMembership = await trx<Record<string, unknown>>('memberships')
-      .where({ user_id: body.userId, workspace_id: context.workspaceId })
-      .first();
-    if (!freshTargetMembership) {
-      return Response.json(
-        { error: { code: 'member-not-in-workspace', message: 'User is not a member of this workspace' } },
-        { status: 400 },
-      );
-    }
-    if (freshTargetMembership.role === 'GUEST') {
-      const targetGrant = await trx<Record<string, unknown>>('board_guest_access')
-        .where({ board_id: context.boardId, user_id: body.userId })
+      if (actorRole === 'GUEST') {
+        const actorGrant = await trx<Record<string, unknown>>('board_guest_access')
+          .where({ board_id: context.boardId, user_id: actorId, guest_type: 'MEMBER' })
+          .first();
+        if (!actorGrant) {
+          return Response.json(
+            { error: { code: 'forbidden', message: 'Write access is no longer active' } },
+            { status: 403 },
+          );
+        }
+      }
+      const freshTargetMembership = await trx<Record<string, unknown>>('memberships')
+        .where({ user_id: body.userId, workspace_id: context.workspaceId })
         .first();
-      if (!targetGrant) {
+      if (!freshTargetMembership) {
         return Response.json(
-          { error: { code: 'member-not-on-board', message: 'Guest is not a member of this board' } },
+          { error: { code: 'member-not-in-workspace', message: 'User is not a member of this workspace' } },
           { status: 400 },
         );
       }
+      if (freshTargetMembership.role === 'GUEST') {
+        const targetGrant = await trx<Record<string, unknown>>('board_guest_access')
+          .where({ board_id: context.boardId, user_id: body.userId })
+          .first();
+        if (!targetGrant) {
+          return Response.json(
+            { error: { code: 'member-not-on-board', message: 'Guest is not a member of this board' } },
+            { status: 400 },
+          );
+        }
+      }
+      await trx<Record<string, unknown>>('card_members')
+        .insert({ card_id: cardId, user_id: body.userId })
+        .onConflict(['card_id', 'user_id'])
+        .ignore();
+      return null;
+    });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === '40001'
+      && error.message.includes('assignment card location changed while waiting for locks')) {
+      return Response.json(
+        { error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } },
+        { status: 409 },
+      );
     }
-    await trx<Record<string, unknown>>('card_members')
-      .insert({ card_id: cardId, user_id: body.userId })
-      .onConflict(['card_id', 'user_id'])
-      .ignore();
-    return null;
-  });
+    throw error;
+  }
   if (assignmentError) return assignmentError;
 
   await emitCardMemberAssigned({
