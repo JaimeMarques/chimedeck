@@ -183,8 +183,21 @@ const MoveCardModal = ({
       const result = await api.patch<{ data: Card }>(`/cards/${cardId}/move`, { targetListId: selectedListId, afterCardId });
       onSuccess(result.data);
     } catch (err) {
-      const code = isApiError(err) ? err.response.data.error.code : undefined;
-      if (code === 'label-target-ineligible') {
+      const response = isApiError(err)
+        ? (err.response as { status?: number; data?: unknown } | null)
+        : undefined;
+      const data = response?.data;
+      const envelope = typeof data === 'object' && data !== null ? data : undefined;
+      const code = envelope && 'error' in envelope
+        && typeof envelope.error === 'object' && envelope.error !== null
+        && 'code' in envelope.error ? envelope.error.code : undefined;
+      const legacyTransitionForbidden = response?.status === 422
+        && envelope !== undefined
+        && 'name' in envelope
+        && envelope.name === 'state-transition-forbidden';
+      if (legacyTransitionForbidden) {
+        setError('This move is blocked by the board’s transition rules. Choose an allowed destination list.');
+      } else if (code === 'label-target-ineligible') {
         setError('Remove or replace labels that do not belong to the destination board before moving this card.');
       } else if (code === 'assignment-target-ineligible') {
         setError('Remove assigned members who cannot access the destination board before moving this card.');

@@ -238,6 +238,38 @@ describe('MoveCardModal', () => {
     expect(view.getByRole('alert').textContent).not.toContain('Please try again');
   });
 
+  test('explains a same-board transition refusal in the legacy name/data envelope without exposing server details', async () => {
+    const onSuccess = mock(() => undefined);
+    const api = {
+      get: <T,>(url: string): Promise<T> => Promise.resolve(({
+        '/workspaces/ws-1/boards': { data: [{ id: 'board-source', title: 'Source', state: 'ACTIVE' }] },
+        '/boards/board-source/lists': { data: [{ id: 'list-source', title: 'Source list', archived: false }] },
+        '/boards/board-source': { data: {}, includes: { cards: [] } },
+      } as Record<string, unknown>)[url] as T),
+      patch: <T,>(): Promise<T> => Promise.reject(Object.assign(new Error('private stack trace'), {
+        response: { status: 422, data: {
+          name: 'state-transition-forbidden',
+          data: { fromListName: 'Secret source', toListName: 'Secret target', allowedNextStates: [] },
+        } },
+      })),
+    };
+    const view = render(React.createElement(MoveCardModal, {
+      cardId: 'card-1', currentBoardId: 'board-source', currentListId: 'list-source',
+      workspaceId: 'ws-1', api, onClose: () => undefined, onSuccess,
+    }));
+    const move = view.getByRole('button', { name: 'Move' }) as HTMLButtonElement;
+    await waitFor(() => { expect(move.disabled).toBe(false); });
+    fireEvent.click(move);
+    await waitFor(() => {
+      expect(view.getByRole('alert').textContent).toContain('transition rules');
+      expect(move.disabled).toBe(false);
+    });
+    expect(view.getByRole('alert').textContent).not.toContain('Secret');
+    expect(view.getByRole('alert').textContent).not.toContain('private stack trace');
+    expect(view.getByRole('alert').textContent).not.toContain('Please try again');
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
   test('explains a transition-enabled board refusal instead of suggesting another retry', async () => {
     const api = {
       get: <T,>(url: string): Promise<T> => Promise.resolve(({
@@ -258,6 +290,32 @@ describe('MoveCardModal', () => {
     fireEvent.click(move);
     await waitFor(() => { expect(view.getByRole('alert').textContent).toContain('transition rules'); });
   });
+
+  for (const { status, code, message } of [
+    { status: 422, code: 'assignment-target-ineligible', message: 'Remove assigned members' },
+    { status: 409, code: 'card-location-changed', message: 'Close the dialog, reload the card and retry' },
+  ]) {
+    test(`keeps the ${code} refusal message`, async () => {
+      const api = {
+        get: <T,>(url: string): Promise<T> => Promise.resolve(({
+          '/workspaces/ws-1/boards': { data: [{ id: 'board-source', title: 'Source', state: 'ACTIVE' }] },
+          '/boards/board-source/lists': { data: [{ id: 'list-source', title: 'Source list', archived: false }] },
+          '/boards/board-source': { data: {}, includes: { cards: [] } },
+        } as Record<string, unknown>)[url] as T),
+        patch: <T,>(): Promise<T> => Promise.reject(Object.assign(new Error('internal error'), {
+          response: { status, data: { error: { code } } },
+        })),
+      };
+      const view = render(React.createElement(MoveCardModal, {
+        cardId: 'card-1', currentBoardId: 'board-source', currentListId: 'list-source',
+        workspaceId: 'ws-1', api, onClose: () => undefined, onSuccess: () => undefined,
+      }));
+      const move = view.getByRole('button', { name: 'Move' }) as HTMLButtonElement;
+      await waitFor(() => { expect(move.disabled).toBe(false); });
+      fireEvent.click(move);
+      await waitFor(() => { expect(view.getByRole('alert').textContent).toContain(message); });
+    });
+  }
 
   test('offers a retry after list card refresh fails and only enables Move after successful reload', async () => {
     let reads = 0;
