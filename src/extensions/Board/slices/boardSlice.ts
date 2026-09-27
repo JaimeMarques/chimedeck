@@ -262,12 +262,19 @@ const boardSlice = createSlice({
     ) {
       const { card, fromListId } = action.payload;
 
-      // Remove from source list
-      const fromCards = state.cardsByList[fromListId] ?? [];
-      state.cardsByList[fromListId] = fromCards.filter((id) => id !== card.id);
+      // Only alter source lists belonging to this board. The destination list is absent
+      // when this event describes a card leaving for another board.
+      if (state.lists[fromListId]) {
+        state.cardsByList[fromListId] = (state.cardsByList[fromListId] ?? []).filter((id) => id !== card.id);
+      }
+      if (!state.lists[card.list_id]) {
+        // Removing a departed card is cheaper than cloning the entire board cache.
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+        delete state.cards[card.id];
+        return;
+      }
 
-      // [why] Cross-board moves can introduce a card not currently present in this board state's
-      // cards map. Upsert so the target board can render the incoming card immediately.
+      // Cross-board arrivals may not yet be present in the destination board cache.
       state.cards[card.id] = state.cards[card.id]
         ? ({ ...state.cards[card.id], ...card } as Card)
         : (card as Card);

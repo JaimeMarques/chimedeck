@@ -215,6 +215,129 @@ describe('MoveCardModal', () => {
     });
   });
 
+  test('explains a label ownership refusal instead of suggesting a retry', async () => {
+    const patchMock = mock((_url: string, _data: unknown) => Promise.reject(Object.assign(new Error('label ineligible'), {
+      response: { status: 422, data: { error: { code: 'label-target-ineligible', message: 'Card labels must belong to the target board' } } },
+    })));
+    const api = {
+      get: <T,>(url: string): Promise<T> => Promise.resolve(({
+        '/workspaces/ws-1/boards': { data: [{ id: 'board-source', title: 'Source', state: 'ACTIVE' }] },
+        '/boards/board-source/lists': { data: [{ id: 'list-source', title: 'Source list', archived: false }] },
+        '/boards/board-source': { data: {}, includes: { cards: [] } },
+      } as Record<string, unknown>)[url] as T),
+      patch: <T,>(url: string, data: unknown): Promise<T> => patchMock(url, data) as Promise<T>,
+    };
+    const view = render(React.createElement(MoveCardModal, {
+      cardId: 'card-1', currentBoardId: 'board-source', currentListId: 'list-source',
+      workspaceId: 'ws-1', api, onClose: () => undefined, onSuccess: () => undefined,
+    }));
+    const move = view.getByRole('button', { name: 'Move' });
+    await waitFor(() => { expect((move as HTMLButtonElement).disabled).toBe(false); });
+    fireEvent.click(move);
+    await waitFor(() => { expect(view.getByRole('alert').textContent).toContain('Remove or replace labels'); });
+    expect(view.getByRole('alert').textContent).not.toContain('Please try again');
+  });
+
+  test('explains a transition-enabled board refusal instead of suggesting another retry', async () => {
+    const api = {
+      get: <T,>(url: string): Promise<T> => Promise.resolve(({
+        '/workspaces/ws-1/boards': { data: [{ id: 'board-source', title: 'Source', state: 'ACTIVE' }] },
+        '/boards/board-source/lists': { data: [{ id: 'list-source', title: 'Source list', archived: false }] },
+        '/boards/board-source': { data: {}, includes: { cards: [] } },
+      } as Record<string, unknown>)[url] as T),
+      patch: <T,>(): Promise<T> => Promise.reject(Object.assign(new Error('blocked transition'), {
+        response: { status: 422, data: { error: { code: 'cross-board-transition-unsupported' } } },
+      })),
+    };
+    const view = render(React.createElement(MoveCardModal, {
+      cardId: 'card-1', currentBoardId: 'board-source', currentListId: 'list-source',
+      workspaceId: 'ws-1', api, onClose: () => undefined, onSuccess: () => undefined,
+    }));
+    const move = view.getByRole('button', { name: 'Move' });
+    await waitFor(() => { expect((move as HTMLButtonElement).disabled).toBe(false); });
+    fireEvent.click(move);
+    await waitFor(() => { expect(view.getByRole('alert').textContent).toContain('transition rules'); });
+  });
+
+  test('offers a retry after list card refresh fails and only enables Move after successful reload', async () => {
+    let reads = 0;
+    const patchMock = mock((_url: string, _data: unknown) => Promise.resolve({ data: {} }));
+    const api = {
+      get: <T,>(url: string): Promise<T> => {
+        if (url === '/workspaces/ws-1/boards') return Promise.resolve({ data: [{ id: 'board-source', title: 'Source', state: 'ACTIVE' }] } as T);
+        if (url === '/boards/board-source/lists') return Promise.resolve({ data: [
+          { id: 'list-source', title: 'Source list', archived: false },
+          { id: 'list-target', title: 'Target list', archived: false },
+        ] } as T);
+        if (url === '/boards/board-source') {
+          reads++;
+          if (reads === 2) return Promise.reject(new Error('temporary failure'));
+          return Promise.resolve({ data: {}, includes: { cards: [
+            { id: 'card-before', list_id: 'list-target', archived: false },
+          ] } } as T);
+        }
+        throw new Error(`Unexpected GET ${url}`);
+      },
+      patch: <T,>(url: string, data: unknown): Promise<T> => patchMock(url, data) as Promise<T>,
+    };
+    const view = render(React.createElement(MoveCardModal, {
+      cardId: 'card-1', currentBoardId: 'board-source', currentListId: 'list-source',
+      workspaceId: 'ws-1', api, onClose: () => undefined, onSuccess: () => undefined,
+    }));
+    const move = view.getByRole('button', { name: 'Move' }) as HTMLButtonElement;
+    await waitFor(() => { expect(move.disabled).toBe(false); });
+    fireEvent.change(view.getByLabelText('List'), { target: { value: 'list-target' } });
+    await waitFor(() => { expect(view.getByRole('alert').textContent).toContain('Could not load destination'); });
+    expect(move.disabled).toBe(true);
+    fireEvent.click(move);
+    expect(patchMock).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole('button', { name: 'Retry loading destination' }));
+    await waitFor(() => { expect(move.disabled).toBe(false); });
+    expect(view.queryByRole('alert')).toBeNull();
+    expect((view.getByLabelText('Position') as HTMLSelectElement).value).toBe('2');
+    fireEvent.click(move);
+    await waitFor(() => { expect(patchMock).toHaveBeenCalledWith('/cards/card-1/move', {
+      targetListId: 'list-target', afterCardId: 'card-before',
+    }); });
+  });
+
+  test('retries a failed board destination load without leaving stale lists or enabling Move', async () => {
+    let targetLoads = 0;
+    const patchMock = mock((_url: string, _data: unknown) => Promise.resolve({ data: {} }));
+    const api = {
+      get: <T,>(url: string): Promise<T> => {
+        if (url === '/workspaces/ws-1/boards') return Promise.resolve({ data: [
+          { id: 'board-source', title: 'Source', state: 'ACTIVE' },
+          { id: 'board-target', title: 'Target', state: 'ACTIVE' },
+        ] } as T);
+        if (url === '/boards/board-source/lists') return Promise.resolve({ data: [{ id: 'list-source', title: 'Source list', archived: false }] } as T);
+        if (url === '/boards/board-source') return Promise.resolve({ data: {}, includes: { cards: [] } } as T);
+        if (url === '/boards/board-target/lists') {
+          targetLoads++;
+          if (targetLoads === 1) return Promise.reject(new Error('temporary failure'));
+          return Promise.resolve({ data: [{ id: 'list-target', title: 'Target list', archived: false }] } as T);
+        }
+        if (url === '/boards/board-target') return Promise.resolve({ data: {}, includes: { cards: [] } } as T);
+        throw new Error(`Unexpected GET ${url}`);
+      },
+      patch: <T,>(url: string, data: unknown): Promise<T> => patchMock(url, data) as Promise<T>,
+    };
+    const view = render(React.createElement(MoveCardModal, {
+      cardId: 'card-1', currentBoardId: 'board-source', currentListId: 'list-source',
+      workspaceId: 'ws-1', api, onClose: () => undefined, onSuccess: () => undefined,
+    }));
+    const move = view.getByRole('button', { name: 'Move' }) as HTMLButtonElement;
+    await waitFor(() => { expect(move.disabled).toBe(false); });
+    fireEvent.change(view.getByLabelText('Board'), { target: { value: 'board-target' } });
+    await waitFor(() => { expect(view.getByRole('alert').textContent).toContain('Could not load destination'); });
+    expect(move.disabled).toBe(true);
+    expect((view.getByLabelText('List') as HTMLSelectElement).options.length).toBe(0);
+    fireEvent.click(view.getByRole('button', { name: 'Retry loading destination' }));
+    await waitFor(() => { expect(move.disabled).toBe(false); });
+    expect((view.getByLabelText('List') as HTMLSelectElement).value).toBe('list-target');
+    expect(targetLoads).toBe(2);
+  });
+
   test('shows active same-workspace destinations and submits board/list/position as a move request', async () => {
     const getMock = mock((url: string): unknown => {
       switch (url) {

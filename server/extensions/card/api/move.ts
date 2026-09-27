@@ -110,14 +110,18 @@ function computeStrictPositionBetween({ left, right }: { left: string; right: st
   }
 }
 
+class CardLocationChangedError extends Error {}
+
 async function rebalanceAndMoveCard({
   cardId,
+  expectedListId,
   targetListId,
   insertIndex,
   targetCards,
   now,
 }: {
   cardId: string;
+  expectedListId: string;
   targetListId: string;
   insertIndex: number;
   targetCards: CardRow[];
@@ -131,20 +135,20 @@ async function rebalanceAndMoveCard({
   const newPositions = generatePositions(orderedIds.length);
 
   await db.transaction(async (trx) => {
-    await Promise.all(
-      orderedIds.map((id, idx) => {
-        const nextPosition = newPositions[idx];
-        if (!nextPosition) throw new Error('Failed to generate card position');
-        const updateData: { position: string; updated_at: string; list_id?: string } = {
-          position: nextPosition,
-          updated_at: now,
-        };
-        if (id === cardId) {
-          updateData.list_id = targetListId;
-        }
-        return trx('cards').where({ id }).update(updateData);
-      }),
-    );
+    const activePosition = newPositions[insertIndex];
+    if (!activePosition) throw new Error('Failed to generate card position');
+    // Compare-and-swap the source location before touching neighbouring cards;
+    // a competing move must roll this whole rebalance back, not reuse old auth.
+    const moved = await trx('cards')
+      .where({ id: cardId, list_id: expectedListId })
+      .update({ list_id: targetListId, position: activePosition, updated_at: now });
+    if (!moved) throw new CardLocationChangedError('Card location changed during move');
+    for (const [idx, id] of orderedIds.entries()) {
+      if (id === cardId) continue;
+      const nextPosition = newPositions[idx];
+      if (!nextPosition) throw new Error('Failed to generate card position');
+      await trx('cards').where({ id }).update({ position: nextPosition, updated_at: now });
+    }
   });
 
   const refreshed = await db<CardRow>('cards').where({ id: cardId }).first();
@@ -153,6 +157,7 @@ async function rebalanceAndMoveCard({
 
 async function persistMove({
   cardId,
+  expectedListId,
   targetListId,
   insertIndex,
   targetCards,
@@ -160,6 +165,7 @@ async function persistMove({
   position,
 }: {
   cardId: string;
+  expectedListId: string;
   targetListId: string;
   insertIndex: number;
   targetCards: CardRow[];
@@ -167,11 +173,11 @@ async function persistMove({
   position: string | null;
 }): Promise<CardRow | null> {
   if (position === null) {
-    return rebalanceAndMoveCard({ cardId, targetListId, insertIndex, targetCards, now });
+    return rebalanceAndMoveCard({ cardId, expectedListId, targetListId, insertIndex, targetCards, now });
   }
 
   const updated = (await db<CardRow>('cards')
-    .where({ id: cardId })
+    .where({ id: cardId, list_id: expectedListId })
     .update({ list_id: targetListId, position, updated_at: now }, ['*'])) as CardRow[];
   return updated[0] ?? null;
 }
@@ -179,8 +185,16 @@ async function persistMove({
 // A newly arriving card is not already in the destination board's cache.
 // Supply the same relationship/cover fields as GET /lists/:id/cards.
 async function cardForDestination(card: CardRow) {
-  const cardLabels = await db('card_labels').where({ card_id: card.id }) as Array<{ label_id: string }>;
-  const cardMembers = await db('card_members').where({ card_id: card.id }) as Array<{ user_id: string }>;
+  const [cardLabels, cardMembers, comments, attachments, checklists] = await Promise.all([
+    db('card_labels').where({ card_id: card.id }) as Promise<Array<{ label_id: string }>>,
+    db('card_members').where({ card_id: card.id }) as Promise<Array<{ user_id: string }>>,
+    db('comments').where({ card_id: card.id, deleted: false }) as Promise<Array<{ id: string }>>,
+    db('attachments').where({ card_id: card.id, status: 'READY' }) as Promise<Array<{ referenced_card_id: string | null }>>,
+    db('checklists').where({ card_id: card.id }).select('id') as Promise<Array<{ id: string }>>,
+  ]);
+  const checklistItems = checklists.length > 0
+    ? await db('checklist_items').whereIn('checklist_id', checklists.map(({ id }) => id)) as Array<{ checked: boolean }>
+    : [];
   const labels = cardLabels.length
     ? await db('labels').whereIn('id', cardLabels.map((row) => row.label_id)) as Array<{ id: string; name: string; color: string }>
     : [];
@@ -189,6 +203,11 @@ async function cardForDestination(card: CardRow) {
     : [];
   return resolveCoverImageUrl({
     ...card,
+    comment_count: comments.length,
+    attachment_count: attachments.filter(({ referenced_card_id }) => referenced_card_id === null).length,
+    linked_card_count: attachments.filter(({ referenced_card_id }) => referenced_card_id !== null).length,
+    checklist_total: checklistItems.length,
+    checklist_done: checklistItems.filter(({ checked }) => checked).length,
     labels: labels.map(({ id, name, color }) => ({ id, name, color })),
     members: buildAvatarProxyUrlsInCollection(users.map(({ id, email, name, avatar_url }) => ({ id, email, name, avatar_url }))),
   });
@@ -258,6 +277,21 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
       { error: { code: 'target-list-archived', message: 'The target list is archived' } },
       { status: 403 },
     );
+  }
+
+  if (isCrossBoard) {
+    // A transition graph contains only its own board's lists. Do not bypass an
+    // enabled source/destination workflow by moving out and back through another board.
+    const enabledTransitions = await db<{ id: string; board_id: string; enabled: boolean }>('board_state_transitions')
+      .whereIn('board_id', [board.id, targetList.board_id])
+      .where({ enabled: true })
+      .first<{ id: string } | undefined>();
+    if (enabledTransitions) {
+      return Response.json(
+        { error: { code: 'cross-board-transition-unsupported', message: 'Disable board transition rules before moving cards between these boards' } },
+        { status: 422 },
+      );
+    }
   }
 
   try {
@@ -359,6 +393,7 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
   try {
     updatedCard = await persistMove({
       cardId,
+      expectedListId: card.list_id,
       targetListId: body.targetListId,
       insertIndex,
       targetCards,
@@ -366,6 +401,12 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
       position,
     });
   } catch (error) {
+    if (error instanceof CardLocationChangedError) {
+      return Response.json(
+        { error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } },
+        { status: 409 },
+      );
+    }
     const pgError = error as { code?: string; constraint?: string };
     if (pgError.code === '23514' && pgError.constraint === 'card_move_assignment_eligibility') {
       return Response.json(
@@ -382,6 +423,13 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
     throw error;
   }
   if (!updatedCard) {
+    const stillExists = await db<CardRow>('cards').where({ id: cardId }).first<CardRow | undefined>();
+    if (stillExists) {
+      return Response.json(
+        { error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } },
+        { status: 409 },
+      );
+    }
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found after move' } },
       { status: 404 },

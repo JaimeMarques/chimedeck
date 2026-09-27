@@ -13,6 +13,7 @@ type Store = {
   card_labels: Row[];
   labels: Row[];
   users: Row[];
+  board_state_transitions: Row[];
 };
 type TableName = keyof Store;
 
@@ -148,14 +149,15 @@ function resetStore(): Store {
         cover_value: '#123456',
       },
     ],
-    comments: [{ id: 'comment-1', card_id: 'card-source', content: 'Preserve me' }],
-    attachments: [{ id: 'attachment-1', card_id: 'card-source', name: 'proof.txt' }],
+    comments: [{ id: 'comment-1', card_id: 'card-source', content: 'Preserve me', deleted: false }],
+    attachments: [{ id: 'attachment-1', card_id: 'card-source', name: 'proof.txt', status: 'READY', referenced_card_id: null }],
     checklists: [{ id: 'checklist-1', card_id: 'card-source', title: 'Checklist' }],
-    checklist_items: [{ id: 'item-1', card_id: 'card-source', checklist_id: 'checklist-1' }],
+    checklist_items: [{ id: 'item-1', card_id: 'card-source', checklist_id: 'checklist-1', checked: false }],
     card_members: [{ card_id: 'card-source', user_id: 'user-1' }],
     card_labels: [{ card_id: 'card-source', label_id: 'label-1' }],
     labels: [{ id: 'label-1', board_id: 'board-source', name: 'Urgent', color: 'red' }],
     users: [{ id: 'user-1', email: 'member@example.test', name: 'Member', avatar_url: 'avatars/member.jpg' }],
+    board_state_transitions: [],
   };
 }
 
@@ -191,6 +193,42 @@ describe('card move destination boundaries', () => {
     expect(store.cards[0]?.list_id).toBe('list-source');
     expect(dispatchEventMock).not.toHaveBeenCalled();
     expect(emitCardMovedMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('refuses a move if the card leaves its authorized source board while target access is checked', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    store.boards.push({ id: 'board-private', workspace_id: 'workspace-source', state: 'ACTIVE', visibility: 'PRIVATE' });
+    store.lists.push({ id: 'list-private', board_id: 'board-private', title: 'Private', archived: false });
+    applyBoardVisibilityMock.mockImplementationOnce(() => {
+      requireRow('cards', 'card-source').list_id = 'list-private';
+      return Promise.resolve(null);
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    const body = (await response.json()) as { error?: { code?: string } };
+    expect(response.status).toBe(409);
+    expect(body.error?.code).toBe('card-location-changed');
+    expect(store.cards[0]?.list_id).toBe('list-private');
+    expect(dispatchEventMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('fails closed on cross-board moves when either board enforces transition rules', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    store.board_state_transitions.push({ board_id: 'board-source', enabled: true });
+    const request = new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    });
+    const response = await handleMoveCard(request, 'card-source');
+    const body = (await response.json()) as { error?: { code?: string } };
+    expect(response.status).toBe(422);
+    expect(body.error?.code).toBe('cross-board-transition-unsupported');
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(dispatchEventMock).not.toHaveBeenCalled();
     expect(publishMock).not.toHaveBeenCalled();
   });
 
@@ -248,6 +286,11 @@ describe('card move destination boundaries', () => {
     expect(destinationEvent.payload.card.cover_image_url).toBeNull();
     expect(destinationEvent.payload.card.cover_aspect_ratio).toBeNull();
     expect(destinationEvent.payload.card.cover_is_gif).toBe(false);
+    expect(destinationEvent.payload.card.comment_count).toBe(1);
+    expect(destinationEvent.payload.card.attachment_count).toBe(1);
+    expect(destinationEvent.payload.card.linked_card_count).toBe(0);
+    expect(destinationEvent.payload.card.checklist_total).toBe(1);
+    expect(destinationEvent.payload.card.checklist_done).toBe(0);
   });
 
   test('publishes a renderable destination card even without labels or members and resolves its attachment cover', async () => {

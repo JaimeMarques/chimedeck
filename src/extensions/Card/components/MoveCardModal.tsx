@@ -9,6 +9,7 @@ import Button from '../../../common/components/Button';
 import type { Board } from '../../Board/api';
 import type { List } from '../../List/api';
 import type { Card } from '../api';
+import { isApiError } from '../../../common/utils/apiError';
 
 interface CardRow {
   id: string;
@@ -47,6 +48,7 @@ const MoveCardModal = ({
   const [selectedListId, setSelectedListId] = useState(currentListId);
   const [loadedBoardId, setLoadedBoardId] = useState<string | null>(null);
   const [loadingDestination, setLoadingDestination] = useState(true);
+  const [destinationError, setDestinationError] = useState<'board' | 'list' | null>(null);
   const requestId = useRef(0);
 
   // cards in the selected list (excluding the card being moved)
@@ -72,6 +74,7 @@ const MoveCardModal = ({
     async (boardId: string) => {
       const id = ++requestId.current;
       setLoadingDestination(true);
+      setDestinationError(null);
       try {
         const [listsRes, boardRes] = await Promise.all([
           api.get<{ data: List[] }>(`/boards/${boardId}/lists`),
@@ -109,6 +112,7 @@ const MoveCardModal = ({
         setSelectedListId('');
         setListCards([]);
         setLoadedBoardId(null);
+        setDestinationError('board');
         setLoadingDestination(false);
       }
     },
@@ -123,6 +127,8 @@ const MoveCardModal = ({
     // Invalidate in flight responses before the effect starts fetching the new board.
     ++requestId.current;
     setSelectedBoardId(boardId);
+    setDestinationError(null);
+    setError(null);
     setLoadedBoardId(null);
     setLists([]);
     setSelectedListId('');
@@ -136,6 +142,8 @@ const MoveCardModal = ({
     async (listId: string) => {
       const id = ++requestId.current;
       setLoadingDestination(true);
+      setDestinationError(null);
+      setError(null);
       setSelectedListId(listId);
       setListCards([]);
       setSelectedPosition(1);
@@ -153,7 +161,8 @@ const MoveCardModal = ({
         if (id !== requestId.current) return;
         setListCards([]);
         setSelectedPosition(1);
-        setLoadingDestination(true);
+        setDestinationError('list');
+        setLoadingDestination(false);
       }
     },
     [api, cardId, selectedBoardId],
@@ -161,7 +170,7 @@ const MoveCardModal = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loadingDestination || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)) return;
+    if (loadingDestination || destinationError || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -173,8 +182,19 @@ const MoveCardModal = ({
 
       const result = await api.patch<{ data: Card }>(`/cards/${cardId}/move`, { targetListId: selectedListId, afterCardId });
       onSuccess(result.data);
-    } catch {
-      setError('Failed to move card. Please try again.');
+    } catch (err) {
+      const code = isApiError(err) ? err.response.data.error.code : undefined;
+      if (code === 'label-target-ineligible') {
+        setError('Remove or replace labels that do not belong to the destination board before moving this card.');
+      } else if (code === 'assignment-target-ineligible') {
+        setError('Remove assigned members who cannot access the destination board before moving this card.');
+      } else if (code === 'cross-board-transition-unsupported') {
+        setError('Cross-board moves are unavailable while either board has transition rules enabled. Disable the rules before moving this card.');
+      } else if (code === 'card-location-changed') {
+        setError('This card changed location. Close the dialog, reload the card and retry.');
+      } else {
+        setError('Failed to move card. Please try again.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -278,14 +298,30 @@ const MoveCardModal = ({
                 </div>
               </div>
 
-              {error && <p className="text-xs text-danger">{error}</p>}
+              {destinationError && (
+                <div className="space-y-1">
+                  <p role="alert" className="text-xs text-danger">Could not load destination. Retry to refresh the available cards and positions.</p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (destinationError === 'board') void fetchBoardData(selectedBoardId);
+                      else void handleListChange(selectedListId);
+                    }}
+                  >
+                    Retry loading destination
+                  </Button>
+                </div>
+              )}
+              {error && <p role="alert" className="text-xs text-danger">{error}</p>}
 
               <Button
                 type="submit"
                 variant="primary"
                 size="sm"
                 className="w-full"
-                disabled={submitting || loadingDestination || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)}
+                disabled={submitting || loadingDestination || !!destinationError || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)}
               >
                 <ArrowRightIcon className="w-4 h-4 mr-1" />
                 {submitting ? 'Moving…' : 'Move'}
