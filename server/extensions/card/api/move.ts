@@ -17,7 +17,7 @@ import { recordConflict } from '../../realtime/mods/conflictHandler';
 import { emitCardMoved } from '../../activity/mods/createActivityEvent';
 import { StateTransitionForbiddenError } from '../../stateTransitions/common/errors';
 import { emitCardMoveBlockedActivity } from '../../stateTransitions/common/activityLog';
-import { validateGraphShape } from '../../stateTransitions/common/validator';
+import { coerceLegacyGraphShape, validateGraphShape } from '../../stateTransitions/common/validator';
 import { syncGraphWithLists } from '../../stateTransitions/common/sync';
 import { deriveRulesFromGraph } from '../../stateTransitions/common/serializer';
 import { featureFlags } from '../../../config/featureFlags';
@@ -79,9 +79,10 @@ async function checkFreshTransition(trx: Knex.Transaction, boardId: string, sour
   const row = await trx('board_state_transitions').where({ board_id: boardId }).first() as { enabled: boolean; graph_data: unknown } | undefined;
   if (!row?.enabled) return null;
   const parsed = validateGraphShape(row.graph_data);
-  if (!parsed.ok) return denied('state-transition-rules-invalid', 'Enabled board transition rules are invalid', 422);
+  const parsedGraph = parsed.ok ? parsed.graph : coerceLegacyGraphShape(row.graph_data);
+  if (!parsedGraph) return denied('state-transition-rules-invalid', 'Enabled board transition rules are invalid', 422);
   const activeLists = await trx('lists').where({ board_id: boardId, archived: false }).orderBy('position', 'asc').select('id', 'title') as Array<{ id: string; title: string }>;
-  const graph = syncGraphWithLists(parsed.graph, activeLists).graph;
+  const graph = syncGraphWithLists(parsedGraph, activeLists).graph;
   if (!graph.nodes.some((node) => node.listId === sourceList.id)) return null;
   const rules = deriveRulesFromGraph(graph);
   const rule = rules.find((candidate) => candidate.current_state_id === sourceList.id);
@@ -454,7 +455,9 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
 
   if (fromListId !== updatedCard.list_id) {
     await Promise.all([
-      dispatchEvent({ type: 'card.moved', boardId: committedBoard.id, entityId: cardId, actorId, payload: { card: updatedCard, fromListId, toListId: updatedCard.list_id } }),
+      // Source-board notifications must not resolve a destination-board list
+      // that source-only members cannot access. Keep only safe source activity.
+      ...(!committedCrossBoard ? [dispatchEvent({ type: 'card.moved', boardId: committedBoard.id, entityId: cardId, actorId, payload: { card: updatedCard, fromListId, toListId: updatedCard.list_id } })] : []),
       emitCardMoved({
         actorId,
         cardId,

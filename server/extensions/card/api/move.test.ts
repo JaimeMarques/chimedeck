@@ -113,7 +113,7 @@ const requireWorkspaceMembershipMock = mock((req: Request & { callerRole?: strin
 });
 const requireMemberOrBoardGuestMemberMock = mock(() => Promise.resolve(null));
 const applyBoardVisibilityMock = mock((_req?: Request, _boardId?: string): Promise<Response | null> => Promise.resolve(null));
-const dispatchEventMock = mock(() => {
+const dispatchEventMock = mock((_event: { type: string; boardId: string }) => {
   if (inTransaction) throw new Error('event emitted before commit');
   return Promise.resolve();
 });
@@ -187,6 +187,21 @@ function resetStore(): Store {
     users: [{ id: 'user-1', email: 'member@example.test', name: 'Member', avatar_url: 'avatars/member.jpg' }],
     board_state_transitions: [],
   };
+}
+
+function enableLegacySourceTransition(): void {
+  requireRow('lists', 'list-target').board_id = 'board-source';
+  store.lists.push({ id: 'list-forbidden', board_id: 'board-source', title: 'Forbidden', archived: false });
+  store.board_state_transitions.push({ board_id: 'board-source', enabled: true, graph_data: {
+    nodes: [
+      { id: 'legacy-source-node', listId: 'list-source', label: 'Source', positionX: 0, positionY: 0 },
+      { id: 'legacy-target-node', listId: 'list-target', label: 'Target', positionX: 100, positionY: 0 },
+      { id: 'legacy-forbidden-node', listId: 'list-forbidden', label: 'Forbidden', positionX: 200, positionY: 0 },
+    ],
+    edges: [{ id: 'source-to-target', fromNodeId: 'legacy-source-node', toNodeId: 'legacy-target-node',
+      action: 'allowed_move_to', direction: 'one_way', style: 'straight' }],
+    notes: [],
+  } });
 }
 
 beforeEach(() => {
@@ -367,8 +382,9 @@ describe('card move destination boundaries', () => {
       members: store.card_members,
       labels: store.card_labels,
     })).toBe(relationshipSnapshot);
-    // Source-board transition graphs cannot contain a destination-board list.
-    expect(dispatchEventMock).toHaveBeenCalledTimes(1);
+    // A source-board event would resolve the destination list in notifications
+    // and expose its title to recipients who cannot access the target board.
+    expect(dispatchEventMock).not.toHaveBeenCalled();
     expect(emitCardMovedMock).toHaveBeenCalledTimes(1);
     expect(emitCardMovedMock.mock.calls[0]?.[0]).toMatchObject({ toListName: null });
     expect(publishMock).toHaveBeenCalledTimes(2);
@@ -429,6 +445,8 @@ describe('card move destination boundaries', () => {
     expect(body.data.id).toBe('card-source');
     expect(body.data.list_id).toBe('list-target');
     expect(applyBoardVisibilityMock).not.toHaveBeenCalled();
+    expect(dispatchEventMock).toHaveBeenCalledTimes(1);
+    expect(dispatchEventMock.mock.calls[0]?.[0]).toMatchObject({ type: 'card.moved', boardId: 'board-source' });
     expect(emitCardMovedMock.mock.calls[0]?.[0]).toMatchObject({ toListName: 'Target' });
     expect(publishMock).toHaveBeenCalledTimes(1);
     expect(publishMock.mock.calls[0]?.[0]).toBe('board-source');
@@ -507,6 +525,33 @@ describe('card move destination boundaries', () => {
     expect(emitCardMoveBlockedActivityMock).toHaveBeenCalledTimes(1);
     expect(dispatchEventMock).not.toHaveBeenCalled();
     expect(emitCardMovedMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('allows the listed edge of an enabled legacy transition graph with distinct node and list IDs', async () => {
+    enableLegacySourceTransition();
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    const body = (await response.json()) as { data?: Row };
+    expect(response.status).toBe(200);
+    expect(body.data?.list_id).toBe('list-target');
+    expect(dispatchEventMock).toHaveBeenCalledTimes(1);
+    expect(emitCardMoveBlockedActivityMock).not.toHaveBeenCalled();
+  });
+
+  test('refuses an unlisted edge of an enabled legacy transition graph with distinct node and list IDs', async () => {
+    enableLegacySourceTransition();
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-forbidden' }),
+    }), 'card-source');
+    const body = (await response.json()) as { name?: string; data?: { allowedNextStates: Array<{ id: string; name: string }> } };
+    expect(response.status).toBe(422);
+    expect(body.name).toBe('state-transition-forbidden');
+    expect(body.data?.allowedNextStates).toEqual([{ id: 'list-target', name: 'Target' }]);
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(emitCardMoveBlockedActivityMock).toHaveBeenCalledTimes(1);
+    expect(dispatchEventMock).not.toHaveBeenCalled();
     expect(publishMock).not.toHaveBeenCalled();
   });
 

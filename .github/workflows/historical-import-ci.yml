@@ -120,6 +120,8 @@ jobs:
           cli/commands/moveCard.test.ts
       - name: Verify assignment location conflicts independently
         run: bun test server/extensions/card/api/assignment-location.test.ts
+      - name: Verify notification board privacy independently
+        run: bun test tests/integration/notifications/listBoardPrivacy.test.ts
       - name: Run self-hosted S3 and Unicode Content-Disposition tests
         run: >-
           bun test
