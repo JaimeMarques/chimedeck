@@ -11,6 +11,8 @@ type Store = {
   checklist_items: Row[];
   card_members: Row[];
   card_labels: Row[];
+  labels: Row[];
+  users: Row[];
 };
 type TableName = keyof Store;
 
@@ -35,6 +37,10 @@ class QueryBuilder {
 
   whereNot(criteria: Row): this {
     this.filters.push((row) => Object.entries(criteria).every(([key, value]) => row[key] !== value));
+    return this;
+  }
+  whereIn(field: string, values: string[]): this {
+    this.filters.push((row) => values.includes(String(row[field])));
     return this;
   }
 
@@ -148,6 +154,8 @@ function resetStore(): Store {
     checklist_items: [{ id: 'item-1', card_id: 'card-source', checklist_id: 'checklist-1' }],
     card_members: [{ card_id: 'card-source', user_id: 'user-1' }],
     card_labels: [{ card_id: 'card-source', label_id: 'label-1' }],
+    labels: [{ id: 'label-1', board_id: 'board-source', name: 'Urgent', color: 'red' }],
+    users: [{ id: 'user-1', email: 'member@example.test', name: 'Member', avatar_url: 'avatars/member.jpg' }],
   };
 }
 
@@ -169,6 +177,7 @@ beforeEach(() => {
 describe('card move destination boundaries', () => {
   test('maps an assignment-eligibility DB guard to a stable refusal without publishing events', async () => {
     requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
     moveGuardError = Object.assign(new Error('assignment not eligible'), {
       code: '23514', constraint: 'card_move_assignment_eligibility',
     });
@@ -187,6 +196,7 @@ describe('card move destination boundaries', () => {
 
   test('moves across accessible boards in one workspace without changing card identity or relationships', async () => {
     requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
     const relationshipSnapshot = JSON.stringify({
       comments: store.comments,
       attachments: store.attachments,
@@ -218,17 +228,47 @@ describe('card move destination boundaries', () => {
       members: store.card_members,
       labels: store.card_labels,
     })).toBe(relationshipSnapshot);
-    expect(validateCardMoveMock).toHaveBeenCalledWith(expect.objectContaining({
-      boardId: 'board-source',
-      fromListId: 'list-source',
-      toListId: 'list-target',
-      cardId: 'card-source',
-    }));
+    // Source-board transition graphs cannot contain a destination-board list.
+    expect(validateCardMoveMock).not.toHaveBeenCalled();
     expect(dispatchEventMock).toHaveBeenCalledTimes(1);
     expect(emitCardMovedMock).toHaveBeenCalledTimes(1);
     expect(publishMock).toHaveBeenCalledTimes(2);
     expect(publishMock.mock.calls[0]?.[0]).toBe('board-source');
     expect(publishMock.mock.calls[1]?.[0]).toBe('board-target');
+    const destinationEvent = JSON.parse(publishMock.mock.calls[1]?.[1] ?? '{}') as {
+      type: string; payload: { card: Row; fromListId: string };
+    };
+    expect(destinationEvent.type).toBe('card_moved');
+    expect(destinationEvent.payload.fromListId).toBe('list-source');
+    expect(destinationEvent.payload.card.labels).toEqual([]);
+    expect(destinationEvent.payload.card.members).toEqual([{
+      id: 'user-1', email: 'member@example.test', name: 'Member',
+      avatar_url: '/api/v1/users/user-1/avatar',
+    }]);
+    expect(destinationEvent.payload.card.cover_image_url).toBeNull();
+    expect(destinationEvent.payload.card.cover_aspect_ratio).toBeNull();
+    expect(destinationEvent.payload.card.cover_is_gif).toBe(false);
+  });
+
+  test('publishes a renderable destination card even without labels or members and resolves its attachment cover', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    store.card_members = [];
+    requireRow('cards', 'card-source').cover_attachment_id = 'attachment-1';
+    Object.assign(requireRow('attachments', 'attachment-1'), {
+      status: 'READY', s3_key: 'private/proof.jpg', thumbnail_key: 'private/proof-thumb.webp',
+      mime_type: 'image/jpeg', width: 1600, height: 900,
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    expect(response.status).toBe(200);
+    const destinationEvent = JSON.parse(publishMock.mock.calls[1]?.[1] ?? '{}') as { payload: { card: Row } };
+    expect(destinationEvent.payload.card.labels).toEqual([]);
+    expect(destinationEvent.payload.card.members).toEqual([]);
+    expect(destinationEvent.payload.card.cover_image_url).toBe('/api/v1/attachments/attachment-1/thumbnail');
+    expect(destinationEvent.payload.card.cover_aspect_ratio).toBe('16:9');
+    expect(destinationEvent.payload.card.cover_is_gif).toBe(false);
   });
 
   test('moves between lists on the same board and publishes only to that board', async () => {
@@ -249,6 +289,40 @@ describe('card move destination boundaries', () => {
     expect(publishMock.mock.calls[0]?.[0]).toBe('board-source');
   });
 
+  test('maps a concurrent label-ownership DB guard to a stable refusal without events', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    store.card_labels = [];
+    moveGuardError = Object.assign(new Error('concurrent foreign label'), {
+      code: '23514', constraint: 'card_move_label_ownership',
+    });
+    const response = await handleMoveCard(new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    }), 'card-source');
+    const body = (await response.json()) as { error?: { code?: string } };
+    expect(response.status).toBe(422);
+    expect(body.error?.code).toBe('label-target-ineligible');
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(dispatchEventMock).not.toHaveBeenCalled();
+    expect(emitCardMovedMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  test('refuses a cross-board move with source-board labels without changing the card or emitting events', async () => {
+    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+    const request = new Request('http://localhost/api/v1/cards/card-source/move', {
+      method: 'PATCH', body: JSON.stringify({ targetListId: 'list-target' }),
+    });
+    const response = await handleMoveCard(request, 'card-source');
+    const body = (await response.json()) as { error?: { code?: string } };
+    expect(response.status).toBe(422);
+    expect(body.error?.code).toBe('label-target-ineligible');
+    expect(store.cards[0]?.list_id).toBe('list-source');
+    expect(store.card_labels).toEqual([{ card_id: 'card-source', label_id: 'label-1' }]);
+    expect(dispatchEventMock).not.toHaveBeenCalled();
+    expect(emitCardMovedMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
   test('keeps a same-list no-op free of activity and realtime events', async () => {
     const request = new Request('http://localhost/api/v1/cards/card-source/move', {
       method: 'PATCH',
@@ -266,8 +340,8 @@ describe('card move destination boundaries', () => {
     expect(publishMock).not.toHaveBeenCalled();
   });
 
-  test('does not let the cross-board path bypass source-board state transitions', async () => {
-    requireRow('boards', 'board-target').workspace_id = 'workspace-source';
+  test('enforces source-board state transitions for same-board moves', async () => {
+    requireRow('lists', 'list-target').board_id = 'board-source';
     validateCardMoveMock.mockImplementationOnce(() => Promise.reject(new StateTransitionForbiddenError({
       boardId: 'board-source',
       fromListId: 'list-source',

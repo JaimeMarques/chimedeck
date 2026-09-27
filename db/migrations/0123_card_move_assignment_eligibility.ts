@@ -78,6 +78,13 @@ export async function up(knex: Knex): Promise<void> {
       PERFORM pg_advisory_xact_lock(hashtext('card-assignments:' || NEW.id));
       PERFORM pg_advisory_xact_lock(hashtext('workspace-memberships:' || target_workspace));
       PERFORM pg_advisory_xact_lock(hashtext('board-members:' || target_board));
+      IF EXISTS (
+        SELECT 1 FROM card_labels cl LEFT JOIN labels lab ON lab.id = cl.label_id
+         WHERE cl.card_id = NEW.id AND lab.board_id IS DISTINCT FROM target_board
+      ) THEN
+        RAISE EXCEPTION 'card move would retain a label from another board'
+          USING ERRCODE = '23514', CONSTRAINT = 'card_move_label_ownership';
+      END IF;
       IF source_workspace <> target_workspace OR EXISTS (
         SELECT 1 FROM (
           SELECT cm.user_id FROM card_members cm WHERE cm.card_id = NEW.id
@@ -113,11 +120,38 @@ export async function up(knex: Knex): Promise<void> {
     CREATE TRIGGER card_move_assignment_eligibility
       BEFORE UPDATE OF list_id ON cards
       FOR EACH ROW EXECUTE FUNCTION enforce_card_move_assignment_eligibility();
+
+    CREATE FUNCTION enforce_card_label_ownership()
+    RETURNS trigger AS $$
+    DECLARE
+      card_board text;
+      label_board text;
+    BEGIN
+      PERFORM pg_advisory_xact_lock(hashtext('card-assignments:' || NEW.card_id));
+      SELECT l.board_id INTO card_board
+        FROM cards c JOIN lists l ON l.id = c.list_id WHERE c.id = NEW.card_id;
+      SELECT board_id INTO label_board FROM labels WHERE id = NEW.label_id;
+      IF card_board IS NULL OR label_board IS NULL THEN
+        RAISE EXCEPTION 'card label context not found' USING ERRCODE = '23503';
+      END IF;
+      IF card_board <> label_board THEN
+        RAISE EXCEPTION 'card label belongs to another board'
+          USING ERRCODE = '23514', CONSTRAINT = 'card_move_label_ownership';
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER card_label_ownership
+      BEFORE INSERT OR UPDATE OF card_id, label_id ON card_labels
+      FOR EACH ROW EXECUTE FUNCTION enforce_card_label_ownership();
   `);
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.raw(`
+    DROP TRIGGER IF EXISTS card_label_ownership ON card_labels;
+    DROP FUNCTION IF EXISTS enforce_card_label_ownership();
     DROP TRIGGER IF EXISTS card_move_assignment_eligibility ON cards;
     DROP FUNCTION IF EXISTS enforce_card_move_assignment_eligibility();
   `);

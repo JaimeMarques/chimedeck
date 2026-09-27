@@ -15,6 +15,8 @@ import { recordConflict } from '../../realtime/mods/conflictHandler';
 import { emitCardMoved } from '../../activity/mods/createActivityEvent';
 import { validateCardMove } from '../../stateTransitions/enforcement';
 import { StateTransitionForbiddenError } from '../../stateTransitions/common/errors';
+import { buildAvatarProxyUrlsInCollection } from '../../../common/avatar/resolveAvatarUrl';
+import { resolveCoverImageUrl } from '../../../common/cards/cover';
 
 type MoveBody = { targetListId: string; afterCardId?: string | null };
 
@@ -174,6 +176,24 @@ async function persistMove({
   return updated[0] ?? null;
 }
 
+// A newly arriving card is not already in the destination board's cache.
+// Supply the same relationship/cover fields as GET /lists/:id/cards.
+async function cardForDestination(card: CardRow) {
+  const cardLabels = await db('card_labels').where({ card_id: card.id }) as Array<{ label_id: string }>;
+  const cardMembers = await db('card_members').where({ card_id: card.id }) as Array<{ user_id: string }>;
+  const labels = cardLabels.length
+    ? await db('labels').whereIn('id', cardLabels.map((row) => row.label_id)) as Array<{ id: string; name: string; color: string }>
+    : [];
+  const users = cardMembers.length
+    ? await db('users').whereIn('id', cardMembers.map((row) => row.user_id)) as Array<{ id: string; email: string; name: string; avatar_url: string | null }>
+    : [];
+  return resolveCoverImageUrl({
+    ...card,
+    labels: labels.map(({ id, name, color }) => ({ id, name, color })),
+    members: buildAvatarProxyUrlsInCollection(users.map(({ id, email, name, avatar_url }) => ({ id, email, name, avatar_url }))),
+  });
+}
+
 export async function handleMoveCard(req: Request, cardId: string): Promise<Response> {
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
@@ -241,15 +261,19 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
   }
 
   try {
-    await validateCardMove({
-      boardId: board.id,
-      fromListId: card.list_id,
-      toListId: body.targetListId,
-      cardId,
-      actorId: (req as AuthenticatedRequest).currentUser?.id ?? 'system',
-      ipAddress: req.headers.get('x-forwarded-for') ?? req.headers.get('cf-connecting-ip') ?? null,
-      userAgent: req.headers.get('user-agent') ?? null,
-    });
+    // Transition graphs are board-local. A destination on another board is
+    // never an edge of the source board's graph; apply rules only within it.
+    if (!isCrossBoard) {
+      await validateCardMove({
+        boardId: board.id,
+        fromListId: card.list_id,
+        toListId: body.targetListId,
+        cardId,
+        actorId: (req as AuthenticatedRequest).currentUser?.id ?? 'system',
+        ipAddress: req.headers.get('x-forwarded-for') ?? req.headers.get('cf-connecting-ip') ?? null,
+        userAgent: req.headers.get('user-agent') ?? null,
+      });
+    }
   } catch (error) {
     if (error instanceof StateTransitionForbiddenError) {
       return Response.json(
@@ -312,6 +336,22 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
 
   const position = computeStrictPositionBetween({ left, right });
 
+  if (isCrossBoard) {
+    // Labels are board-owned; do not silently carry foreign labels into another
+    // board or discard them. The caller can detach/remap them and retry.
+    const cardLabels = await db('card_labels').where({ card_id: cardId }) as Array<{ label_id: string }>;
+    if (cardLabels.length > 0) {
+      const labels = await db('labels')
+        .whereIn('id', cardLabels.map((label) => label.label_id)) as Array<{ id: string; board_id: string }>;
+      if (labels.length !== cardLabels.length || labels.some((label) => label.board_id !== targetList.board_id)) {
+        return Response.json(
+          { error: { code: 'label-target-ineligible', message: 'Card labels must belong to the target board' } },
+          { status: 422 },
+        );
+      }
+    }
+  }
+
   const now = new Date().toISOString();
   // Boundary fallback: if no strict lexicographic slot exists (e.g. prepend
   // before a '!' card), persistMove re-spaces the target list before applying.
@@ -330,6 +370,12 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
     if (pgError.code === '23514' && pgError.constraint === 'card_move_assignment_eligibility') {
       return Response.json(
         { error: { code: 'assignment-target-ineligible', message: 'An assigned member cannot access the target board' } },
+        { status: 422 },
+      );
+    }
+    if (pgError.code === '23514' && pgError.constraint === 'card_move_label_ownership') {
+      return Response.json(
+        { error: { code: 'label-target-ineligible', message: 'Card labels must belong to the target board' } },
         { status: 422 },
       );
     }
@@ -382,9 +428,10 @@ export async function handleMoveCard(req: Request, cardId: string): Promise<Resp
 
   // For cross-board moves also notify the target board's subscribers.
   if (isCrossBoard) {
+    const destinationCard = await cardForDestination(updatedCard);
     publisher.publish(
       targetList.board_id,
-      JSON.stringify({ type: 'card_moved', payload: { card: updatedCard, fromListId } }),
+      JSON.stringify({ type: 'card_moved', payload: { card: destinationCard, fromListId } }),
     ).catch(() => {});
   }
 

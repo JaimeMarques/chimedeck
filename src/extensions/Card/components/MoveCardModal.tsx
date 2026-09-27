@@ -2,7 +2,7 @@
 // [why] Uses a nested Radix Dialog so that Radix's FocusScope stack properly hands off focus
 // from the card modal to this dialog and back — a plain portal div would steal focus from
 // the outer FocusScope.
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { XMarkIcon, ArrowRightIcon } from '@heroicons/react/24/outline';
 import Button from '../../../common/components/Button';
@@ -45,6 +45,9 @@ const MoveCardModal = ({
 
   const [lists, setLists] = useState<List[]>([]);
   const [selectedListId, setSelectedListId] = useState(currentListId);
+  const [loadedBoardId, setLoadedBoardId] = useState<string | null>(null);
+  const [loadingDestination, setLoadingDestination] = useState(true);
+  const requestId = useRef(0);
 
   // cards in the selected list (excluding the card being moved)
   const [listCards, setListCards] = useState<CardRow[]>([]);
@@ -67,14 +70,18 @@ const MoveCardModal = ({
   // Fetch lists and cards when board selection changes
   const fetchBoardData = useCallback(
     async (boardId: string) => {
+      const id = ++requestId.current;
+      setLoadingDestination(true);
       try {
         const [listsRes, boardRes] = await Promise.all([
           api.get<{ data: List[] }>(`/boards/${boardId}/lists`),
           api.get<BoardWithCards>(`/boards/${boardId}`),
         ]);
+        if (id !== requestId.current) return;
 
         const nonArchivedLists = listsRes.data.filter((l) => !l.archived);
         setLists(nonArchivedLists);
+        setLoadedBoardId(boardId);
 
         const allCards: CardRow[] = boardRes.includes.cards;
 
@@ -90,10 +97,19 @@ const MoveCardModal = ({
           setListCards(cards);
           // Default to bottom (after all existing cards)
           setSelectedPosition(cards.length + 1);
+        } else {
+          setSelectedListId('');
+          setListCards([]);
+          setSelectedPosition(1);
         }
+        setLoadingDestination(false);
       } catch {
+        if (id !== requestId.current) return;
         setLists([]);
+        setSelectedListId('');
         setListCards([]);
+        setLoadedBoardId(null);
+        setLoadingDestination(false);
       }
     },
     [api, cardId, currentBoardId, currentListId],
@@ -103,21 +119,41 @@ const MoveCardModal = ({
     void fetchBoardData(selectedBoardId);
   }, [selectedBoardId, fetchBoardData]);
 
+  const handleBoardChange = (boardId: string) => {
+    // Invalidate in flight responses before the effect starts fetching the new board.
+    ++requestId.current;
+    setSelectedBoardId(boardId);
+    setLoadedBoardId(null);
+    setLists([]);
+    setSelectedListId('');
+    setListCards([]);
+    setSelectedPosition(1);
+    setLoadingDestination(true);
+  };
+
   // Refresh cards in the selected list when list changes.
   const handleListChange = useCallback(
     async (listId: string) => {
+      const id = ++requestId.current;
+      setLoadingDestination(true);
       setSelectedListId(listId);
+      setListCards([]);
+      setSelectedPosition(1);
       try {
         const boardRes = await api.get<BoardWithCards>(
           `/boards/${selectedBoardId}`,
         );
+        if (id !== requestId.current) return;
         const allCards: CardRow[] = boardRes.includes.cards;
         const cards = allCards.filter((c) => c.list_id === listId && !c.archived && c.id !== cardId);
         setListCards(cards);
         setSelectedPosition(cards.length + 1);
+        setLoadingDestination(false);
       } catch {
+        if (id !== requestId.current) return;
         setListCards([]);
         setSelectedPosition(1);
+        setLoadingDestination(true);
       }
     },
     [api, cardId, selectedBoardId],
@@ -125,7 +161,7 @@ const MoveCardModal = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedListId) return;
+    if (loadingDestination || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -188,7 +224,7 @@ const MoveCardModal = ({
                     <select
                       id="move-card-board"
                       value={selectedBoardId}
-                      onChange={(e) => { setSelectedBoardId(e.target.value); }}
+                      onChange={(e) => { handleBoardChange(e.target.value); }}
                       className="w-full rounded-lg border border-border bg-bg-overlay px-2 py-1.5 text-sm text-base focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       {boards.map((b) => (
@@ -209,6 +245,7 @@ const MoveCardModal = ({
                         id="move-card-list"
                         value={selectedListId}
                         onChange={(e) => { void handleListChange(e.target.value); }}
+                        disabled={loadedBoardId !== selectedBoardId}
                         className="w-full rounded-lg border border-border bg-bg-overlay px-2 py-1.5 text-sm text-base focus:outline-none focus:ring-2 focus:ring-primary"
                       >
                         {lists.map((l) => (
@@ -227,6 +264,7 @@ const MoveCardModal = ({
                         id="move-card-position"
                         value={selectedPosition}
                         onChange={(e) => { setSelectedPosition(Number(e.target.value)); }}
+                        disabled={loadingDestination}
                         className="w-full rounded-lg border border-border bg-bg-overlay px-2 py-1.5 text-sm text-base focus:outline-none focus:ring-2 focus:ring-primary"
                       >
                         {Array.from({ length: maxPosition }, (_, i) => i + 1).map((pos) => (
@@ -247,7 +285,7 @@ const MoveCardModal = ({
                 variant="primary"
                 size="sm"
                 className="w-full"
-                disabled={submitting || !selectedListId}
+                disabled={submitting || loadingDestination || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)}
               >
                 <ArrowRightIcon className="w-4 h-4 mr-1" />
                 {submitting ? 'Moving…' : 'Move'}
