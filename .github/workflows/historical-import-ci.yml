@@ -62,6 +62,7 @@ jobs:
           server/extensions/mcp/tools/inviteToBoard.test.ts
           tests/db/concurrentBoardMemberRoleMutation.ts
           tests/db/workspaceMembershipSecurity.ts
+          tests/db/moveAuthorizationConcurrency.ts
           tests/e2e/board-members.spec.ts
           server/mods/events/__tests__/policy.test.ts
           server/mods/events/__tests__/dispatch.test.ts
@@ -78,6 +79,10 @@ jobs:
       - run: bun run test:db:board-members
       - name: Verify cross-board assignment eligibility on PostgreSQL
         run: bun run tests/db/crossBoardAssignmentEligibility.ts
+      - name: Verify Move authorization and transition races on PostgreSQL
+        env:
+          CHIMEDECK_TEST_SANDBOX: '1'
+        run: bun run tests/db/moveAuthorizationConcurrency.ts
       - name: Run board-member HTTP contracts against the real server
         shell: bash
         run: |
