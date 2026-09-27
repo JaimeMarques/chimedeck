@@ -1,12 +1,22 @@
 import type { Knex } from 'knex';
 
-// Both assignment changes and card moves serialize by card *before* reading
-// the card's board. A waiting assignment must not validate against the old
-// board after a concurrent move commits.
+// Assignments and moves take workspace then board then card locks. Re-read the
+// card after waiting: a move can commit while an assignment waits for its old
+// board lock, so validation must fail/retry rather than trust that stale board.
 function assignmentGuardSql(lockCard: boolean): string {
   const cardLock = lockCard
-    ? "PERFORM pg_advisory_xact_lock(hashtext('card-assignments:' || target_card));"
+    ? `
+      PERFORM pg_advisory_xact_lock(hashtext('card-assignments:' || target_card));
+      SELECT b.id, b.workspace_id INTO locked_board, locked_workspace
+        FROM cards c JOIN lists l ON l.id = c.list_id
+        JOIN boards b ON b.id = l.board_id WHERE c.id = target_card;
+      IF locked_board IS DISTINCT FROM target_board
+         OR locked_workspace IS DISTINCT FROM target_workspace THEN
+        RAISE EXCEPTION 'assignment card location changed while waiting for locks'
+          USING ERRCODE = '40001';
+      END IF;`
     : '';
+  const lockedBoardFields = lockCard ? 'locked_board text; locked_workspace text;' : '';
   return `
     CREATE OR REPLACE FUNCTION enforce_card_assignment_eligibility()
     RETURNS trigger AS $$
@@ -15,6 +25,7 @@ function assignmentGuardSql(lockCard: boolean): string {
       target_card text;
       target_board text;
       target_workspace text;
+      ${lockedBoardFields}
     BEGIN
       IF TG_TABLE_NAME = 'card_members' THEN
         target_user := NEW.user_id;
@@ -25,7 +36,6 @@ function assignmentGuardSql(lockCard: boolean): string {
         IF target_user IS NULL THEN RETURN NEW; END IF;
       END IF;
 
-      ${cardLock}
       SELECT b.id, b.workspace_id INTO target_board, target_workspace
         FROM cards c JOIN lists l ON l.id = c.list_id
         JOIN boards b ON b.id = l.board_id
@@ -36,6 +46,7 @@ function assignmentGuardSql(lockCard: boolean): string {
 
       PERFORM pg_advisory_xact_lock(hashtext('workspace-memberships:' || target_workspace));
       PERFORM pg_advisory_xact_lock(hashtext('board-members:' || target_board));
+      ${cardLock}
       IF NOT EXISTS (
         SELECT 1 FROM memberships m
          WHERE m.workspace_id = target_workspace AND m.user_id = target_user
@@ -75,9 +86,9 @@ export async function up(knex: Knex): Promise<void> {
       END IF;
       IF source_board = target_board THEN RETURN NEW; END IF;
 
-      PERFORM pg_advisory_xact_lock(hashtext('card-assignments:' || NEW.id));
       PERFORM pg_advisory_xact_lock(hashtext('workspace-memberships:' || target_workspace));
       PERFORM pg_advisory_xact_lock(hashtext('board-members:' || target_board));
+      PERFORM pg_advisory_xact_lock(hashtext('card-assignments:' || NEW.id));
       IF EXISTS (
         SELECT 1 FROM card_labels cl LEFT JOIN labels lab ON lab.id = cl.label_id
          WHERE cl.card_id = NEW.id AND lab.board_id IS DISTINCT FROM target_board

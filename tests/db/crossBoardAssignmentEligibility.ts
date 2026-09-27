@@ -3,6 +3,8 @@
 import { strict as assert } from 'node:assert';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../server/common/db';
+import { lockWorkspaceMembershipMutations } from '../../server/extensions/workspace/api/members/lock';
+import { lockBoardMemberMutations } from '../../server/extensions/board/api/members/lock';
 
 const workspaceId = randomUUID();
 const ownerId = randomUUID();
@@ -52,6 +54,20 @@ async function assertMoveDenied(expectedConstraint = 'card_move_assignment_eligi
   );
   const card = await db('cards').where({ id: cardId }).first<{ list_id: string }>();
   assert.equal(card?.list_id, sourceListId, 'rejected move must not mutate card location');
+}
+
+async function waitForAdvisoryWaiters(minimum: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const result = await db.raw<{ rows: Array<{ waiters: string }> }>(`
+      SELECT count(*) AS waiters FROM pg_locks
+       WHERE locktype = 'advisory' AND NOT granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    `);
+    if (Number(result.rows[0]?.waiters) >= minimum) return;
+    await Bun.sleep(20);
+  }
+  throw new Error(`Expected ${String(minimum)} advisory waiters`);
 }
 
 try {
@@ -112,7 +128,34 @@ try {
   await assertMoveDenied('card_move_label_ownership');
   await db('card_labels').where({ card_id: cardId, label_id: labelId }).delete();
   await moveTo(targetListId);
-  console.info('PASS cross-board move preserves assignment and label eligibility');
+
+  // Deterministically queue Move first on the card lock, then an assignment
+  // writer that holds workspace+board locks. Opposite lock ordering deadlocks.
+  await moveTo(sourceListId);
+  const barrier = await db.transaction();
+  let pending: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  let outcomes: PromiseSettledResult<unknown>[] = [];
+  try {
+    await barrier.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`card-assignments:${cardId}`]);
+    const moving = db('cards').where({ id: cardId }).update({ list_id: targetListId });
+    pending = Promise.allSettled([moving]);
+    await waitForAdvisoryWaiters(1);
+    const assigning = db.transaction(async (trx) => {
+      await lockWorkspaceMembershipMutations(trx, workspaceId);
+      await lockBoardMemberMutations(trx, sourceBoardId);
+      await trx('card_members').insert({ card_id: cardId, user_id: memberId });
+    });
+    pending = Promise.allSettled([moving, assigning]);
+    await waitForAdvisoryWaiters(2);
+  } finally {
+    await barrier.rollback();
+    if (pending) outcomes = await pending;
+  }
+  assert.equal(outcomes.length, 2);
+  assert.ok(outcomes.every((outcome) => outcome.status === 'fulfilled'), 'concurrent move and assignment must not deadlock');
+  assert.equal((await db('cards').where({ id: cardId }).first<{ list_id: string }>())?.list_id, targetListId);
+  assert.ok(await db('card_members').where({ card_id: cardId, user_id: memberId }).first());
+  console.info('PASS cross-board move preserves assignment/label eligibility and concurrent writers complete');
 } finally {
   await cleanup();
   await db.destroy();
