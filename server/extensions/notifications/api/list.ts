@@ -1,6 +1,7 @@
 // GET /api/v1/notifications — list notifications for the authenticated user.
 // Supports ?unread=true and cursor pagination (?limit=20&cursor=<created_at>).
 import { db } from '../../../common/db';
+import type { Knex } from 'knex';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import { buildAvatarProxyUrl } from '../../../common/avatar/resolveAvatarUrl';
 
@@ -107,7 +108,7 @@ function collectCommentSourceIds(rows: Array<Record<string, unknown>>): string[]
   return Array.from(
     new Set(
       rows
-        .filter((row) => row.source_type === 'comment')
+        .filter((row) => row.source_type === 'comment' && row.source_comment_id === row.source_id)
         .map((row) => row.source_id)
         .filter((sourceId): sourceId is string => typeof sourceId === 'string' && sourceId.length > 0),
     ),
@@ -145,42 +146,7 @@ export async function handleListNotifications(req: Request): Promise<Response> {
   const typeParam = url.searchParams.get('type') ?? null;
   const typeFilter = typeParam && VALID_TYPES.has(typeParam) ? typeParam : null;
 
-  let query = db('notifications')
-    .where('notifications.user_id', userId)
-    .leftJoin('users as actor', 'notifications.actor_id', 'actor.id')
-    .leftJoin('cards', 'notifications.card_id', 'cards.id')
-    .leftJoin('boards', 'notifications.board_id', 'boards.id')
-    .leftJoin('comments as source_comment', 'notifications.source_id', 'source_comment.id')
-    .leftJoin('activities as source_activity', function () {
-      this.on('notifications.source_id', '=', 'source_activity.id')
-        .andOn('notifications.source_type', '=', db.raw('?', ['board_activity']));
-    })
-    // Join to get the destination list name for card_moved notifications
-    .leftJoin('lists', 'cards.list_id', 'lists.id')
-    .select(
-      'notifications.id',
-      'notifications.type',
-      'notifications.source_type',
-      'notifications.source_id',
-      'notifications.card_id',
-      'notifications.emoji',
-      'cards.title as card_title',
-      'cards.description as card_description_content',
-      'source_activity.payload as source_activity_payload',
-      'notifications.board_id',
-      'boards.title as board_title',
-      'lists.title as list_title',
-      'source_comment.content as comment_content',
-      'source_comment.parent_id as source_comment_parent_id',
-      'notifications.read',
-      'notifications.created_at',
-      db.raw("actor.id as actor_id"),
-      db.raw("actor.nickname as actor_nickname"),
-      db.raw("COALESCE(actor.name, actor.email) as actor_name"),
-      db.raw("actor.avatar_url as actor_avatar_url"),
-    )
-    .orderBy('notifications.created_at', 'desc')
-    .limit(limit + 1);
+  let query = buildNotificationListQuery(db, userId, limit);
 
   if (unreadOnly) {
     query = query.where('notifications.read', false);
@@ -260,4 +226,57 @@ export async function handleListNotifications(req: Request): Promise<Response> {
     data,
     metadata: { cursor: nextCursor, hasMore },
   });
+}
+
+// Kept as a builder so the privacy-sensitive SQL can be exercised without a live DB.
+export function buildNotificationListQuery(database: Knex, userId: string, limit: number) {
+  return database('notifications')
+    .where('notifications.user_id', userId)
+    .leftJoin('users as actor', 'notifications.actor_id', 'actor.id')
+    .leftJoin('cards', function () {
+      this.on('notifications.card_id', '=', 'cards.id')
+        // Cards derive board membership from their current list. A notification
+        // on another board must not read the moved card's current content.
+        .andOn(database.raw(`(notifications.board_id IS NULL OR EXISTS (
+          SELECT 1 FROM lists AS card_board_list
+          WHERE card_board_list.id = cards.list_id
+            AND card_board_list.board_id = notifications.board_id
+        ))`));
+    })
+    .leftJoin('boards', 'notifications.board_id', 'boards.id')
+    .leftJoin('comments as source_comment', function () {
+      this.on('notifications.source_id', '=', 'source_comment.id')
+        .andOn(database.raw('(notifications.board_id IS NULL OR cards.id IS NOT NULL)'));
+    })
+    .leftJoin('activities as source_activity', function () {
+      this.on('notifications.source_id', '=', 'source_activity.id')
+        .andOn('notifications.source_type', '=', database.raw('?', ['board_activity']));
+    })
+    // Join to get the destination list name for card_moved notifications
+    .leftJoin('lists', 'cards.list_id', 'lists.id')
+    .select(
+      'notifications.id',
+      'notifications.type',
+      'notifications.source_type',
+      'notifications.source_id',
+      'notifications.card_id',
+      'notifications.emoji',
+      'cards.title as card_title',
+      'cards.description as card_description_content',
+      'source_activity.payload as source_activity_payload',
+      'notifications.board_id',
+      'boards.title as board_title',
+      'lists.title as list_title',
+      'source_comment.id as source_comment_id',
+      'source_comment.content as comment_content',
+      'source_comment.parent_id as source_comment_parent_id',
+      'notifications.read',
+      'notifications.created_at',
+      database.raw("actor.id as actor_id"),
+      database.raw("actor.nickname as actor_nickname"),
+      database.raw("COALESCE(actor.name, actor.email) as actor_name"),
+      database.raw("actor.avatar_url as actor_avatar_url"),
+    )
+    .orderBy('notifications.created_at', 'desc')
+    .limit(limit + 1);
 }
