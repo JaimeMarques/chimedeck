@@ -27,6 +27,7 @@ async function cleanup(): Promise<void> {
   await db('card_labels').where({ card_id: cardId }).delete();
   await db('labels').where({ id: labelId }).delete();
   await db('board_members').whereIn('board_id', [sourceBoardId, targetBoardId]).delete();
+  await db('board_state_transitions').where({ board_id: sourceBoardId }).delete();
   await db('cards').where({ id: cardId }).delete();
   await db('board_guest_access').whereIn('board_id', [sourceBoardId, targetBoardId]).delete();
   await db('lists').whereIn('id', [sourceListId, targetListId]).delete();
@@ -155,7 +156,25 @@ try {
   assert.ok(outcomes.every((outcome) => outcome.status === 'fulfilled'), 'concurrent move and assignment must not deadlock');
   assert.equal((await db('cards').where({ id: cardId }).first<{ list_id: string }>())?.list_id, targetListId);
   assert.ok(await db('card_members').where({ card_id: cardId, user_id: memberId }).first());
-  console.info('PASS cross-board move preserves assignment/label eligibility and concurrent writers complete');
+
+  // Enabling a transition graph must wait for a Move's workspace lock; Move
+  // rechecks this flag while holding that lock before persisting the card.
+  await db('board_state_transitions').insert({ id: randomUUID(), board_id: sourceBoardId, enabled: false });
+  const transitionBarrier = await db.transaction();
+  let transitionPending: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  let transitionOutcomes: PromiseSettledResult<unknown>[] = [];
+  try {
+    await lockWorkspaceMembershipMutations(transitionBarrier, workspaceId);
+    const enabling = db('board_state_transitions').where({ board_id: sourceBoardId }).update({ enabled: true });
+    transitionPending = Promise.allSettled([enabling]);
+    await waitForAdvisoryWaiters(1);
+  } finally {
+    await transitionBarrier.rollback();
+    if (transitionPending) transitionOutcomes = await transitionPending;
+  }
+  assert.equal(transitionOutcomes[0]?.status, 'fulfilled');
+  assert.equal((await db('board_state_transitions').where({ board_id: sourceBoardId }).first<{ enabled: boolean }>())?.enabled, true);
+  console.info('PASS cross-board move preserves assignment/label eligibility, concurrent writers complete and transition updates serialize');
 } finally {
   await cleanup();
   await db.destroy();

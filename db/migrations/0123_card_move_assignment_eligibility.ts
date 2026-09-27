@@ -156,11 +156,32 @@ export async function up(knex: Knex): Promise<void> {
     CREATE TRIGGER card_label_ownership
       BEFORE INSERT OR UPDATE OF card_id, label_id ON card_labels
       FOR EACH ROW EXECUTE FUNCTION enforce_card_label_ownership();
+
+    CREATE FUNCTION serialize_state_transition_writes()
+    RETURNS trigger AS $$
+    DECLARE
+      workspace_id_for_board text;
+    BEGIN
+      SELECT workspace_id INTO workspace_id_for_board FROM boards WHERE id = NEW.board_id;
+      IF workspace_id_for_board IS NULL THEN
+        RAISE EXCEPTION 'state-transition board context not found' USING ERRCODE = '23503';
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtext('workspace-memberships:' || workspace_id_for_board));
+      PERFORM pg_advisory_xact_lock(hashtext('board-members:' || NEW.board_id));
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER state_transition_write_locks
+      BEFORE INSERT OR UPDATE ON board_state_transitions
+      FOR EACH ROW EXECUTE FUNCTION serialize_state_transition_writes();
   `);
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.raw(`
+    DROP TRIGGER IF EXISTS state_transition_write_locks ON board_state_transitions;
+    DROP FUNCTION IF EXISTS serialize_state_transition_writes();
     DROP TRIGGER IF EXISTS card_label_ownership ON card_labels;
     DROP FUNCTION IF EXISTS enforce_card_label_ownership();
     DROP TRIGGER IF EXISTS card_move_assignment_eligibility ON cards;
