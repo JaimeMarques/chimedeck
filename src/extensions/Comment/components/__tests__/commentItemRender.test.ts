@@ -81,12 +81,12 @@ function buildComment(content: string): CommentRecord {
   };
 }
 
-function mountComment(content: string, attachments: Attachment[] = [], store = createStore(), boardId?: string) {
+function mountComment(content: string, attachments?: Attachment[], store = createStore(), boardId?: string) {
   const comment = buildComment(content);
   const buildElement = () => (
     React.createElement(Provider, { store, children: React.createElement(CommentItem, {
       comment,
-      attachments,
+      ...(attachments ? { attachments } : {}),
       ...(boardId ? { boardId } : {}),
       currentUserId: 'user-1',
       onEdit: async () => {},
@@ -102,18 +102,22 @@ afterEach(() => {
 });
 
 describe('CommentItem rendering of verbatim historical bytes', () => {
-  it('rehydrates links and authenticated images when the roster resolves a mention', async () => {
+  it.each(['provided', 'omitted'])('keeps hydrated links and images across roster updates with %s attachments', async (attachmentMode) => {
     const store = createStore();
     const userId = 'a1234567-89ab-4cde-8fab-0123456789ab';
     await store.dispatch(boardMembersApi.util.upsertQueryData('getBoardMembers', 'board-1', []));
-    const attachments: Attachment[] = [];
+    const attachments: Attachment[] | undefined = attachmentMode === 'provided' ? [] : undefined;
     const originalAdapter = apiClient.defaults.adapter;
     let imageRequests = 0;
     apiClient.defaults.adapter = (config) => {
       imageRequests += 1;
       return Promise.resolve({ data: new Blob(['image']), status: 200, statusText: 'OK', headers: {}, config });
     };
-    const createObjectUrl = spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-hydrated-image');
+    let objectUrlCount = 0;
+    const createObjectUrl = spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      objectUrlCount += 1;
+      return `blob:test-hydrated-image-${String(objectUrlCount)}`;
+    });
     const revokeObjectUrl = spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     try {
       const { container, rerender } = mountComment(
@@ -121,11 +125,12 @@ describe('CommentItem rendering of verbatim historical bytes', () => {
         attachments, store, 'board-1',
       );
       await waitFor(() => {
-        expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image');
+        expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image-1');
       });
       expect(container.querySelector('a')?.classList.contains('cd-link-button')).toBe(true);
       expect(container.querySelector('span.rounded')?.textContent).toBe(`@${userId}`);
       expect(imageRequests).toBe(1);
+      expect(revokeObjectUrl).not.toHaveBeenCalled();
 
       const member = {
         board_id: 'board-1', user_id: userId, role: 'MEMBER' as const,
@@ -139,10 +144,11 @@ describe('CommentItem rendering of verbatim historical bytes', () => {
       await waitFor(() => {
         expect(container.querySelector('span.rounded')?.textContent).toBe('@alice');
         expect(container.querySelector('a')?.classList.contains('cd-link-button')).toBe(true);
-        expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image');
+        expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image-2');
         expect(imageRequests).toBe(2);
       });
-      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:test-hydrated-image');
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:test-hydrated-image-1');
+      expect(revokeObjectUrl).toHaveBeenCalledTimes(1);
 
       // A roster change that renders the same label must retain the hydrated DOM.
       await act(async () => {
@@ -152,11 +158,15 @@ describe('CommentItem rendering of verbatim historical bytes', () => {
       });
       expect(imageRequests).toBe(2);
       expect(container.querySelector('a')?.classList.contains('cd-link-button')).toBe(true);
-      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image');
+      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image-2');
       rerender();
       expect(imageRequests).toBe(2);
       expect(container.querySelector('a')?.classList.contains('cd-link-button')).toBe(true);
-      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image');
+      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:test-hydrated-image-2');
+      expect(revokeObjectUrl).toHaveBeenCalledTimes(1);
+      cleanup();
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:test-hydrated-image-2');
+      expect(revokeObjectUrl).toHaveBeenCalledTimes(2);
     } finally {
       cleanup();
       if (originalAdapter === undefined) delete apiClient.defaults.adapter;
@@ -164,6 +174,26 @@ describe('CommentItem rendering of verbatim historical bytes', () => {
       createObjectUrl.mockRestore();
       revokeObjectUrl.mockRestore();
     }
+  });
+
+  it('keeps UUIDs when the only fallback label is an email or whitespace', async () => {
+    const store = createStore();
+    const emailId = 'a1234567-89ab-4cde-8fab-0123456789ab';
+    const blankId = 'b1234567-89ab-4cde-8fab-0123456789ab';
+    const nicknameId = 'c1234567-89ab-4cde-8fab-0123456789ab';
+    const member = {
+      board_id: 'board-1', role: 'MEMBER' as const, email: 'member@example.com',
+      avatar_url: null, created_at: '2026-01-01T00:00:00.000Z',
+    };
+    await store.dispatch(boardMembersApi.util.upsertQueryData('getBoardMembers', 'board-1', [
+      { ...member, user_id: emailId, nickname: null, display_name: '  MEMBER@EXAMPLE.COM  ' },
+      { ...member, user_id: blankId, nickname: ' ', display_name: '  ' },
+      { ...member, user_id: nicknameId, nickname: ' readable ', display_name: member.email },
+    ]));
+    const { container } = mountComment(`@${emailId} @${blankId} @${nicknameId}`, undefined, store, 'board-1');
+
+    expect(Array.from(container.querySelectorAll('span.rounded'), (chip) => chip.textContent)).toEqual([`@${emailId}`, `@${blankId}`, '@readable']);
+    expect(container.textContent).not.toContain('member@example.com');
   });
 
   it('uses cached board members, preferring nicknames and falling back to display names', async () => {

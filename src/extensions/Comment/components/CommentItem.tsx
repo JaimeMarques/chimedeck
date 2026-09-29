@@ -28,6 +28,7 @@ const LINK_MODE_TITLE_PREFIX = 'cd-mode:';
 const LINK_MODE_META_URL = 'cd-link-mode-url';
 const LINK_MODE_META_BUTTON = 'cd-link-mode-button';
 const LINK_MODE_META_CARD = 'cd-link-mode-card';
+const EMPTY_ATTACHMENTS: Attachment[] = [];
 
 type LinkDisplayMode = 'url' | 'button' | 'card';
 
@@ -361,8 +362,11 @@ export function renderCommentContentHtml(
   }
   // [why] Resolve only visible prose, after Markdown parsing. Labels must stay literal text,
   // and mentions in code or link destinations must retain their stored UUIDs.
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  // [why] Parse a fragment: document-level frameset handling can discard safe imported prose.
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const doc = template.ownerDocument;
+  const walker = doc.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
   const textNodes: Text[] = [];
   let node = walker.nextNode();
   while (node) {
@@ -389,7 +393,7 @@ export function renderCommentContentHtml(
     fragment.append(doc.createTextNode(value.slice(offset)));
     textNode.replaceWith(fragment);
   }
-  const withMentions = doc.body.innerHTML;
+  const withMentions = template.innerHTML;
   // [why] Ensure all links open in a new tab so the user is never navigated away
   // from the board view.
   // [why] Sanitize last: this is the only string that reaches dangerouslySetInnerHTML, so the
@@ -398,12 +402,15 @@ export function renderCommentContentHtml(
   return sanitizeCommentHtml(addLinkTargetBlank(normalizeRenderedLinkHtml(withMentions)));
 }
 
-const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
+const CommentItem = ({ comment, boardId, attachments = EMPTY_ATTACHMENTS, currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
   const { currentData: boardMembers } = useGetBoardMembersQuery(boardId ?? '', { skip: !boardId?.trim() });
   const mentionNames = useMemo(() => {
     const names = new Map<string, string>();
     for (const member of boardMembers ?? []) {
-      const name = member.nickname?.trim() || member.display_name;
+      const displayName = member.display_name?.trim();
+      const readableDisplayName = displayName?.toLowerCase() === member.email.trim().toLowerCase()
+        ? undefined : displayName;
+      const name = member.nickname?.trim() || readableDisplayName;
       if (name) names.set(member.user_id.toLowerCase(), name);
     }
     return names;

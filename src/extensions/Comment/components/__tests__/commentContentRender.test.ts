@@ -54,6 +54,14 @@ function renderMentions(text: string, names = new Map([[ALICE_ID, 'Alice Smith']
 }
 
 describe('renderCommentContentHtml — UUID mention labels', () => {
+  it('preserves safe historical prose after disallowed frameset markup', () => {
+    const body = renderMentions(`<frameset>\n\nhello @bob and @${ALICE_ID}`);
+
+    expect(body.textContent.trim()).toBe('hello @bob and @Alice Smith');
+    expect(body.querySelector('frameset, frame')).toBeNull();
+    expect(Array.from(body.querySelectorAll('span'), (chip) => chip.textContent)).toEqual(['@bob', '@Alice Smith']);
+  });
+
   it('resolves historical UUID mentions without rewriting the source', () => {
     const stored = `Thanks @${ALICE_ID}`;
     const body = renderMentions(stored);
