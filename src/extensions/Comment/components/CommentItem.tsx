@@ -362,15 +362,15 @@ export function renderCommentContentHtml(
   }
   // [why] Resolve only visible prose, after Markdown parsing. Labels must stay literal text,
   // and mentions in code or link destinations must retain their stored UUIDs.
-  // [why] Parse a fragment: document-level frameset handling can discard safe imported prose.
-  const template = document.createElement('template');
-  template.innerHTML = html;
-  const doc = template.ownerDocument;
-  const walker = doc.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  // [why] Use an inert body fragment: document frameset mode and template table mode
+  // can discard safe imported prose or flatten later Markdown tables.
+  const doc = document.implementation.createHTMLDocument('');
+  doc.body.innerHTML = html;
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
   const textNodes: Text[] = [];
   let node = walker.nextNode();
   while (node) {
-    if (!node.parentElement?.closest('a, code, pre')) textNodes.push(node as Text);
+    if (!node.parentElement?.closest('a[href], code, pre')) textNodes.push(node as Text);
     node = walker.nextNode();
   }
   for (const textNode of textNodes) {
@@ -393,7 +393,7 @@ export function renderCommentContentHtml(
     fragment.append(doc.createTextNode(value.slice(offset)));
     textNode.replaceWith(fragment);
   }
-  const withMentions = template.innerHTML;
+  const withMentions = doc.body.innerHTML;
   // [why] Ensure all links open in a new tab so the user is never navigated away
   // from the board view.
   // [why] Sanitize last: this is the only string that reaches dangerouslySetInnerHTML, so the

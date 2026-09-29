@@ -54,12 +54,40 @@ function renderMentions(text: string, names = new Map([[ALICE_ID, 'Alice Smith']
 }
 
 describe('renderCommentContentHtml — UUID mention labels', () => {
-  it('preserves safe historical prose after disallowed frameset markup', () => {
-    const body = renderMentions(`<frameset>\n\nhello @bob and @${ALICE_ID}`);
+  it.each(['frameset', 'col', 'tr', 'tbody', 'thead', 'tfoot'])('preserves prose and GFM tables after leading <%s> markup', (tag) => {
+    const body = renderMentions(
+      `<${tag}>\n\nhello @bob and @${ALICE_ID}\n\n` +
+      '| Owner | Status |\n| --- | --- |\n| Alice | Ready |',
+    );
 
-    expect(body.textContent.trim()).toBe('hello @bob and @Alice Smith');
+    expect(body.querySelector('p')?.textContent).toBe('hello @bob and @Alice Smith');
     expect(body.querySelector('frameset, frame')).toBeNull();
     expect(Array.from(body.querySelectorAll('span'), (chip) => chip.textContent)).toEqual(['@bob', '@Alice Smith']);
+    expect(Array.from(body.querySelectorAll('table thead tr th'), (cell) => cell.textContent)).toEqual(['Owner', 'Status']);
+    expect(Array.from(body.querySelectorAll('table tbody tr td'), (cell) => cell.textContent)).toEqual(['Alice', 'Ready']);
+  });
+
+  it('resolves prose inside an unclosed named anchor without an href', () => {
+    const body = renderMentions(`<a name="legacy">hello @bob and @${ALICE_ID}`);
+
+    expect(body.textContent.trim()).toBe('hello @bob and @Alice Smith');
+    expect(Array.from(body.querySelectorAll('a span'), (chip) => chip.textContent)).toEqual(['@bob', '@Alice Smith']);
+    expect(body.querySelector('a')?.hasAttribute('href')).toBe(false);
+  });
+
+  it('sanitizes executable fragment markup while preserving safe text and resolved mentions', () => {
+    const body = renderMentions(
+      `<col>\n\n<script>window.__xss = 1</script>\n\n` +
+      `<img src="x" onerror="window.__xss = 2"><b onclick="window.__xss = 3">safe @${ALICE_ID}</b>` +
+      '<iframe src="https://evil.test"></iframe>',
+    );
+
+    expect(body.querySelector('script, iframe')).toBeNull();
+    expect(body.querySelector('img')?.getAttribute('src')).toBe('x');
+    expect(body.querySelector('b')?.textContent).toBe('safe @Alice Smith');
+    expect(Array.from(body.querySelectorAll('*')).flatMap((element) =>
+      Array.from(element.attributes).filter((attribute) => attribute.name.startsWith('on')),
+    )).toEqual([]);
   });
 
   it('resolves historical UUID mentions without rewriting the source', () => {
