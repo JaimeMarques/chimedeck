@@ -45,6 +45,62 @@ for (const key of GLOBAL_KEYS) {
 
 const { renderCommentContentHtml } = await import('../CommentItem');
 
+const ALICE_ID = 'a1234567-89ab-4cde-8fab-0123456789ab';
+const BOB_ID = 'b1234567-89ab-4cde-8fab-0123456789ab';
+
+function renderMentions(text: string, names = new Map([[ALICE_ID, 'Alice Smith'], [BOB_ID, 'bob']])) {
+  const html = renderCommentContentHtml(text, [], names);
+  return new DOMParser().parseFromString(html, 'text/html').body;
+}
+
+describe('renderCommentContentHtml — UUID mention labels', () => {
+  it('resolves historical UUID mentions without rewriting the source', () => {
+    const stored = `Thanks @${ALICE_ID}`;
+    const body = renderMentions(stored);
+
+    expect(body.querySelector('span')?.textContent).toBe('@Alice Smith');
+    expect(stored).toBe(`Thanks @${ALICE_ID}`);
+  });
+
+  it('matches uppercase and multiple UUIDs without consuming trailing punctuation', () => {
+    const body = renderMentions(`@${ALICE_ID.toUpperCase()}, @${BOB_ID}.`);
+
+    expect(Array.from(body.querySelectorAll('span'), (chip) => chip.textContent)).toEqual(['@Alice Smith', '@bob']);
+    expect(body.textContent.trim()).toBe('@Alice Smith, @bob.');
+  });
+
+  it('keeps unresolved UUIDs, ordinary nicknames and @card readable', () => {
+    const body = renderMentions(`@${ALICE_ID} @alice @card`, new Map());
+
+    expect(Array.from(body.querySelectorAll('span'), (chip) => chip.textContent)).toEqual([`@${ALICE_ID}`, '@alice', '@card']);
+  });
+
+  it('leaves inline/fenced code, link labels and link attributes untouched', () => {
+    const body = renderMentions(
+      `\`@${ALICE_ID}\`\n\n\`\`\`text\n@${ALICE_ID}\n\`\`\`\n\n` +
+      `[@${ALICE_ID}](https://example.com/@${ALICE_ID} "@${ALICE_ID}")\n\n@${ALICE_ID}`,
+    );
+
+    expect(Array.from(body.querySelectorAll('code'), (code) => code.textContent.trim())).toEqual([`@${ALICE_ID}`, `@${ALICE_ID}`]);
+    const anchor = body.querySelector('a');
+    expect(anchor?.textContent).toBe(`@${ALICE_ID}`);
+    expect(anchor?.getAttribute('href')).toBe(`https://example.com/@${ALICE_ID}`);
+    expect(anchor?.getAttribute('title')).toBe(`@${ALICE_ID}`);
+    expect(anchor?.querySelector('span')).toBeNull();
+    expect(body.querySelectorAll('span').length).toBe(1);
+    expect(body.querySelector('span')?.textContent).toBe('@Alice Smith');
+  });
+
+  it('renders names as literal text even when they contain markup, Markdown or mentions', () => {
+    const name = '<img src=x onerror=alert(1)> **Admin** & [link](https://evil.test) @card';
+    const body = renderMentions(`@${ALICE_ID}`, new Map([[ALICE_ID, name]]));
+
+    expect(body.querySelector('span')?.textContent).toBe(`@${name}`);
+    expect(body.querySelectorAll('span').length).toBe(1);
+    expect(body.querySelector('img, strong, a')).toBeNull();
+  });
+});
+
 /** Raw historical comment content: HTML from the source system plus ordinary Markdown. */
 const RAW_HISTORICAL_CONTENT =
   'Deploy notes\r\n<script>window.__xss = 1</script>\r\n' +

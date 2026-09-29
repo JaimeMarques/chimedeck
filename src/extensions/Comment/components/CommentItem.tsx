@@ -1,5 +1,5 @@
 // Single comment with inline edit/delete controls
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import emojiData from '@emoji-mart/data';
 import type { Attachment } from '~/extensions/Attachments/types';
@@ -19,6 +19,7 @@ import { ImageLightbox } from '~/extensions/Attachments/components/AttachmentThu
 import translations from '../translations/en.json';
 import apiClient from '~/common/api/client';
 import { normalizeHttpUrlInput } from '~/common/utils/urlDisplayText';
+import { useGetBoardMembersQuery } from '~/extensions/Board/slices/boardMembersSlice';
 
 const LINK_CLASS_BUTTON = 'cd-link-button';
 const LINK_CLASS_CARD = 'cd-link-card';
@@ -338,7 +339,11 @@ function relativeTime(iso: string): string {
  * pass to dangerouslySetInnerHTML, including for comment content imported verbatim from a source
  * system (see utils/sanitizeCommentHtml.ts).
  */
-export function renderCommentContentHtml(text: string, attachments: Attachment[]): string {
+export function renderCommentContentHtml(
+  text: string,
+  attachments: Attachment[],
+  mentionNames?: ReadonlyMap<string, string>,
+): string {
   const hydrated = attachments.length > 0
     ? hydrateCommentAttachmentMarkdown(text, attachments)
     : stripCommentAttachmentPlaceholders(text);
@@ -354,11 +359,37 @@ export function renderCommentContentHtml(text: string, attachments: Attachment[]
     // [why] Prevent intermittent parser extension mismatches from crashing card load.
     html = escapeHtml(normalized).replaceAll('\n', '<br>');
   }
-  // Wrap @mentions in a styled chip
-  const withMentions = html.replaceAll(
-    /(@\w[\w.+-]*)/g,
-    '<span class="rounded bg-blue-100 px-1 py-0.5 text-xs font-medium text-blue-700">$1</span>',
-  );
+  // [why] Resolve only visible prose, after Markdown parsing. Labels must stay literal text,
+  // and mentions in code or link destinations must retain their stored UUIDs.
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    if (!node.parentElement?.closest('a, code, pre')) textNodes.push(node as Text);
+    node = walker.nextNode();
+  }
+  for (const textNode of textNodes) {
+    const value = textNode.textContent;
+    const matches = Array.from(value.matchAll(/@[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\w-])|@\w[\w.+-]*/gi));
+    if (matches.length === 0) continue;
+    const fragment = doc.createDocumentFragment();
+    let offset = 0;
+    for (const match of matches) {
+      fragment.append(doc.createTextNode(value.slice(offset, match.index)));
+      const token = match[0];
+      const isUuid = /^@[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+      const name = isUuid ? mentionNames?.get(token.slice(1).toLowerCase()) : undefined;
+      const chip = doc.createElement('span');
+      chip.className = 'rounded bg-blue-100 px-1 py-0.5 text-xs font-medium text-blue-700';
+      chip.textContent = name ? `@${name}` : token;
+      fragment.append(chip);
+      offset = match.index + token.length;
+    }
+    fragment.append(doc.createTextNode(value.slice(offset)));
+    textNode.replaceWith(fragment);
+  }
+  const withMentions = doc.body.innerHTML;
   // [why] Ensure all links open in a new tab so the user is never navigated away
   // from the board view.
   // [why] Sanitize last: this is the only string that reaches dangerouslySetInnerHTML, so the
@@ -368,6 +399,19 @@ export function renderCommentContentHtml(text: string, attachments: Attachment[]
 }
 
 const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
+  const { currentData: boardMembers } = useGetBoardMembersQuery(boardId ?? '', { skip: !boardId?.trim() });
+  const mentionNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const member of boardMembers ?? []) {
+      const name = member.nickname?.trim() || member.display_name;
+      if (name) names.set(member.user_id.toLowerCase(), name);
+    }
+    return names;
+  }, [boardMembers]);
+  const renderedContentHtml = useMemo(
+    () => renderCommentContentHtml(comment.content, attachments, mentionNames),
+    [comment.content, attachments, mentionNames],
+  );
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [replyExpanded, setReplyExpanded] = useState(autoExpandReplies);
@@ -454,7 +498,7 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
       cancelled = true;
       objectUrls.forEach((value) => { URL.revokeObjectURL(value); });
     };
-  }, [comment.content, attachments, editing]);
+  }, [renderedContentHtml, attachments, editing]);
 
   if (comment.deleted) {
     return <CommentDeletedItem commentId={comment.id} createdAt={comment.created_at} />;
@@ -560,7 +604,7 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
               // Historical imports may also store raw source HTML verbatim, so the string is
               // sanitized (allow-list) in renderCommentContentHtml before it reaches the DOM.
               dangerouslySetInnerHTML={{
-                __html: renderCommentContentHtml(comment.content, attachments),
+                __html: renderedContentHtml,
               }}
             />
           </div>
@@ -648,4 +692,3 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
 };
 
 export default CommentItem;
-
