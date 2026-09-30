@@ -9,7 +9,7 @@ export function normalizePanelWidth(value: unknown): number {
 
 export function panelWidthBounds(viewportWidth: number, panelLeft: number) {
   // Leave room for the board after the navigation rail and this panel.
-  const max = Math.max(0, Math.min(MAX_PANEL_WIDTH, viewportWidth - panelLeft - 320));
+  const max = Math.max(0, Math.floor(Math.min(MAX_PANEL_WIDTH, viewportWidth - panelLeft - 320)));
   return { min: Math.min(MIN_PANEL_WIDTH, max), max };
 }
 

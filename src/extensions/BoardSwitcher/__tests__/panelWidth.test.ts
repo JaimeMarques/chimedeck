@@ -23,6 +23,15 @@ describe('pinned board switcher width', () => {
     expect(panelWidthBounds(500, 64)).toEqual({ min: 116, max: 116 });
   });
 
+  it('rounds fractional layout bounds down and never exceeds the available width', () => {
+    const bounds = panelWidthBounds(768, 256.6);
+    expect(bounds).toEqual({ min: 191, max: 191 });
+    expect(clampPanelWidth(480, bounds)).toBe(191);
+    expect(panelWidthBounds(768, 64.6)).toEqual({ min: 200, max: 383 });
+    expect(panelWidthBounds(768, 448.6)).toEqual({ min: 0, max: 0 });
+    expect(clampPanelWidth(480, panelWidthBounds(768, 448.6))).toBe(0);
+  });
+
   it('loads legacy, malformed and saved preferences without losing the saved width', () => {
     let saved = '{}';
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {

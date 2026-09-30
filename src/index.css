@@ -656,7 +656,6 @@ body {
   --border-list:  transparent;
   --scrollbar-thumb: #96999e;
   --scrollbar-thumb-hover: #a9abaf;
-  scrollbar-color: var(--scrollbar-thumb) var(--bg-overlay);
 
   /* ── Semantic ───────────────────────────────────────── */
   --color-danger:   #f87168;
@@ -967,6 +966,15 @@ html.theme-trello,
 ::-webkit-scrollbar-track { background: var(--bg-overlay); }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb, var(--border)); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover, var(--border-strong)); }
+
+/* Native scrollbar properties override WebKit sizing in Chromium. */
+@supports not selector(::-webkit-scrollbar) {
+  .theme-trello,
+  .theme-trello * {
+    scrollbar-color: var(--scrollbar-thumb) var(--bg-overlay);
+    scrollbar-width: thin;
+  }
+}
 
 /* High-contrast scrollbar for card-detail columns (Light/Dark). */
 .scrollbar-contrast {
