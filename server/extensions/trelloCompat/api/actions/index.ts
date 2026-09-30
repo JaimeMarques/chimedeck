@@ -1,4 +1,5 @@
 import { db } from '../../../../common/db';
+import { associateCommentImages, InvalidCommentImage } from '../../../comment/api/images';
 import type { AuthenticatedRequest } from '../../../auth/middlewares/authentication';
 import {
   TRELLO_ACTION_NOT_FOUND,
@@ -417,11 +418,19 @@ export async function actionsRouter(req: AuthenticatedRequest, path: string): Pr
     const currentVersion = typeof context.comment.version === 'number' ? context.comment.version : 1;
     const nextVersion = currentVersion + 1;
     const now = new Date().toISOString();
-    await db('comments').where({ id: context.comment.id }).update({
+    try {
+    await db.transaction(async (trx) => {
+    await associateCommentImages({ trx, content: value.trim(), cardId: context.card.id, userId: context.comment.user_id, commentId: context.comment.id, ownOrigin: url.origin, previousContent: context.comment.content });
+    await trx('comments').where({ id: context.comment.id }).update({
       content: value.trim(),
       version: nextVersion,
       updated_at: now,
     });
+    });
+    } catch (error) {
+      if (error instanceof InvalidCommentImage) return trelloError('invalid comment image', 400);
+      throw error;
+    }
 
     return Response.json(
       serializeCommentAction({
@@ -443,7 +452,11 @@ export async function actionsRouter(req: AuthenticatedRequest, path: string): Pr
   if (subPath === '' && req.method === 'DELETE') {
     if (context.kind !== 'comment') return TRELLO_ACTION_TEXT_UNSUPPORTED();
     if (!canMutateComment(user.id, context, boardAdmin)) return TRELLO_PERMISSION_DENIED();
-    await db('comments').where({ id: context.comment.id }).delete();
+    await db.transaction(async (trx) => {
+      await trx('attachments').where({ comment_id: context.comment.id })
+        .update({ comment_id: null, abandoned_at: new Date().toISOString() });
+      await trx('comments').where({ id: context.comment.id }).delete();
+    });
     return Response.json({});
   }
 

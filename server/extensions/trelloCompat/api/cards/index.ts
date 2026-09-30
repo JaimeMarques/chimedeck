@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../../../../common/db';
+import { associateCommentImages, InvalidCommentImage } from '../../../comment/api/images';
 import { resolveBoardId, resolveCardId, resolveListId } from '../../../../common/ids/resolveEntityId';
 import { generateUniqueShortId } from '../../../../common/ids/shortId';
 import { between, HIGH_SENTINEL } from '../../../list/mods/fractional';
@@ -374,7 +375,7 @@ async function hydrateCards(cards: CardRow[]): Promise<Map<string, HydratedCard>
     commentCountByCardId.set(row.card_id, (commentCountByCardId.get(row.card_id) ?? 0) + 1);
   }
 
-  const attachments = await db('attachments') as Array<{ card_id: string }>;
+  const attachments = await db('attachments').where({ upload_context: 'card' }) as Array<{ card_id: string }>;
   const attachmentCountByCardId = new Map<string, number>();
   for (const row of attachments) {
     if (!cardIds.has(row.card_id)) continue;
@@ -871,7 +872,9 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
 
     const commentId = randomUUID();
     const shortId = await generateUniqueShortId('comments');
-    await db('comments').insert({
+    try {
+    await db.transaction(async (trx) => {
+    await trx('comments').insert({
       id: commentId,
       short_id: shortId,
       card_id: context.card.id,
@@ -882,6 +885,12 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+    await associateCommentImages({ trx, content: textInput.trim(), cardId: context.card.id, userId: user.id, commentId, ownOrigin: url.origin });
+    });
+    } catch (error) {
+      if (error instanceof InvalidCommentImage) return trelloError('invalid comment image', 400);
+      throw error;
+    }
 
     return Response.json(serializeAction({
       id: commentId,
@@ -907,17 +916,25 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
     if (!(await canMutateBoard(user.id, context.board))) return TRELLO_PERMISSION_DENIED();
     const actionId = actionCommentMatch[1] as string;
     const commentId = await resolveCardId(actionId) ? actionId : actionId;
-    const existing = await db('comments').where({ id: commentId, card_id: context.card.id }).first() as { id: string; user_id: string; version: number } | undefined;
+    const existing = await db('comments').where({ id: commentId, card_id: context.card.id }).first() as { id: string; user_id: string; version: number; content: string } | undefined;
     if (!existing) return TRELLO_COMMENT_NOT_FOUND();
     if (existing.user_id !== user.id) return TRELLO_PERMISSION_DENIED();
     const body = await parseBody(req);
     const textInput = getInput(url, body, 'text');
     if (typeof textInput !== 'string' || !textInput.trim()) return trelloError('invalid value for text', 400);
-    await db('comments').where({ id: existing.id }).update({
+    try {
+    await db.transaction(async (trx) => {
+    await associateCommentImages({ trx, content: textInput.trim(), cardId: context.card.id, userId: user.id, commentId: existing.id, ownOrigin: url.origin, previousContent: existing.content });
+    await trx('comments').where({ id: existing.id }).update({
       content: textInput.trim(),
       version: existing.version + 1,
       updated_at: new Date().toISOString(),
     });
+    });
+    } catch (error) {
+      if (error instanceof InvalidCommentImage) return trelloError('invalid comment image', 400);
+      throw error;
+    }
     return Response.json(serializeAction({
       id: existing.id,
       type: 'commentCard',
@@ -943,7 +960,11 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
     const existing = await db('comments').where({ id: actionId, card_id: context.card.id }).first() as { id: string; user_id: string } | undefined;
     if (!existing) return TRELLO_COMMENT_NOT_FOUND();
     if (existing.user_id !== user.id) return TRELLO_PERMISSION_DENIED();
-    await db('comments').where({ id: existing.id }).delete();
+    await db.transaction(async (trx) => {
+      await trx('attachments').where({ comment_id: existing.id })
+        .update({ comment_id: null, abandoned_at: new Date().toISOString() });
+      await trx('comments').where({ id: existing.id }).delete();
+    });
     return Response.json({});
   }
 
@@ -1293,7 +1314,7 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
 
   if (subPath === 'attachments' && req.method === 'GET') {
     const attachments = await db('attachments')
-      .where({ card_id: context.card.id })
+      .where({ card_id: context.card.id, upload_context: 'card' })
       .orderBy('created_at', 'asc');
     return Response.json((attachments as Array<{
       id: string;

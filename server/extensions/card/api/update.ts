@@ -28,6 +28,7 @@ type BoardRow = {
 };
 
 type AttachmentRow = {
+  upload_context: 'card' | 'comment';
   id: string;
   card_id: string;
   type: string;
@@ -183,7 +184,7 @@ export async function handleUpdateCard(req: Request, cardId: string): Promise<Re
       }
 
       const attachment = await db<AttachmentRow>('attachments')
-        .where({ id: body.cover_attachment_id, card_id: cardId, type: 'FILE' })
+        .where({ id: body.cover_attachment_id, card_id: cardId, type: 'FILE', upload_context: 'card' })
         .first();
 
       if (!attachment || typeof attachment.mime_type !== 'string' || !attachment.mime_type.startsWith('image/')) {

@@ -20,6 +20,7 @@ interface UploadRequestBody {
   filename?: string;
   mimeType?: string;
   sizeBytes?: number;
+  uploadContext?: unknown;
 }
 
 interface CardRow {
@@ -50,6 +51,7 @@ interface PendingAttachmentRow {
   size_bytes: number;
   status: 'PENDING';
   created_at: string;
+  upload_context: 'card' | 'comment';
 }
 
 export async function handleRequestUploadUrl(req: Request, cardId: string): Promise<Response> {
@@ -78,6 +80,12 @@ export async function handleRequestUploadUrl(req: Request, cardId: string): Prom
   }
 
   // Validate MIME type against the allowlist
+  if (body.uploadContext !== undefined && body.uploadContext !== 'card' && body.uploadContext !== 'comment') {
+    return Response.json({ name: 'invalid-upload-context' }, { status: 400 });
+  }
+  if (body.uploadContext === 'comment' && !body.mimeType.startsWith('image/')) {
+    return Response.json({ name: 'comment-image-required' }, { status: 400 });
+  }
   if (!ALLOWED_MIME_TYPES.includes(body.mimeType)) {
     return Response.json({ name: 'mime-type-not-allowed', data: { mimeType: body.mimeType } }, { status: 400 });
   }
@@ -122,6 +130,7 @@ export async function handleRequestUploadUrl(req: Request, cardId: string): Prom
     short_id: shortId,
     card_id: resolvedCardId,
     uploaded_by: actorId,
+    upload_context: body.uploadContext ?? 'card',
     name: body.filename,
     type: 'FILE',
     s3_key: s3Key,

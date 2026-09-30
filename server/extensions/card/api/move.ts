@@ -244,7 +244,7 @@ async function cardForDestination(card: CardRow) {
     db('card_labels').where({ card_id: card.id }) as Promise<Array<{ label_id: string }>>,
     db('card_members').where({ card_id: card.id }) as Promise<Array<{ user_id: string }>>,
     db('comments').where({ card_id: card.id, deleted: false }) as Promise<Array<{ id: string }>>,
-    db('attachments').where({ card_id: card.id, status: 'READY' }) as Promise<Array<{ referenced_card_id: string | null }>>,
+    db('attachments').where({ card_id: card.id, status: 'READY', upload_context: 'card' }) as Promise<Array<{ referenced_card_id: string | null }>>,
     db('checklists').where({ card_id: card.id }).select('id') as Promise<Array<{ id: string }>>,
   ]);
   const checklistItems = checklists.length > 0
