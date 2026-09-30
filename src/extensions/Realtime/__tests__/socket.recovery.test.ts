@@ -7,7 +7,7 @@ class FakeWebSocket extends EventTarget {
   static instances: FakeWebSocket[] = [];
   readyState = FakeWebSocket.CONNECTING;
   sent: string[] = [];
-  constructor(_url: string) {
+  constructor(readonly url: string) {
     super();
     FakeWebSocket.instances.push(this);
   }
@@ -17,9 +17,9 @@ class FakeWebSocket extends EventTarget {
   message(frame: object) {
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(frame) }));
   }
-  closed(code = 1006) {
+  closed(code = 1006, reason = '') {
     this.readyState = 3;
-    this.dispatchEvent(Object.assign(new Event('close'), { code }));
+    this.dispatchEvent(Object.assign(new Event('close'), { code, reason }));
   }
 }
 
@@ -136,6 +136,51 @@ describe('production socket recovery', () => {
     client.recover();
     tick(61_000);
     expect(logouts).toBe(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(timers.size).toBe(0);
+  });
+
+  test('expired socket silently renews and authenticates replacement with fresh token', async () => {
+    latest().open();
+    let renewals = 0;
+    let logouts = 0;
+    client.setExpiredTokenCallback(() => { renewals++; return Promise.resolve('fresh-token'); });
+    client.setForcedLogoutCallback(() => { logouts++; });
+    latest().closed(4001, 'session expired');
+    await Promise.resolve();
+    expect(renewals).toBe(1);
+    expect(logouts).toBe(0);
+    expect(latest().url).toContain('token=fresh-token');
+    latest().open();
+    expect(client.isConnected).toBe(true);
+  });
+
+  test('genuine revocation and failed renewal retain terminal logout', async () => {
+    latest().open();
+    let renewals = 0;
+    let logouts = 0;
+    client.setExpiredTokenCallback(() => { renewals++; return Promise.reject(new Error('revoked')); });
+    client.setForcedLogoutCallback(() => { logouts++; });
+    latest().closed(4001, 'session revoked');
+    expect(renewals).toBe(0);
+    expect(logouts).toBe(1);
+    client.connect({ token: 'token' });
+    latest().open();
+    latest().closed(4001, 'session expired');
+    await Promise.resolve();
+    expect(renewals).toBe(1);
+    expect(logouts).toBe(2);
+    client.disconnect();
+  });
+
+  test('logout while renewal is pending cannot reopen a socket', async () => {
+    latest().open();
+    let complete: ((token: string) => void) | undefined;
+    client.setExpiredTokenCallback(() => new Promise((resolve) => { complete = resolve; }));
+    latest().closed(4001, 'session expired');
+    client.disconnect({ boardId: 'b1' });
+    complete?.('fresh-token');
+    await Promise.resolve();
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(timers.size).toBe(0);
   });

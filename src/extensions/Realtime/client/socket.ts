@@ -44,6 +44,9 @@ export class RealtimeSocket {
   private failedAttempts = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private lastFrameAt = 0;
+  private renewalGeneration = 0;
+  private renewingToken = false;
+  private expiredTokenCallback: (() => Promise<string | null>) | null = null;
 
   private handlers: Set<WsEventHandler> = new Set();
   private openHandlers: Set<() => void> = new Set();
@@ -59,6 +62,10 @@ export class RealtimeSocket {
     this.forcedLogoutCallback = fn;
   }
 
+  setExpiredTokenCallback(fn: () => Promise<string | null>) {
+    this.expiredTokenCallback = fn;
+  }
+
   /** True when consecutive WS failures have reached the polling threshold */
   get usingPollingFallback(): boolean {
     return this.failedAttempts >= POLLING_FALLBACK_THRESHOLD;
@@ -68,6 +75,13 @@ export class RealtimeSocket {
 
   connect({ boardId, token }: { boardId?: string; token: string }) {
     this.connectionRefCount += 1;
+    if (this.token !== token && this.ws) {
+      const ws = this.ws;
+      this.ws = null;
+      this._clearWatchdog();
+      ws.close();
+      this.closeHandlers.forEach((h) => { h(); });
+    }
     this.token = token;
     this.intentionalClose = false;
 
@@ -101,6 +115,7 @@ export class RealtimeSocket {
     }
 
     this.intentionalClose = true;
+    this.renewalGeneration++;
     this._clearReconnect();
     this._clearWatchdog();
     this.failedAttempts = 0;
@@ -138,7 +153,7 @@ export class RealtimeSocket {
 
   /** Recover a half-open connection after sleep, or bypass suspended backoff. */
   recover() {
-    if (this.intentionalClose || this.connectionRefCount === 0) return;
+    if (this.intentionalClose || this.renewingToken || this.connectionRefCount === 0) return;
     if (this.ws && Date.now() - this.lastFrameAt > 60_000) {
       const ws = this.ws;
       this.ws = null;
@@ -153,7 +168,7 @@ export class RealtimeSocket {
   // ---------- Internal ----------
 
   private _open() {
-    if (!this.token || this.connectionRefCount === 0) return;
+    if (!this.token || this.renewingToken || this.connectionRefCount === 0) return;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -212,7 +227,13 @@ export class RealtimeSocket {
       this._clearWatchdog();
       // Code 4001 = server-initiated forced logout (session revoked)
       if (ev.code === 4001) {
+        if (ev.reason === 'session expired' && this.expiredTokenCallback) {
+          this.closeHandlers.forEach((h) => { h(); });
+          void this._renewExpiredToken();
+          return;
+        }
         this.intentionalClose = true;
+        this.renewalGeneration++;
         this.forcedLogoutCallback?.();
         return;
       }
@@ -244,6 +265,27 @@ export class RealtimeSocket {
     this.closeHandlers.forEach((h) => { h(); });
     if (this.failedAttempts === POLLING_FALLBACK_THRESHOLD) {
       this.pollingActiveHandlers.forEach((h) => { h(); });
+    }
+  }
+
+  private async _renewExpiredToken() {
+    const generation = ++this.renewalGeneration;
+    this.renewingToken = true;
+    try {
+      const token = await this.expiredTokenCallback?.();
+      if (generation !== this.renewalGeneration || this.connectionRefCount === 0) return;
+      if (!token) {
+        this.intentionalClose = true;
+        return;
+      }
+      this.token = token;
+    } catch {
+      if (generation !== this.renewalGeneration || this.connectionRefCount === 0) return;
+      this.intentionalClose = true;
+      this.forcedLogoutCallback?.();
+    } finally {
+      this.renewingToken = false;
+      if (!this.intentionalClose && this.connectionRefCount > 0) this._open();
     }
   }
 

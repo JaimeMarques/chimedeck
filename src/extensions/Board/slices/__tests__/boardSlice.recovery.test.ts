@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { configureStore } from '@reduxjs/toolkit';
+import type { AppDispatch } from '~/store';
 import type { Board } from '../../api';
 import type { List } from '../../../List/api';
 import type { Card } from '../../../Card/api';
@@ -58,5 +60,80 @@ describe('board reconnect snapshots', () => {
     expect(state.board?.id).toBe('b2');
     state = reducer(state, fetchBoardDataThunk.fulfilled(snapshot('b1'), 'old', arg));
     expect(state.board?.id).toBe('b2');
+  });
+
+  test('a live card update invalidates an older background snapshot', () => {
+    let state = hydrated();
+    state = reducer(state, fetchBoardDataThunk.pending('refresh', arg));
+    state = reducer(state, boardSliceActions.updateCard({
+      card: { id: 'c1', list_id: 'l1', position: 'a', title: 'Remote new title' } as Card,
+    }));
+    state = reducer(state, fetchBoardDataThunk.fulfilled(snapshot(), 'refresh', arg));
+    expect(state.cards.c1?.title).toBe('Remote new title');
+    expect(state.appliedSnapshotRequestId).not.toBe('refresh');
+    expect(state.status).toBe('idle');
+  });
+
+  test('background recovery cannot supersede an in-flight foreground board load', async () => {
+    let finish: ((response: ReturnType<typeof snapshot>) => void) | undefined;
+    const store = configureStore({
+      reducer: { board: reducer },
+      preloadedState: { board: hydrated() },
+      middleware: (defaults) => defaults({ thunk: { extraArgument: { api: {
+        get: () => new Promise<ReturnType<typeof snapshot>>((resolve) => { finish = resolve; }),
+      } } } }),
+    });
+    const dispatch = store.dispatch as unknown as AppDispatch;
+    const foreground = dispatch(fetchBoardDataThunk({ boardId: 'b2' }));
+    const background = await dispatch(fetchBoardDataThunk({ boardId: 'b2', background: true }));
+    expect(fetchBoardDataThunk.rejected.match(background) && background.meta.condition).toBe(true);
+    expect(store.getState().board.fetchRequestId).toBe(foreground.requestId);
+    finish?.(snapshot('b2'));
+    await foreground;
+    expect(store.getState().board.board?.id).toBe('b2');
+    expect(store.getState().board.status).toBe('idle');
+  });
+
+  test('background fetch requests complete membership and retains cards beyond the first page', async () => {
+    const allCards = Array.from({ length: 75 }, (_, index) => ({
+      id: `card-${String(index)}`, title: 'Card', list_id: 'l1', position: String(index), archived: false,
+    }) as Card);
+    let requestedUrl = '';
+    const response = { data: { id: 'b1' } as Board, includes: { lists, cards: allCards } };
+    const store = configureStore({
+      reducer: { board: reducer },
+      preloadedState: { board: hydrated() },
+      middleware: (defaults) => defaults({ thunk: { extraArgument: { api: {
+        get: (url: string) => { requestedUrl = url; return Promise.resolve(response); },
+      } } } }),
+    });
+    const dispatch = store.dispatch as unknown as AppDispatch;
+    await dispatch(fetchBoardDataThunk({ ...arg, initialCardsPerList: 25 }));
+    expect(requestedUrl).not.toContain('initialCardsPerList');
+    expect(store.getState().board.cardsByList.l1).toHaveLength(75);
+    expect(store.getState().board.listHydration.l1?.hasMore).toBe(false);
+    expect(store.getState().board.listHydration.l1?.nextOffset).toBeNull();
+  });
+
+  test('active drag defers recovery and a drag started during GET invalidates its snapshot', async () => {
+    let state = hydrated();
+    state = reducer(state, fetchBoardDataThunk.pending('refresh', arg));
+    state = reducer(state, boardSliceActions.saveDragSnapshot());
+    state = reducer(state, fetchBoardDataThunk.fulfilled(snapshot('wrong'), 'refresh', arg));
+    expect(state.board?.id).toBe('b1');
+    let calls = 0;
+    const store = configureStore({
+      reducer: { board: reducer }, preloadedState: { board: state },
+      middleware: (defaults) => defaults({ thunk: { extraArgument: { api: {
+        get: () => { calls++; return Promise.resolve(snapshot()); },
+      } } } }),
+    });
+    const dispatch = store.dispatch as unknown as AppDispatch;
+    const result = await dispatch(fetchBoardDataThunk(arg));
+    expect(fetchBoardDataThunk.rejected.match(result) && result.meta.condition).toBe(true);
+    expect(calls).toBe(0);
+    store.dispatch(boardSliceActions.clearDragSnapshot());
+    await dispatch(fetchBoardDataThunk(arg));
+    expect(calls).toBe(1);
   });
 });

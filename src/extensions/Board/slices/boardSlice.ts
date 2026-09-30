@@ -20,6 +20,9 @@ export interface BoardState {
   cards: Record<string, Card>;
   status: 'idle' | 'loading' | 'error';
   fetchRequestId?: string;
+  revision: number;
+  fetchRevision?: number;
+  appliedSnapshotRequestId?: string;
   hydrationRequestIds?: Record<string, string>;
   listHydration: Record<string, ListCardHydration & { loading: boolean; error: boolean }>;
   /** Snapshot taken at drag-start; used for rollback on API failure */
@@ -36,6 +39,7 @@ const initialState: BoardState = {
   cardsByList: {},
   cards: {},
   status: 'idle',
+  revision: 0,
   listHydration: {},
   dragSnapshot: null,
 };
@@ -48,17 +52,32 @@ export const fetchBoardDataThunk = createAppAsyncThunk(
     {
       boardId,
       initialCardsPerList,
+      background,
     }: { boardId: string; initialCardsPerList?: number; background?: boolean },
-    { extra },
+    { extra, getState, rejectWithValue },
   ) => {
-    return getBoard({
+    const revision = (getState() as unknown as { board: BoardState }).board.revision;
+    const response = await getBoard({
       api: (extra as { api: { get: <T>(url: string) => Promise<T> } }).api,
       boardId,
-      initialCardsPerList:
+      ...(background ? {} : { initialCardsPerList:
         typeof initialCardsPerList === 'number' && initialCardsPerList > 0
           ? initialCardsPerList
           : INITIAL_CARDS_PER_LIST,
+      }),
     });
+    const current = (getState() as unknown as { board: BoardState }).board;
+    if (background && (current.revision !== revision || current.dragSnapshot)) {
+      return rejectWithValue('snapshot-stale');
+    }
+    return response;
+  },
+  {
+    // [why] Recovery must not supersede the foreground request for a new route.
+    condition: ({ background }, { getState }) => {
+      const board = (getState() as unknown as { board: BoardState }).board;
+      return !background || (board.status !== 'loading' && !board.dragSnapshot);
+    },
   },
 );
 
@@ -370,11 +389,14 @@ const boardSlice = createSlice({
     builder
       .addCase(fetchBoardDataThunk.pending, (state, action) => {
         state.fetchRequestId = action.meta.requestId;
+        state.fetchRevision = state.revision;
         if (!action.meta.arg.background) state.status = 'loading';
       })
       .addCase(fetchBoardDataThunk.fulfilled, (state, action) => {
         if (state.fetchRequestId !== action.meta.requestId) return;
         delete state.fetchRequestId;
+        if (action.meta.arg.background && (state.fetchRevision !== state.revision || state.dragSnapshot)) return;
+        state.appliedSnapshotRequestId = action.meta.requestId;
         state.status = 'idle';
         state.board = action.payload.data;
 
@@ -485,7 +507,20 @@ const boardSlice = createSlice({
 });
 
 export const boardSliceActions = boardSlice.actions;
-export default boardSlice.reducer;
+export default function boardReducer(
+  state: Parameters<typeof boardSlice.reducer>[0],
+  action: Parameters<typeof boardSlice.reducer>[1],
+): BoardState {
+  const next = boardSlice.reducer(state, action);
+  // [why] Any intervening board mutation makes a background snapshot stale.
+  const changesBoard = action.type.startsWith('board/')
+    && !action.type.startsWith('board/fetchData/')
+    && action.type !== 'board/saveDragSnapshot'
+    && action.type !== 'board/clearDragSnapshot'
+    && !action.type.endsWith('/pending')
+    && !action.type.endsWith('/rejected');
+  return changesBoard && next !== state ? { ...next, revision: (state?.revision ?? 0) + 1 } : next;
+}
 
 // ---------- Selectors ----------
 // Cast to unknown first to avoid circular RootState → reducers → boardSlice dependency

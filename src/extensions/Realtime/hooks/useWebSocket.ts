@@ -61,6 +61,10 @@ export function useWebSocket({
   const [pollingActive, setPollingActive] = useState(socket.usingPollingFallback);
   const lastSeqRef = useRef(lastSequence);
   const isReplayingRef = useRef(false);
+  const activeRef = useRef(false);
+  const generationRef = useRef(0);
+  const boardRef = useRef(boardId);
+  boardRef.current = boardId;
 
   // Keep lastSequence ref current so reconnect handler always uses latest value
   useEffect(() => {
@@ -105,6 +109,7 @@ export function useWebSocket({
   }, [token, onMutationConflict]);
 
   const handleOpen = useCallback(async () => {
+    const generation = generationRef.current;
     setConnectionState('connected');
 
     // Re-sync missed events from server
@@ -121,7 +126,9 @@ export function useWebSocket({
 
     // Replay queued mutations in order
     await replayQueue();
-    await onReconnect?.();
+    if (activeRef.current && generationRef.current === generation && boardRef.current === boardId) {
+      await callbacksRef.current.onReconnect?.();
+    }
   }, [boardId, fetchMissedEvents, onEvent, replayQueue, onReconnect]);
 
   const handleClose = useCallback(() => {
@@ -133,6 +140,8 @@ export function useWebSocket({
 
   useEffect(() => {
     if (!boardId || !token) return;
+    activeRef.current = true;
+    generationRef.current++;
     // Wire overflow handler so queue can trigger board reload
     if (onQueueOverflow) {
       messageQueue.setOverflowHandler(onQueueOverflow);
@@ -164,6 +173,8 @@ export function useWebSocket({
     document.addEventListener('visibilitychange', recover);
 
     return () => {
+      activeRef.current = false;
+      generationRef.current++;
       window.removeEventListener('online', recover);
       document.removeEventListener('visibilitychange', recover);
       unsubscribe();

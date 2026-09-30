@@ -1,11 +1,14 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 import { shouldAttachAccessToken, shouldAttemptAuthRecovery } from './requestPolicy';
+import type { AuthResponse } from '~/extensions/Auth/api/auth';
 
 // Token getter is set lazily from main.tsx after the store is created.
 // This avoids a circular dependency between the API client and the Redux store.
 let tokenGetter: (() => string | null) | null = null;
 let clearAuthCallback: (() => void) | null = null;
-let refreshRequestPromise: Promise<unknown> | null = null;
+let refreshRequestPromise: Promise<string> | null = null;
+let credentialsCallback: ((credentials: AuthResponse) => void) | null = null;
+let authGeneration = 0;
 let didHandleSessionExpiry = false;
 
 export const setTokenGetter = (fn: () => string | null) => {
@@ -16,6 +19,42 @@ export const setTokenGetter = (fn: () => string | null) => {
 export const setClearAuthCallback = (fn: () => void) => {
   clearAuthCallback = fn;
 };
+
+export const setCredentialsCallback = (fn: (credentials: AuthResponse) => void) => {
+  credentialsCallback = fn;
+};
+
+export class AuthRecoveryCancelledError extends Error {}
+
+export function cancelAuthRecovery() {
+  authGeneration++;
+  refreshRequestPromise = null;
+}
+
+/** Shared renewal for HTTP expiry and WebSocket expiry; never changes auth to loading. */
+export function renewAccessToken(): Promise<string> {
+  if (refreshRequestPromise) return refreshRequestPromise;
+  const generation = authGeneration;
+  const previousToken = tokenGetter?.();
+  if (!previousToken) return Promise.reject(new AuthRecoveryCancelledError('Session already ended'));
+  const request = apiClient.post<unknown, { data: unknown }>('/auth/refresh')
+    .then((response) => {
+      if (generation !== authGeneration || !previousToken || tokenGetter?.() !== previousToken) {
+        throw new AuthRecoveryCancelledError('Session changed during renewal');
+      }
+      const credentials = response.data;
+      if (!isAuthResponse(credentials)) {
+        throw new Error('Invalid session renewal response');
+      }
+      credentialsCallback?.(credentials);
+      didHandleSessionExpiry = false;
+      return credentials.accessToken;
+    }).finally(() => {
+      if (refreshRequestPromise === request) refreshRequestPromise = null;
+    });
+  refreshRequestPromise = request;
+  return request;
+}
 
 // Single axios instance used by all extension API modules.
 // baseURL uses the Vite proxy so /api/v1 routes resolve to the Bun server.
@@ -63,24 +102,35 @@ apiClient.interceptors.response.use(
 
     originalRequest._retry = true;
 
+    let token: string;
     try {
-      refreshRequestPromise ??= apiClient
-        .post('/auth/refresh')
-        .finally(clearRefreshRequestPromise);
-
-      await refreshRequestPromise;
-      return await apiClient(originalRequest);
-    } catch {
+      const currentToken = tokenGetter?.();
+      token = currentToken && originalRequest.headers.Authorization !== `Bearer ${currentToken}`
+        ? currentToken : await renewAccessToken();
+    } catch (renewalError) {
+      if (renewalError instanceof AuthRecoveryCancelledError) throw renewalError;
       if (!didHandleSessionExpiry) {
         didHandleSessionExpiry = true;
+        cancelAuthRecovery();
         clearAuthCallback?.();
         globalThis.location.href = '/login?reason=session_expired';
       }
 
       throw toError(error);
     }
+    originalRequest.headers.Authorization = `Bearer ${token}`;
+    return apiClient(originalRequest);
   },
 );
+
+function isAuthResponse(value: unknown): value is AuthResponse {
+  if (!value || typeof value !== 'object') return false;
+  const response = value as { accessToken?: unknown; user?: unknown };
+  if (typeof response.accessToken !== 'string' || !response.accessToken
+    || !response.user || typeof response.user !== 'object') return false;
+  const user = response.user as { id?: unknown; name?: unknown; email?: unknown };
+  return typeof user.id === 'string' && typeof user.name === 'string' && typeof user.email === 'string';
+}
 
 function isAxiosErrorLike(
   err: unknown
@@ -90,10 +140,6 @@ function isAxiosErrorLike(
 
 function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
-}
-
-function clearRefreshRequestPromise() {
-  refreshRequestPromise = null;
 }
 
 function isExpiredAccessTokenError(err: {

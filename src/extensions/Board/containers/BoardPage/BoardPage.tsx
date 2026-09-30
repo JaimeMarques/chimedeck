@@ -11,6 +11,8 @@ import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppSelector } from '~/hooks/useAppSelector';
 import { useAppDispatch } from '~/hooks/useAppDispatch';
+import { useStore } from 'react-redux';
+import type { RootState } from '~/store';
 import {
   fetchBoardDataThunk,
   boardSliceActions,
@@ -36,6 +38,7 @@ import { createCard, getCard, copyCard } from '../../../Card/api';
 import { moveCard, archiveCard } from '../../api/card';
 import { useWebSocket } from '../../../Realtime/hooks/useWebSocket';
 import { useBoardSync } from '../../../Realtime/hooks/useBoardSync';
+import { useBoardSnapshot } from '../../../Realtime/hooks/useBoardSnapshot';
 import { usePollingFallback } from '../../../Realtime/PollingFallback';
 import { selectAuthToken, selectAuthUser } from '../../../Auth/duck/authDuck';
 import { apiClient } from '~/common/api/client';
@@ -74,6 +77,7 @@ import { selectSwitcherStarred, toggleStarAndReconcileThunk } from '~/extensions
 
 const BoardPage = () => {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const { boardId: boardRouteId, cardId: cardRouteId } = useParams<{ boardId?: string; cardId?: string }>();
   const navigate = useNavigate();
   const [resolvedBoardId, setResolvedBoardId] = useState<string | null>(null);
@@ -264,34 +268,19 @@ const BoardPage = () => {
 
   // ── Real-time sync (sprint-20) ────────────────────────────────────────────
   const { handleEvent, lastSequence } = useBoardSync({ boardId: realtimeBoardId });
-  const refreshRef = useRef<(Promise<unknown> & { abort: () => void }) | null>(null);
-  const refreshPendingRef = useRef(false);
-  const refreshBoard = useCallback(async function refresh() {
-    if (!boardId) return;
-    if (refreshRef.current) {
-      refreshPendingRef.current = true;
-      return;
-    }
-    // [why] A full snapshot avoids replaying history against a hydrated board.
-    const request = dispatch(fetchBoardDataThunk({ boardId, initialCardsPerList, background: true }));
-    refreshRef.current = request;
-    try {
-      await request;
-    } finally {
-      if (refreshRef.current === request) {
-        refreshRef.current = null;
-        if (refreshPendingRef.current) {
-          refreshPendingRef.current = false;
-          await refresh();
-        }
-      }
-    }
-  }, [dispatch, boardId, initialCardsPerList]);
-  useEffect(() => () => {
-    refreshRef.current?.abort();
-    refreshRef.current = null;
-    refreshPendingRef.current = false;
-  }, [boardId]);
+  // [why] A full snapshot avoids replaying history against a hydrated board.
+  const refreshBoard = useBoardSnapshot({
+    boardId,
+    fetchSnapshot: () => dispatch(fetchBoardDataThunk({
+      boardId: boardId ?? '', initialCardsPerList, background: true,
+    })),
+    shouldRetry: (result) => {
+      const action = result as { type: string; payload?: unknown; meta: { condition?: boolean; requestId: string } };
+      return action.payload === 'snapshot-stale' || action.meta.condition === true
+        || (action.type === fetchBoardDataThunk.fulfilled.type
+          && store.getState().board.appliedSnapshotRequestId !== action.meta.requestId);
+    },
+  });
   const applyPolledEvents = useCallback((events: Parameters<typeof handleEvent>[0][]) => {
     events.forEach(handleEvent);
   }, [handleEvent]);

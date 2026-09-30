@@ -2,8 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { store } from './store';
-import { setTokenGetter, setClearAuthCallback } from './common/api/client';
-import { clearAuth } from './extensions/Auth/duck/authDuck';
+import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
+import { clearAuth, setCredentials } from './extensions/Auth/duck/authDuck';
 import { socket } from './extensions/Realtime/client/socket';
 import { initSentry } from './common/monitoring/sentryClient';
 import { ErrorBoundary } from './common/monitoring/ErrorBoundary';
@@ -64,10 +64,31 @@ setTokenGetter(
   () => (store.getState() as { auth: { accessToken: string | null } }).auth.accessToken
 );
 setClearAuthCallback(() => store.dispatch(clearAuth()));
+setCredentialsCallback((credentials) => {
+  if (store.getState().auth.user?.id !== credentials.user.id) throw new Error('Session user changed during renewal');
+  store.dispatch(setCredentials(credentials));
+});
+let currentToken = store.getState().auth.accessToken;
+store.subscribe(() => {
+  const nextToken = store.getState().auth.accessToken;
+  if (nextToken !== currentToken) {
+    currentToken = nextToken;
+    if (!nextToken) cancelAuthRecovery();
+  }
+});
+socket.setExpiredTokenCallback(async () => {
+  try {
+    return await renewAccessToken();
+  } catch (error) {
+    if (error instanceof AuthRecoveryCancelledError) return null;
+    throw error;
+  }
+});
 
 // WS close code 4001 = server revoked this session.
 // Clear Redux auth state and redirect to login so the user is informed.
 socket.setForcedLogoutCallback(() => {
+  cancelAuthRecovery();
   store.dispatch(clearAuth());
   window.location.href = '/login?reason=session_expired';
 });
