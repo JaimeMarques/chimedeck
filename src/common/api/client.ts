@@ -1,4 +1,4 @@
-import axios, { type InternalAxiosRequestConfig } from 'axios';
+import axios, { isAxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { shouldAttachAccessToken, shouldAttemptAuthRecovery } from './requestPolicy';
 import type { AuthResponse } from '~/extensions/Auth/api/auth';
 import { isRetryableRequestError, RetryableRecoveryError } from './recoveryErrors';
@@ -12,6 +12,12 @@ let credentialsCallback: ((credentials: AuthResponse) => void) | null = null;
 let authGeneration = 0;
 let authRecoveryBlocked = false;
 let didHandleSessionExpiry = false;
+let authRecoveryCallbacks: {
+  onSuspend: () => void;
+  canResume: () => boolean;
+  onResume: () => void;
+} | null = null;
+let logoutRequest: { token: string | null; generation: number; promise: Promise<unknown> } | null = null;
 
 export const setTokenGetter = (fn: () => string | null) => {
   tokenGetter = fn;
@@ -28,16 +34,50 @@ export const setCredentialsCallback = (fn: (credentials: AuthResponse) => void) 
 
 export class AuthRecoveryCancelledError extends Error {}
 
+export function setAuthRecoveryCallbacks(callbacks: NonNullable<typeof authRecoveryCallbacks>) {
+  authRecoveryCallbacks = callbacks;
+}
+
 export function cancelAuthRecovery() {
+  const previousToken = tokenGetter?.() ?? null;
+  const previouslyBlocked = authRecoveryBlocked;
   authRecoveryBlocked = true;
   authGeneration++;
+  const generation = authGeneration;
   refreshRequestPromise = null;
+  authRecoveryCallbacks?.onSuspend();
+  // [why] A failed logout can restore its unchanged session, never its old refresh.
+  return () => {
+    if (previouslyBlocked || !previousToken || generation !== authGeneration
+      || tokenGetter?.() !== previousToken || authRecoveryCallbacks?.canResume() === false) return;
+    authRecoveryBlocked = false;
+    authRecoveryCallbacks?.onResume();
+  };
 }
 
 /** Only a newly established validated session can undo explicit logout/revocation. */
 export function allowAuthRecovery() {
+  if (authRecoveryBlocked) authGeneration++;
   authRecoveryBlocked = false;
   didHandleSessionExpiry = false;
+}
+
+/** A same-session double click shares one cancellation and one DELETE. */
+export function logoutCurrentSession(): Promise<unknown> {
+  const token = tokenGetter?.() ?? null;
+  if (logoutRequest?.token === token && logoutRequest.generation === authGeneration) return logoutRequest.promise;
+  const restoreAfterFailure = cancelAuthRecovery();
+  const generation = authGeneration;
+  const promise = apiClient.delete('/auth/session').catch((error: unknown) => {
+    // [why] The logout thunk retains auth only for an explicit non-401 response.
+    // Network/no-response failures intentionally complete local logout.
+    if (isAxiosError(error) && error.response && error.response.status !== 401) restoreAfterFailure();
+    throw error;
+  }).finally(() => {
+    if (logoutRequest?.promise === promise) logoutRequest = null;
+  });
+  logoutRequest = { token, generation, promise };
+  return promise;
 }
 
 /** Shared renewal for HTTP expiry and WebSocket expiry; never changes auth to loading. */

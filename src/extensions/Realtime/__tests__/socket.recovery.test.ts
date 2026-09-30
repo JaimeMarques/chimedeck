@@ -34,7 +34,7 @@ const original = {
 };
 let now = 0;
 let nextId = 0;
-const timers = new Map<number, { fn: () => void; interval: boolean }>();
+const timers = new Map<number, { fn: () => void; interval: boolean; delay: number }>();
 let client: RealtimeSocket;
 function tick(ms: number) {
   now += ms;
@@ -56,14 +56,14 @@ beforeEach(() => {
   timers.clear();
   globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
   Date.now = () => now;
-  globalThis.setTimeout = ((fn: () => void) => {
+  globalThis.setTimeout = ((fn: () => void, delay: number) => {
     const id = ++nextId;
-    timers.set(id, { fn, interval: false });
+    timers.set(id, { fn, interval: false, delay });
     return id;
   }) as unknown as typeof setTimeout;
-  globalThis.setInterval = ((fn: () => void) => {
+  globalThis.setInterval = ((fn: () => void, delay: number) => {
     const id = ++nextId;
-    timers.set(id, { fn, interval: true });
+    timers.set(id, { fn, interval: true, delay });
     return id;
   }) as unknown as typeof setInterval;
   globalThis.clearTimeout = globalThis.clearInterval = ((id: number) => {
@@ -249,5 +249,40 @@ describe('production socket recovery', () => {
     expect(attempts).toBe(1);
     expect(timers.size).toBe(0);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  test('premature expiry bursts keep bounded renewal and polling until a validated pong', async () => {
+    latest().open();
+    latest().message({ type: 'pong' });
+    let attempts = 0;
+    let logouts = 0;
+    client.setForcedLogoutCallback(() => { logouts++; });
+    client.setExpiredTokenCallback(() => {
+      const token = `fresh-${String(++attempts)}`;
+      // Model React's same-board token dependency cleanup/reconnect.
+      client.disconnect({ boardId: 'b1' });
+      client.connect({ boardId: 'b1', token });
+      return Promise.resolve(token);
+    });
+    latest().closed(4001, 'session expired');
+    await Promise.resolve();
+    expect(attempts).toBe(1);
+    latest().open();
+    for (let index = 0; index < 6; index++) {
+      latest().closed(4001, 'session expired');
+      expect(attempts).toBe(index + 1);
+      const delay = Math.min(1_000 * 2 ** index, 30_000);
+      expect([...timers.values()].some((timer) => !timer.interval && timer.delay === delay)).toBe(true);
+      tick(delay);
+      await Promise.resolve();
+      latest().open();
+      if (index >= 2) expect(client.usingPollingFallback).toBe(true);
+    }
+    expect(logouts).toBe(0);
+    latest().message({ type: 'pong' });
+    expect(client.usingPollingFallback).toBe(false);
+    latest().closed(4001, 'session expired');
+    await Promise.resolve();
+    expect(attempts).toBe(8);
   });
 });

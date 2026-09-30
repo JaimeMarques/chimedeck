@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { store } from './store';
-import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
+import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, setAuthRecoveryCallbacks, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
 import { clearAuth, refreshCredentials, setCredentials } from './extensions/Auth/duck/authDuck';
 import { socket } from './extensions/Realtime/client/socket';
 import { initSentry } from './common/monitoring/sentryClient';
@@ -64,6 +64,11 @@ setTokenGetter(
   () => (store.getState() as { auth: { accessToken: string | null } }).auth.accessToken
 );
 setClearAuthCallback(() => store.dispatch(clearAuth()));
+setAuthRecoveryCallbacks({
+  onSuspend: () => { socket.suspendAuthRecovery(); },
+  canResume: () => store.getState().auth.status === 'authenticated',
+  onResume: () => { socket.resumeAuthRecovery(); },
+});
 setCredentialsCallback((credentials) => {
   const user = store.getState().auth.user;
   if (user && user.id !== credentials.user.id) throw new Error('Session user changed during renewal');
@@ -77,11 +82,21 @@ store.subscribe(() => {
   if (nextStatus !== currentAuthStatus) {
     currentAuthStatus = nextStatus;
     if (nextStatus === 'unauthenticated') cancelAuthRecovery();
+    if (nextStatus === 'authenticated') {
+      allowAuthRecovery();
+      socket.resumeAuthRecovery();
+    }
   }
   if (nextToken !== currentToken) {
     currentToken = nextToken;
-    if (nextToken) allowAuthRecovery();
-    else cancelAuthRecovery();
+    if (nextToken) {
+      allowAuthRecovery();
+      socket.resumeAuthRecovery();
+    }
+    else {
+      cancelAuthRecovery();
+      socket.resetRenewalThrottle();
+    }
   }
 });
 socket.setExpiredTokenCallback(async () => {

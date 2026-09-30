@@ -19,11 +19,11 @@ class FakeWebSocket extends EventTarget {
   static readonly CONNECTING = 0;
   static current: FakeWebSocket;
   readyState = 0;
-  constructor(_url: string) { super(); FakeWebSocket.current = this; }
+  constructor(readonly url: string) { super(); FakeWebSocket.current = this; }
   send(_frame: string) {}
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.dispatchEvent(new Event('open')); }
-  message() { this.dispatchEvent(new MessageEvent('message', { data: '{"type":"board_event"}' })); }
+  message(type = 'board_event') { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type }) })); }
   closed(code = 1006, reason = '') {
     this.readyState = 3;
     this.dispatchEvent(Object.assign(new Event('close'), { code, reason }));
@@ -113,9 +113,11 @@ const renewingHook = renderHook(({ token }) => useWebSocket({
 }), { initialProps: { token: 'old-token' } });
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
 assert.equal(renewedSnapshots, 0);
+FakeWebSocket.current.message('pong');
 renewingHook.rerender({ token: 'healthy-refreshed-token' });
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
 assert.equal(renewedSnapshots, 1, 'healthy same-board HTTP token replacement still reconciles its connection gap');
+FakeWebSocket.current.message('pong');
 act(() => { FakeWebSocket.current.closed(4001, 'session expired'); });
 renewingHook.rerender({ token: 'renewed-token' });
 await act(async () => {
@@ -129,6 +131,49 @@ renewingHook.rerender({ token: 'http-renewed-token' });
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
 assert.equal(renewedSnapshots, 3, 'HTTP renewal during transport outage still reconciles once');
 renewingHook.unmount();
+
+let retainedPolls = 0;
+const intervalCallbacks = new Map<ReturnType<typeof setInterval>, () => void>();
+const savedSetInterval = globalThis.setInterval;
+const savedClearInterval = globalThis.clearInterval;
+globalThis.setInterval = ((callback: () => void, delay: number) => {
+  const id = savedSetInterval(callback, delay);
+  intervalCallbacks.set(id, callback);
+  return id;
+}) as unknown as typeof setInterval;
+globalThis.clearInterval = ((id: ReturnType<typeof setInterval>) => {
+  intervalCallbacks.delete(id);
+  savedClearInterval(id);
+}) as typeof clearInterval;
+const retainedSnapshot = () => { retainedPolls++; return Promise.resolve(); };
+const ignoreEvents = () => {};
+const retainedPollingHook = renderHook(({ token }) => {
+  const connection = useWebSocket({ boardId: 'polling-board', token, lastSequence: 0, onEvent: ignoreEvents });
+  usePollingFallback({ boardId: 'polling-board', active: connection.pollingActive, lastSequence: 0, fetchSnapshot: retainedSnapshot, onEvents: ignoreEvents });
+  return connection;
+}, { initialProps: { token: 'before-refresh' } });
+for (let index = 0; index < 3; index++) {
+  await act(async () => {
+    FakeWebSocket.current.closed();
+    window.dispatchEvent(new dom.window.Event('online'));
+    await Promise.resolve();
+  });
+}
+assert.equal(retainedPollingHook.result.current.pollingActive, true);
+assert.equal(retainedPolls, 1);
+retainedPollingHook.rerender({ token: 'after-refresh' });
+assert.equal(retainedPollingHook.result.current.pollingActive, true, 'same-board token rotation retains down-transport fallback');
+assert.equal(retainedPolls, 1, 'token rotation does not restart immediate snapshot polling');
+await act(async () => {
+  for (const callback of [...intervalCallbacks.values()]) callback();
+  await Promise.resolve();
+});
+assert.equal(retainedPolls, 2, 'existing fallback cadence continues while replacement WS is blocked');
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(retainedPollingHook.result.current.pollingActive, false);
+retainedPollingHook.unmount();
+globalThis.setInterval = savedSetInterval;
+globalThis.clearInterval = savedClearInterval;
 
 let completeMutation: ((response: Response) => void) | undefined;
 const originalFetch = globalThis.fetch;
@@ -292,9 +337,9 @@ failedSnapshotHook.unmount();
 globalThis.setTimeout = originalSetTimeout;
 globalThis.clearTimeout = originalClearTimeout;
 
-const { apiClient, setTokenGetter, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } =
+const { apiClient, setTokenGetter, setCredentialsCallback, setAuthRecoveryCallbacks, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } =
   await import('../../../../common/api/client');
-const { authDuckReducer, setCredentials, clearAuth, refreshCredentials } = await import('../../../Auth/duck/authDuck');
+const { authDuckReducer, setCredentials, clearAuth, refreshCredentials, logoutThunk } = await import('../../../Auth/duck/authDuck');
 const authStore = configureStore({ reducer: { auth: authDuckReducer } });
 const user = { id: 'u1', name: 'User', email: 'user@example.test' };
 setTokenGetter(() => authStore.getState().auth.accessToken);
@@ -377,5 +422,99 @@ for (const result of temporaryResults) {
 }
 assert.equal(authStore.getState().auth.status, 'authenticated', 'shared transient refresh cannot log out the HTTP participant');
 assert.equal(authStore.getState().auth.accessToken, 'fresh-token');
+setAuthRecoveryCallbacks({
+  onSuspend: () => { socket.suspendAuthRecovery(); },
+  canResume: () => authStore.getState().auth.status === 'authenticated',
+  onResume: () => { socket.resumeAuthRecovery(); },
+});
+socket.setExpiredTokenCallback(async () => {
+  try { return await renewAccessToken(); }
+  catch (error) {
+    if (error instanceof AuthRecoveryCancelledError) return null;
+    throw error;
+  }
+});
+const authDispatch = authStore.dispatch as unknown as AppDispatch;
+for (const cancelledBeforeFailure of [true, false]) {
+  const originalToken = authStore.getState().auth.accessToken ?? '';
+  const refreshResponses: Array<(data: { data: { user: typeof user; accessToken: string } }) => void> = [];
+  let rejectLogout: ((error: unknown) => void) | undefined;
+  let logoutDeletes = 0;
+  apiClient.defaults.adapter = async (config) => {
+    if (config.url === '/auth/refresh') {
+      const data = await new Promise((resolve) => { refreshResponses.push(resolve); });
+      return { config, data, status: 200, statusText: 'OK', headers: {} };
+    }
+    assert.equal(config.url, '/auth/session');
+    logoutDeletes++;
+    await new Promise((_resolve, reject) => { rejectLogout = reject; });
+    throw new Error('Expected deferred logout failure');
+  };
+  socket.resetRenewalThrottle();
+  socket.connect({ boardId: 'logout-board', token: originalToken });
+  FakeWebSocket.current.open();
+  FakeWebSocket.current.message('pong');
+  FakeWebSocket.current.closed(4001, 'session expired');
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(refreshResponses.length, 1);
+  const firstLogout = authDispatch(logoutThunk());
+  const secondLogout = authDispatch(logoutThunk());
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(logoutDeletes, 1, 'same-session double logout shares its cancellation and DELETE');
+  if (cancelledBeforeFailure) {
+    refreshResponses[0]?.({ data: { user, accessToken: 'cancelled-token' } });
+    for (let index = 0; index < 20; index++) await Promise.resolve();
+  }
+  const logoutFailure = new AxiosError('Logout unavailable');
+  logoutFailure.response = { status: 500, statusText: 'Unavailable', data: null, headers: {}, config: { headers: new AxiosHeaders() } };
+  rejectLogout?.(logoutFailure);
+  const failedLogouts = await Promise.all([firstLogout, secondLogout]);
+  for (const result of failedLogouts) assert.ok(logoutThunk.rejected.match(result));
+  assert.equal(authStore.getState().auth.status, 'authenticated');
+  assert.equal(authStore.getState().auth.accessToken, originalToken, 'failed logout cannot revive its pre-logout refresh');
+  if (!cancelledBeforeFailure) refreshResponses[0]?.({ data: { user, accessToken: 'cancelled-token' } });
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(refreshResponses.length, 2, 'failed logout resumes fresh renewal regardless of old cancellation ordering');
+  const restoredToken = `restored-${String(cancelledBeforeFailure)}`;
+  refreshResponses[1]?.({ data: { user, accessToken: restoredToken } });
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(authStore.getState().auth.accessToken, restoredToken);
+  assert.ok(FakeWebSocket.current.url.includes(`token=${restoredToken}`));
+  FakeWebSocket.current.open();
+  assert.equal(socket.isConnected, true);
+  socket.disconnect({ boardId: 'logout-board' });
+}
+
+for (const outcome of ['network', 'success']) {
+  authStore.dispatch(setCredentials({ user, accessToken: `terminal-${outcome}` }));
+  allowAuthRecovery();
+  let finishOldRefresh: ((data: unknown) => void) | undefined;
+  let refreshRequests = 0;
+  apiClient.defaults.adapter = async (config) => {
+    if (config.url === '/auth/refresh') {
+      refreshRequests++;
+      const data = await new Promise((resolve) => { finishOldRefresh = resolve; });
+      return { config, data, status: 200, statusText: 'OK', headers: {} };
+    }
+    if (outcome === 'network') throw new AxiosError('Network unavailable', 'ERR_NETWORK', config);
+    return { config, data: null, status: 200, statusText: 'OK', headers: {} };
+  };
+  socket.resetRenewalThrottle();
+  socket.connect({ boardId: 'terminal-logout', token: `terminal-${outcome}` });
+  FakeWebSocket.current.open();
+  FakeWebSocket.current.message('pong');
+  FakeWebSocket.current.closed(4001, 'session expired');
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  const result = await authDispatch(logoutThunk());
+  assert.ok(logoutThunk.fulfilled.match(result));
+  assert.equal(authStore.getState().auth.status, 'unauthenticated');
+  socket.disconnect({ boardId: 'terminal-logout' });
+  finishOldRefresh?.({ data: { user, accessToken: 'cancelled-terminal-token' } });
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(refreshRequests, 1, 'completed local logout cannot resume cancelled renewal');
+  assert.equal(socket.isConnected, false);
+  assert.equal(authStore.getState().auth.accessToken, null);
+  await assert.rejects(renewAccessToken(), AuthRecoveryCancelledError);
+}
 dom.window.close();
 console.info('hook recovery and snapshot polling passed');

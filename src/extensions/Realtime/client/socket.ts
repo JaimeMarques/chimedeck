@@ -49,6 +49,11 @@ export class RealtimeSocket {
   private renewingToken = false;
   private needsTokenRenewal = false;
   private renewalRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private authRecoverySuspended = false;
+  private resumeRenewalRequested = false;
+  private awaitingRenewalPong = false;
+  private prematureExpiryCount = 0;
+  private expiryBackoffMs = 1_000;
   private recoveryPending = false;
   private expiredTokenCallback: (() => Promise<string | null>) | null = null;
 
@@ -70,6 +75,29 @@ export class RealtimeSocket {
     this.expiredTokenCallback = fn;
   }
 
+  suspendAuthRecovery() {
+    this.authRecoverySuspended = true;
+    this.resumeRenewalRequested = false;
+    this._clearRenewalRetry();
+  }
+
+  resumeAuthRecovery() {
+    if (!this.authRecoverySuspended) return;
+    this.authRecoverySuspended = false;
+    this.intentionalClose = false;
+    if (this.renewingToken) {
+      this.resumeRenewalRequested = true;
+      return;
+    }
+    this.recover();
+  }
+
+  resetRenewalThrottle() {
+    this.awaitingRenewalPong = false;
+    this.prematureExpiryCount = 0;
+    this.expiryBackoffMs = 1_000;
+  }
+
   /** True when consecutive WS failures have reached the polling threshold */
   get usingPollingFallback(): boolean {
     return this.failedAttempts >= POLLING_FALLBACK_THRESHOLD;
@@ -81,6 +109,8 @@ export class RealtimeSocket {
     this.connectionRefCount += 1;
     if (this.renewingToken) this.recoveryPending = true;
     if (this.token !== token) {
+      if (this.token) this.awaitingRenewalPong = true;
+      this.authRecoverySuspended = false;
       this.needsTokenRenewal = false;
       this._clearRenewalRetry();
     }
@@ -164,7 +194,7 @@ export class RealtimeSocket {
 
   /** Recover a half-open connection after sleep, or bypass suspended backoff. */
   recover() {
-    if (this.intentionalClose || this.renewingToken || this.connectionRefCount === 0) return;
+    if (this.intentionalClose || this.authRecoverySuspended || this.renewingToken || this.connectionRefCount === 0) return;
     if (this.needsTokenRenewal) {
       this._clearRenewalRetry();
       void this._renewExpiredToken();
@@ -184,7 +214,7 @@ export class RealtimeSocket {
   // ---------- Internal ----------
 
   private _open() {
-    if (!this.token || this.renewingToken || this.connectionRefCount === 0) return;
+    if (!this.token || this.authRecoverySuspended || this.renewingToken || this.connectionRefCount === 0) return;
     if (this.needsTokenRenewal) {
       if (this.renewalRetryTimer === null) void this._renewExpiredToken();
       return;
@@ -204,9 +234,10 @@ export class RealtimeSocket {
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
       this.lastFrameAt = Date.now();
+      this.failedAttempts = Math.max(this.failedAttempts, this.prematureExpiryCount);
       const wasPolling = this.failedAttempts >= POLLING_FALLBACK_THRESHOLD;
       this.backoffMs = 1_000;
-      this.failedAttempts = 0;
+      if (this.prematureExpiryCount === 0) this.failedAttempts = 0;
       // Re-join all active board rooms after authentication handshake.
       for (const activeBoardId of this.boardRefCounts.keys()) {
         this.send({ type: 'subscribe', board_id: activeBoardId });
@@ -215,7 +246,7 @@ export class RealtimeSocket {
       this.recoveryPending = false;
       this.openHandlers.forEach((h) => { h(recovered); });
       // Notify that polling is no longer needed now that WS is back
-      if (wasPolling) {
+      if (wasPolling && !this.usingPollingFallback) {
         this.pollingInactiveHandlers.forEach((h) => { h(); });
       }
     });
@@ -230,7 +261,13 @@ export class RealtimeSocket {
           this.send({ type: 'ping' });
           return;
         }
-        if (event.type === 'pong') return;
+        if (event.type === 'pong') {
+          const wasPolling = this.usingPollingFallback;
+          this.resetRenewalThrottle();
+          this.failedAttempts = 0;
+          if (wasPolling) this.pollingInactiveHandlers.forEach((h) => { h(); });
+          return;
+        }
         this.handlers.forEach((h) => {
           try {
             h(event);
@@ -253,7 +290,20 @@ export class RealtimeSocket {
           this.recoveryPending = true;
           this.needsTokenRenewal = true;
           this.closeHandlers.forEach((h) => { h(); });
-          void this._renewExpiredToken();
+          if (this.awaitingRenewalPong) {
+            // [why] A newly minted token repeatedly rejected before validation
+            // must not rotate refresh cookies at the server's heartbeat rate.
+            this.prematureExpiryCount++;
+            this.failedAttempts = Math.max(this.failedAttempts, this.prematureExpiryCount - 1);
+            this._recordFailure();
+            this.renewalRetryTimer = setTimeout(() => {
+              this.renewalRetryTimer = null;
+              void this._renewExpiredToken();
+            }, this.expiryBackoffMs);
+            this.expiryBackoffMs = Math.min(this.expiryBackoffMs * 2, MAX_BACKOFF_MS);
+          } else {
+            void this._renewExpiredToken();
+          }
           return;
         }
         this.intentionalClose = true;
@@ -295,7 +345,7 @@ export class RealtimeSocket {
   }
 
   private async _renewExpiredToken() {
-    if (this.renewingToken || this.connectionRefCount === 0 || this.intentionalClose) return;
+    if (this.renewingToken || this.authRecoverySuspended || this.connectionRefCount === 0 || this.intentionalClose) return;
     const attemptId = ++this.renewalAttemptId;
     const tokenAtStart = this.token;
     this.renewingToken = true;
@@ -304,13 +354,14 @@ export class RealtimeSocket {
       const token = await this.expiredTokenCallback?.();
       if (attemptId !== this.renewalAttemptId) return;
       if (!token) {
-        if (this.token === tokenAtStart) this.intentionalClose = true;
+        if (this.token === tokenAtStart && !this.resumeRenewalRequested) this.intentionalClose = true;
         else canOpen = true;
         return;
       }
       // [why] Board navigation may replace subscribers during validated renewal.
       // Keep a newer token supplied by connect; otherwise adopt the validated token.
       if (this.token === tokenAtStart) this.token = token;
+      this.awaitingRenewalPong = true;
       this.needsTokenRenewal = false;
       canOpen = true;
     } catch (error) {
@@ -331,8 +382,16 @@ export class RealtimeSocket {
       }
     } finally {
       this.renewingToken = false;
-      if (canOpen && !this.intentionalClose && this.connectionRefCount > 0) this._open();
+      if (this._canResumeRenewal()) {
+        this.resumeRenewalRequested = false;
+        this.intentionalClose = false;
+        this.recover();
+      } else if (canOpen && !this.intentionalClose && this.connectionRefCount > 0) this._open();
     }
+  }
+
+  private _canResumeRenewal(): boolean {
+    return this.resumeRenewalRequested && !this.authRecoverySuspended && this.connectionRefCount > 0;
   }
 
   private _clearRenewalRetry() {

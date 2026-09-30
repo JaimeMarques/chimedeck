@@ -64,11 +64,13 @@ export function useWebSocket({
   const activeRef = useRef(false);
   const generationRef = useRef(0);
   const recoveryRef = useRef(false);
+  const pollingRef = useRef(socket.usingPollingFallback);
   const connectedOnceRef = useRef(socket.isConnected);
   const tokenRef = useRef(token);
   const boardRef = useRef(boardId);
   if (boardRef.current !== boardId) {
     recoveryRef.current = false;
+    pollingRef.current = false;
     connectedOnceRef.current = false;
   } else if (tokenRef.current !== token && connectedOnceRef.current) {
     recoveryRef.current = true;
@@ -122,6 +124,8 @@ export function useWebSocket({
     const generation = generationRef.current;
     const needsRecovery = recovered || recoveryRef.current;
     connectedOnceRef.current = true;
+    pollingRef.current = socket.usingPollingFallback;
+    setPollingActive(pollingRef.current);
     recoveryRef.current = needsRecovery;
     setConnectionState('connected');
 
@@ -173,13 +177,14 @@ export function useWebSocket({
       },
       onOpen: (recovered) => { void callbacksRef.current.handleOpen(recovered); },
       onClose: handleClose,
-      onPollingActive: () => { setPollingActive(true); },
-      onPollingInactive: () => { setPollingActive(false); },
+      onPollingActive: () => { pollingRef.current = true; setPollingActive(true); },
+      onPollingInactive: () => { pollingRef.current = false; setPollingActive(false); },
     });
 
     socket.connect({ boardId, token });
     setConnectionState(socket.isConnected ? 'connected' : 'reconnecting');
-    setPollingActive(socket.usingPollingFallback);
+    pollingRef.current = pollingRef.current || socket.usingPollingFallback;
+    setPollingActive(pollingRef.current);
 
     const recover = () => {
       if (document.visibilityState === 'hidden') return;
