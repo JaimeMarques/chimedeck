@@ -54,6 +54,35 @@ function renderMentions(text: string, names = new Map([[ALICE_ID, 'Alice Smith']
 }
 
 describe('renderCommentContentHtml — UUID mention labels', () => {
+  it.each([
+    ['named image body', '<img name="body" id="body" src="x">'],
+    ['named form body', '<form name="body">earlier text</form>'],
+    ['duplicate named bodies', '<img name="body" src="x"><img name="body" src="y">'],
+    ['named tree walker factory', '<img name="createTreeWalker" src="x">'],
+    ['named element factory', '<img name="createElement" src="x">'],
+    ['named text factory', '<img name="createTextNode" src="x">'],
+    ['named fragment factory', '<img name="createDocumentFragment" src="x">'],
+    ['named form methods', `<form><input name="closest"><input name="replaceChild"><input name="append">earlier text @${BOB_ID}</form>`],
+  ])('preserves safe comments and hyperlinks with %s markup', (_label, prefix) => {
+    const body = renderMentions(
+      `${prefix}\n\nhello @bob and @${ALICE_ID}\n\n` +
+      `[docs](https://example.com/@${ALICE_ID} "@${ALICE_ID}")\n\n` +
+      '<script>window.__xss = 1</script><img src="safe.png" onerror="window.__xss = 2">',
+    );
+
+    expect(body.textContent).toContain('hello @bob and @Alice Smith');
+    if (prefix.includes('earlier text')) expect(body.textContent).toContain('earlier text');
+    expect(Array.from(body.querySelectorAll('span'), (chip) => chip.textContent)).toEqual(
+      prefix.includes(`@${BOB_ID}`) ? ['@bob', '@bob', '@Alice Smith'] : ['@bob', '@Alice Smith'],
+    );
+    const anchor = body.querySelector('a');
+    expect(anchor?.textContent).toBe('docs');
+    expect(anchor?.getAttribute('href')).toBe(`https://example.com/@${ALICE_ID}`);
+    expect(anchor?.getAttribute('title')).toBe(`@${ALICE_ID}`);
+    expect(anchor?.getAttribute('target')).toBe('_blank');
+    expect(body.querySelector('[name], [id], [onerror], script, form')).toBeNull();
+  });
+
   it.each(['frameset', 'col', 'tr', 'tbody', 'thead', 'tfoot'])('preserves prose and GFM tables after leading <%s> markup', (tag) => {
     const body = renderMentions(
       `<${tag}>\n\nhello @bob and @${ALICE_ID}\n\n` +
