@@ -108,7 +108,7 @@ describe('BoardSwitcherPanel resizing', () => {
     expect(separator.getAttribute('aria-valuenow')).toBe('480');
   });
 
-  it('keeps drag changes local until release and cancels on pointer cancellation or capture loss', async () => {
+  it('keeps drag changes local, commits on release or capture loss, and reverts explicit cancellation', async () => {
     window.innerWidth = 1200;
     const { separator, store, captured, ui } = mount();
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -123,12 +123,18 @@ describe('BoardSwitcherPanel resizing', () => {
     fireEvent.pointerMove(separator, { pointerId: 8, clientX: 450 });
     fireEvent.pointerCancel(separator, { pointerId: 8 });
     expect(separator.getAttribute('aria-valuenow')).toBe('380');
+    fireEvent.lostPointerCapture(separator, { pointerId: 8 });
+    expect(store.getState().boardSwitcher.prefs.panelWidth).toBe(380);
     fireEvent.pointerDown(separator, { button: 0, pointerId: 9, clientX: 380 });
     fireEvent.pointerMove(separator, { pointerId: 9, clientX: 440 });
     fireEvent.lostPointerCapture(separator, { pointerId: 9 });
-    expect(separator.getAttribute('aria-valuenow')).toBe('380');
+    expect(separator.getAttribute('aria-valuenow')).toBe('440');
+    expect(store.getState().boardSwitcher.prefs.panelWidth).toBe(440);
+    fireEvent.pointerUp(separator, { pointerId: 9, clientX: 470 });
+    expect(store.getState().boardSwitcher.prefs.panelWidth).toBe(440);
     fireEvent.pointerDown(separator, { button: 0, pointerId: 10, clientX: 380 });
     ui.unmount();
     expect(captured()).toBeNull();
+    expect(store.getState().boardSwitcher.prefs.panelWidth).toBe(440);
   });
 });

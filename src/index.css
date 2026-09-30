@@ -654,6 +654,9 @@ body {
   --border:       rgba(227, 228, 242, 0.122);
   --border-strong:#7e8188;
   --border-list:  transparent;
+  --scrollbar-thumb: #96999e;
+  --scrollbar-thumb-hover: #a9abaf;
+  scrollbar-color: var(--scrollbar-thumb) var(--bg-overlay);
 
   /* ── Semantic ───────────────────────────────────────── */
   --color-danger:   #f87168;
@@ -663,9 +666,9 @@ body {
 }
 
 .theme-trello [data-dnd-card-id] { border-color: transparent; }
-.theme-trello aside [aria-current="page"] { background-color: #1c2b42; }
-.theme-trello aside [aria-current="page"]:hover { background-color: #123263; }
-.theme-trello aside label:has(input) {
+.theme-trello .cd-board-switcher [aria-current="page"] { background-color: #1c2b42; }
+.theme-trello .cd-board-switcher [aria-current="page"]:hover { background-color: #123263; }
+.theme-trello .cd-board-switcher label:has(input) {
   background-color: var(--bg-surface);
   border-color: var(--border-strong);
 }
@@ -962,8 +965,8 @@ html.theme-trello,
 /* Themed scrollbars (WebKit) */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-overlay); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb, var(--border)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover, var(--border-strong)); }
 
 /* High-contrast scrollbar for card-detail columns (Light/Dark). */
 .scrollbar-contrast {
