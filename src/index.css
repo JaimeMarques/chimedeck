@@ -630,36 +630,44 @@ body {
 /* ── Trello — Atlassian dark ─────────────────────────────────────────────────── */
 .theme-trello {
   /* ── Brand ─────────────────────────────────────────── */
-  --color-primary:       #579dff;
-  --color-primary-hover: #85b8ff;
-  --color-secondary:     #9fadbc;
-  --color-accent:        #579dff;
+  --color-primary:       #669df1;
+  --color-primary-hover: #8fb8f6;
+  --color-secondary:     #a9abaf;
+  --color-accent:        #669df1;
 
   /* ── Surfaces ───────────────────────────────────────── */
-  --bg-base:     #1d2125;
-  --bg-surface:  #22272b;   /* cards */
-  --bg-overlay:  #2c333a;
-  --bg-sunken:   #38414a;
-  --bg-list:     #101204;   /* near-black list columns */
-  --bg-list-bare: #101204;
+  --bg-base:     #1f1f21;
+  --bg-surface:  #242528;   /* cards and inputs */
+  --bg-overlay:  #2b2c2f;
+  --bg-sunken:   #18191a;
+  --bg-list:     #18191a;   /* neutral; photo-derived tints vary per board */
+  --bg-list-bare: #18191a;
 
   /* ── Text ───────────────────────────────────────────── */
-  --text-base:    #b6c2cf;
-  --text-muted:   #9fadbc;
-  --text-subtle:  #8c9bab;
-  --text-inverse: #1d2125;
-  --text-link:    #579dff;
+  --text-base:    #cecfd2;
+  --text-muted:   #a9abaf;
+  --text-subtle:  #96999e;
+  --text-inverse: #1f1f21;
+  --text-link:    #669df1;
 
   /* ── Borders ────────────────────────────────────────── */
-  --border:       #333c43;
-  --border-strong:#454f59;
+  --border:       rgba(227, 228, 242, 0.122);
+  --border-strong:#7e8188;
   --border-list:  transparent;
 
   /* ── Semantic ───────────────────────────────────────── */
   --color-danger:   #f87168;
   --color-success:  #4bce97;
-  --color-warning:  #f5cd47;
-  --color-info:     #579dff;
+  --color-warning:  #ddb30e;
+  --color-info:     #669df1;
+}
+
+.theme-trello [data-dnd-card-id] { border-color: transparent; }
+.theme-trello aside [aria-current="page"] { background-color: #1c2b42; }
+.theme-trello aside [aria-current="page"]:hover { background-color: #123263; }
+.theme-trello aside label:has(input) {
+  background-color: var(--bg-surface);
+  border-color: var(--border-strong);
 }
 
 /* Trello typography — stack from trello.com; other themes keep Tailwind's default */
@@ -1019,4 +1027,3 @@ html.theme-trello,
 .prose-sm blockquote p::after {
   content: none;
 }
-
