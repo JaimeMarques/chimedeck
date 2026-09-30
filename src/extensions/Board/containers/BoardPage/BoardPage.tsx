@@ -264,11 +264,43 @@ const BoardPage = () => {
 
   // ── Real-time sync (sprint-20) ────────────────────────────────────────────
   const { handleEvent, lastSequence } = useBoardSync({ boardId: realtimeBoardId });
+  const refreshRef = useRef<(Promise<unknown> & { abort: () => void }) | null>(null);
+  const refreshPendingRef = useRef(false);
+  const refreshBoard = useCallback(async function refresh() {
+    if (!boardId) return;
+    if (refreshRef.current) {
+      refreshPendingRef.current = true;
+      return;
+    }
+    // [why] A full snapshot avoids replaying history against a hydrated board.
+    const request = dispatch(fetchBoardDataThunk({ boardId, initialCardsPerList, background: true }));
+    refreshRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (refreshRef.current === request) {
+        refreshRef.current = null;
+        if (refreshPendingRef.current) {
+          refreshPendingRef.current = false;
+          await refresh();
+        }
+      }
+    }
+  }, [dispatch, boardId, initialCardsPerList]);
+  useEffect(() => () => {
+    refreshRef.current?.abort();
+    refreshRef.current = null;
+    refreshPendingRef.current = false;
+  }, [boardId]);
+  const applyPolledEvents = useCallback((events: Parameters<typeof handleEvent>[0][]) => {
+    events.forEach(handleEvent);
+  }, [handleEvent]);
   const { connectionState, pollingActive } = useWebSocket({
     boardId: realtimeBoardId,
     token: accessToken ?? '',
     lastSequence,
     onEvent: handleEvent,
+    onReconnect: refreshBoard,
     onMutationConflict: () => {
       addToast('A mutation conflicted with a remote change and was discarded.', 'conflict');
     },
@@ -283,9 +315,8 @@ const BoardPage = () => {
     boardId: realtimeBoardId,
     active: pollingActive,
     lastSequence,
-    onEvents: (events) => {
-      events.forEach(handleEvent);
-    },
+    onEvents: applyPolledEvents,
+    fetchSnapshot: refreshBoard,
   });
 
   useEffect(() => {

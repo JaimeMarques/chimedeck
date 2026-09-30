@@ -19,6 +19,8 @@ export interface BoardState {
   cardsByList: Record<string, string[]>; // listId → ordered card IDs
   cards: Record<string, Card>;
   status: 'idle' | 'loading' | 'error';
+  fetchRequestId?: string;
+  hydrationRequestIds?: Record<string, string>;
   listHydration: Record<string, ListCardHydration & { loading: boolean; error: boolean }>;
   /** Snapshot taken at drag-start; used for rollback on API failure */
   dragSnapshot: {
@@ -46,7 +48,7 @@ export const fetchBoardDataThunk = createAppAsyncThunk(
     {
       boardId,
       initialCardsPerList,
-    }: { boardId: string; initialCardsPerList?: number },
+    }: { boardId: string; initialCardsPerList?: number; background?: boolean },
     { extra },
   ) => {
     return getBoard({
@@ -226,7 +228,8 @@ const boardSlice = createSlice({
       if (!state.listOrder.includes(list.id)) {
         state.listOrder.push(list.id);
       }
-      state.cardsByList[list.id] = [];
+      // [why] Replayed creation events must preserve already hydrated cards.
+      state.cardsByList[list.id] ??= [];
     },
 
     /** Update a list's fields (e.g. title rename from WS event) */
@@ -365,10 +368,13 @@ const boardSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(fetchBoardDataThunk.pending, (state) => {
-        state.status = 'loading';
+      .addCase(fetchBoardDataThunk.pending, (state, action) => {
+        state.fetchRequestId = action.meta.requestId;
+        if (!action.meta.arg.background) state.status = 'loading';
       })
       .addCase(fetchBoardDataThunk.fulfilled, (state, action) => {
+        if (state.fetchRequestId !== action.meta.requestId) return;
+        delete state.fetchRequestId;
         state.status = 'idle';
         state.board = action.payload.data;
 
@@ -387,6 +393,7 @@ const boardSlice = createSlice({
         state.cards = Object.fromEntries(rawCards.map((c) => [c.id, c]));
         state.cardsByList = {};
         state.listHydration = {};
+        state.hydrationRequestIds = {};
         for (const list of sortedLists) {
           const cardsInList = rawCards
             .filter((c) => c.list_id === list.id && !c.archived)
@@ -414,11 +421,15 @@ const boardSlice = createSlice({
           };
         }
       })
-      .addCase(fetchBoardDataThunk.rejected, (state) => {
-        state.status = 'error';
+      .addCase(fetchBoardDataThunk.rejected, (state, action) => {
+        if (state.fetchRequestId !== action.meta.requestId) return;
+        delete state.fetchRequestId;
+        if (!action.meta.arg.background) state.status = 'error';
       })
       .addCase(fetchListCardsBatchThunk.pending, (state, action) => {
         const { listId } = action.meta.arg;
+        state.hydrationRequestIds ??= {};
+        state.hydrationRequestIds[listId] = action.meta.requestId;
         const current = state.listHydration[listId];
         state.listHydration[listId] = {
           loaded: current?.loaded ?? 0,
@@ -431,6 +442,8 @@ const boardSlice = createSlice({
       })
       .addCase(fetchListCardsBatchThunk.fulfilled, (state, action) => {
         const { listId, data, metadata } = action.payload;
+        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId) return;
+        state.hydrationRequestIds[listId] = '';
         const currentIds = state.cardsByList[listId] ?? [];
         const mergedIds = [...currentIds];
 
@@ -458,6 +471,8 @@ const boardSlice = createSlice({
       })
       .addCase(fetchListCardsBatchThunk.rejected, (state, action) => {
         const { listId } = action.meta.arg;
+        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId) return;
+        state.hydrationRequestIds[listId] = '';
         const current = state.listHydration[listId];
         if (!current) return;
         state.listHydration[listId] = {

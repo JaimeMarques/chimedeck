@@ -15,6 +15,8 @@ interface UsePollingFallbackOptions {
   lastSequence: number;
   /** Called with each batch of new events from the server */
   onEvents: (events: RealtimeEvent[]) => void;
+  /** Snapshot fallback for callers without a reliable event cursor. */
+  fetchSnapshot?: () => Promise<unknown>;
 }
 
 export function usePollingFallback({
@@ -22,6 +24,7 @@ export function usePollingFallback({
   active,
   lastSequence,
   onEvents,
+  fetchSnapshot,
 }: UsePollingFallbackOptions): void {
   const lastSeqRef = useRef(lastSequence);
   const activeRef = useRef(active);
@@ -36,6 +39,10 @@ export function usePollingFallback({
   const poll = useCallback(async () => {
     if (!activeRef.current) return;
     try {
+      if (fetchSnapshot) {
+        await fetchSnapshot();
+        return;
+      }
       // apiClient response interceptor auto-unwraps to response.data
       const result = (await apiClient.get(
         `/boards/${boardId}/events?since=${String(lastSeqRef.current)}`
@@ -61,7 +68,7 @@ export function usePollingFallback({
     } catch {
       // Transient network error — silently retry next interval
     }
-  }, [boardId, onEvents]);
+  }, [boardId, onEvents, fetchSnapshot]);
 
   useEffect(() => {
     if (!active) {

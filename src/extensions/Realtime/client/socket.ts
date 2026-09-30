@@ -33,7 +33,7 @@ const MAX_BACKOFF_MS = 30_000;
 // Number of consecutive WS failures before activating HTTP polling fallback
 const POLLING_FALLBACK_THRESHOLD = 3;
 
-class RealtimeSocket {
+export class RealtimeSocket {
   private ws: WebSocket | null = null;
   private token: string | null = null;
   private connectionRefCount = 0;
@@ -42,6 +42,8 @@ class RealtimeSocket {
   private backoffMs = 1_000;
   private intentionalClose = false;
   private failedAttempts = 0;
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private lastFrameAt = 0;
 
   private handlers: Set<WsEventHandler> = new Set();
   private openHandlers: Set<() => void> = new Set();
@@ -100,10 +102,12 @@ class RealtimeSocket {
 
     this.intentionalClose = true;
     this._clearReconnect();
+    this._clearWatchdog();
     this.failedAttempts = 0;
     if (this.ws) {
-      this.ws.close();
+      const ws = this.ws;
       this.ws = null;
+      ws.close();
     }
   }
 
@@ -132,6 +136,20 @@ class RealtimeSocket {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
+  /** Recover a half-open connection after sleep, or bypass suspended backoff. */
+  recover() {
+    if (this.intentionalClose || this.connectionRefCount === 0) return;
+    if (this.ws && Date.now() - this.lastFrameAt > 60_000) {
+      const ws = this.ws;
+      this.ws = null;
+      this._clearWatchdog();
+      ws.close();
+      this._recordFailure();
+    }
+    this._clearReconnect();
+    this._open();
+  }
+
   // ---------- Internal ----------
 
   private _open() {
@@ -141,9 +159,16 @@ class RealtimeSocket {
     }
 
     const url = `${this._wsBase()}/api/v1/ws?token=${encodeURIComponent(this.token)}`;
-    this.ws = new WebSocket(url);
+    this._clearReconnect();
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    this.lastFrameAt = Date.now();
+    this._clearWatchdog();
+    this.watchdogTimer = setInterval(() => { this.recover(); }, 30_000);
 
-    this.ws.addEventListener('open', () => {
+    ws.addEventListener('open', () => {
+      if (this.ws !== ws) return;
+      this.lastFrameAt = Date.now();
       const wasPolling = this.failedAttempts >= POLLING_FALLBACK_THRESHOLD;
       this.backoffMs = 1_000;
       this.failedAttempts = 0;
@@ -158,9 +183,17 @@ class RealtimeSocket {
       }
     });
 
-    this.ws.addEventListener('message', (ev: MessageEvent<string>) => {
+    ws.addEventListener('message', (ev: MessageEvent<string>) => {
+      if (this.ws !== ws) return;
+      this.lastFrameAt = Date.now();
       try {
         const event = JSON.parse(ev.data) as RealtimeEvent;
+        // [why] The server records client ping frames as its heartbeat response.
+        if (event.type === 'ping') {
+          this.send({ type: 'ping' });
+          return;
+        }
+        if (event.type === 'pong') return;
         this.handlers.forEach((h) => {
           try {
             h(event);
@@ -173,26 +206,23 @@ class RealtimeSocket {
       }
     });
 
-    this.ws.addEventListener('close', (ev: CloseEvent) => {
+    ws.addEventListener('close', (ev: CloseEvent) => {
+      if (this.ws !== ws) return;
       this.ws = null;
+      this._clearWatchdog();
       // Code 4001 = server-initiated forced logout (session revoked)
       if (ev.code === 4001) {
         this.intentionalClose = true;
         this.forcedLogoutCallback?.();
         return;
       }
-      this.failedAttempts++;
-      this.closeHandlers.forEach((h) => { h(); });
       if (!this.intentionalClose && this.connectionRefCount > 0) {
-        // Activate polling fallback once threshold is reached
-        if (this.failedAttempts === POLLING_FALLBACK_THRESHOLD) {
-          this.pollingActiveHandlers.forEach((h) => { h(); });
-        }
+        this._recordFailure();
         this._scheduleReconnect();
       }
     });
 
-    this.ws.addEventListener('error', () => {
+    ws.addEventListener('error', () => {
       // 'close' will fire right after; reconnect is handled there
     });
   }
@@ -200,6 +230,7 @@ class RealtimeSocket {
   private _scheduleReconnect() {
     this._clearReconnect();
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       if (this.connectionRefCount === 0) {
         return;
       }
@@ -208,10 +239,25 @@ class RealtimeSocket {
     }, this.backoffMs);
   }
 
+  private _recordFailure() {
+    this.failedAttempts++;
+    this.closeHandlers.forEach((h) => { h(); });
+    if (this.failedAttempts === POLLING_FALLBACK_THRESHOLD) {
+      this.pollingActiveHandlers.forEach((h) => { h(); });
+    }
+  }
+
   private _clearReconnect() {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private _clearWatchdog() {
+    if (this.watchdogTimer !== null) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
     }
   }
 
