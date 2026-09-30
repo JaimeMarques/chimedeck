@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { mock } from 'bun:test';
-import { AxiosError } from 'axios';
+import { AxiosError, AxiosHeaders } from 'axios';
+import type { AppDispatch } from '~/store';
 import { configureStore } from '@reduxjs/toolkit';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost' });
@@ -40,6 +41,7 @@ const { useWebSocket } = await import('../../hooks/useWebSocket');
 const { usePollingFallback } = await import('../../PollingFallback');
 const { useBoardSnapshot } = await import('../../hooks/useBoardSnapshot');
 const { messageQueue } = await import('../../client/messageQueue');
+const { RetryableRecoveryError } = await import('../../../../common/api/recoveryErrors');
 
 socket.connect({ token: 'token' });
 FakeWebSocket.current.open();
@@ -111,6 +113,9 @@ const renewingHook = renderHook(({ token }) => useWebSocket({
 }), { initialProps: { token: 'old-token' } });
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
 assert.equal(renewedSnapshots, 0);
+renewingHook.rerender({ token: 'healthy-refreshed-token' });
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(renewedSnapshots, 1, 'healthy same-board HTTP token replacement still reconciles its connection gap');
 act(() => { FakeWebSocket.current.closed(4001, 'session expired'); });
 renewingHook.rerender({ token: 'renewed-token' });
 await act(async () => {
@@ -118,11 +123,11 @@ await act(async () => {
   await Promise.resolve();
 });
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
-assert.equal(renewedSnapshots, 1, 'same-board token lifecycle preserves real recovery intent');
+assert.equal(renewedSnapshots, 2, 'same-board token lifecycle preserves real recovery intent');
 act(() => { FakeWebSocket.current.closed(); });
 renewingHook.rerender({ token: 'http-renewed-token' });
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
-assert.equal(renewedSnapshots, 2, 'HTTP renewal during transport outage still reconciles once');
+assert.equal(renewedSnapshots, 3, 'HTTP renewal during transport outage still reconciles once');
 renewingHook.unmount();
 
 let completeMutation: ((response: Response) => void) | undefined;
@@ -251,6 +256,39 @@ await act(async () => { scheduledRetry?.(); await Promise.resolve(); });
 assert.equal(staleRetries, 3, 'repeated live collisions eventually recover after traffic settles');
 assert.equal(scheduledRetry, null, 'accepted snapshot stops retrying');
 retryHook.unmount();
+const { default: boardReducer, fetchBoardDataThunk, shouldRetryBoardSnapshot } =
+  await import('../../../Board/slices/boardSlice');
+let recoveryGets = 0;
+const recoveryStore = configureStore({
+  reducer: { board: boardReducer },
+  middleware: (defaults) => defaults({ thunk: { extraArgument: { api: {
+    get: () => {
+      recoveryGets++;
+      if (recoveryGets === 1) {
+        const error = new AxiosError('Temporary outage');
+        error.response = { status: 502, statusText: 'Bad Gateway', data: null, headers: {}, config: { headers: new AxiosHeaders() } };
+        return Promise.reject(error);
+      }
+      return Promise.resolve({ data: { id: 'b1', title: 'Recovered' }, includes: { lists: [], cards: [] } });
+    },
+  } } } }),
+});
+const recoveryDispatch = recoveryStore.dispatch as unknown as AppDispatch;
+const failedSnapshotHook = renderHook(() => useBoardSnapshot({
+  boardId: 'b1',
+  fetchSnapshot: () => recoveryDispatch(fetchBoardDataThunk({ boardId: 'b1', background: true })),
+  shouldRetry: (result) => shouldRetryBoardSnapshot({
+    result, appliedRequestId: recoveryStore.getState().board.appliedSnapshotRequestId,
+  }),
+}));
+await act(async () => { await failedSnapshotHook.result.current(); });
+assert.equal(recoveryGets, 1);
+assert.notEqual(scheduledRetry, null, 'temporary recovery GET failure schedules bounded retry');
+await act(async () => { scheduledRetry?.(); await Promise.resolve(); });
+assert.equal(recoveryGets, 2);
+assert.equal(recoveryStore.getState().board.board?.title, 'Recovered');
+assert.equal(scheduledRetry, null, 'successful retried snapshot stops retrying');
+failedSnapshotHook.unmount();
 globalThis.setTimeout = originalSetTimeout;
 globalThis.clearTimeout = originalClearTimeout;
 
@@ -313,5 +351,31 @@ const newSessionRenewal = renewAccessToken();
 for (let index = 0; index < 10; index++) await Promise.resolve();
 completeRefresh?.({ data: { user, accessToken: 'fresh-token' } });
 assert.equal(await newSessionRenewal, 'fresh-token', 'a new validated login permits its own renewal');
+let failTransientRefresh: ((error: unknown) => void) | undefined;
+let transientRefreshCalls = 0;
+apiClient.defaults.adapter = async (config) => {
+  if (config.url === '/auth/refresh') {
+    transientRefreshCalls++;
+    await new Promise((_resolve, reject) => { failTransientRefresh = reject; });
+    throw new Error('Expected deferred refresh failure');
+  }
+  throw new AxiosError('Expired token', '401', config, undefined, {
+    config, status: 401, statusText: 'Unauthorized', headers: {},
+    data: { error: { message: 'Invalid or expired access token' } },
+  });
+};
+const temporaryRenewals = Promise.allSettled([apiClient.get('/transient'), renewAccessToken()]);
+for (let index = 0; index < 10; index++) await Promise.resolve();
+assert.equal(transientRefreshCalls, 1);
+const unavailable = new AxiosError('Refresh unavailable');
+unavailable.response = { status: 503, statusText: 'Unavailable', headers: {}, data: null, config: { headers: new AxiosHeaders() } };
+failTransientRefresh?.(unavailable);
+const temporaryResults = await temporaryRenewals;
+for (const result of temporaryResults) {
+  assert.equal(result.status, 'rejected');
+  assert.ok(result.reason instanceof RetryableRecoveryError);
+}
+assert.equal(authStore.getState().auth.status, 'authenticated', 'shared transient refresh cannot log out the HTTP participant');
+assert.equal(authStore.getState().auth.accessToken, 'fresh-token');
 dom.window.close();
 console.info('hook recovery and snapshot polling passed');

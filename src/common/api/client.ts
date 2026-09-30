@@ -1,6 +1,7 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 import { shouldAttachAccessToken, shouldAttemptAuthRecovery } from './requestPolicy';
 import type { AuthResponse } from '~/extensions/Auth/api/auth';
+import { isRetryableRequestError, RetryableRecoveryError } from './recoveryErrors';
 
 // Token getter is set lazily from main.tsx after the store is created.
 // This avoids a circular dependency between the API client and the Redux store.
@@ -57,6 +58,12 @@ export function renewAccessToken(): Promise<string> {
       credentialsCallback?.(credentials);
       didHandleSessionExpiry = false;
       return credentials.accessToken;
+    }).catch((error: unknown) => {
+      if (generation !== authGeneration || authRecoveryBlocked || (tokenGetter?.() ?? null) !== previousToken) {
+        throw new AuthRecoveryCancelledError('Session changed during renewal');
+      }
+      if (isRetryableRequestError(error)) throw new RetryableRecoveryError('Session renewal temporarily unavailable');
+      throw error;
     }).finally(() => {
       if (refreshRequestPromise === request) refreshRequestPromise = null;
     });
@@ -116,7 +123,7 @@ apiClient.interceptors.response.use(
       token = currentToken && originalRequest.headers.Authorization !== `Bearer ${currentToken}`
         ? currentToken : await renewAccessToken();
     } catch (renewalError) {
-      if (renewalError instanceof AuthRecoveryCancelledError) throw renewalError;
+      if (renewalError instanceof AuthRecoveryCancelledError || renewalError instanceof RetryableRecoveryError) throw renewalError;
       if (!didHandleSessionExpiry) {
         didHandleSessionExpiry = true;
         cancelAuthRecovery();

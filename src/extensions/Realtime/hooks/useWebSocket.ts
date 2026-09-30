@@ -64,8 +64,16 @@ export function useWebSocket({
   const activeRef = useRef(false);
   const generationRef = useRef(0);
   const recoveryRef = useRef(false);
+  const connectedOnceRef = useRef(socket.isConnected);
+  const tokenRef = useRef(token);
   const boardRef = useRef(boardId);
-  if (boardRef.current !== boardId) recoveryRef.current = false;
+  if (boardRef.current !== boardId) {
+    recoveryRef.current = false;
+    connectedOnceRef.current = false;
+  } else if (tokenRef.current !== token && connectedOnceRef.current) {
+    recoveryRef.current = true;
+  }
+  tokenRef.current = token;
   boardRef.current = boardId;
 
   // Keep lastSequence ref current so reconnect handler always uses latest value
@@ -113,6 +121,7 @@ export function useWebSocket({
   const handleOpen = useCallback(async (recovered: boolean) => {
     const generation = generationRef.current;
     const needsRecovery = recovered || recoveryRef.current;
+    connectedOnceRef.current = true;
     recoveryRef.current = needsRecovery;
     setConnectionState('connected');
 

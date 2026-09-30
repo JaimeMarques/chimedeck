@@ -15,6 +15,7 @@ import { useStore } from 'react-redux';
 import type { RootState } from '~/store';
 import {
   fetchBoardDataThunk,
+  shouldRetryBoardSnapshot,
   boardSliceActions,
   selectBoard,
   selectListOrder,
@@ -274,12 +275,9 @@ const BoardPage = () => {
     fetchSnapshot: () => dispatch(fetchBoardDataThunk({
       boardId: boardId ?? '', initialCardsPerList, background: true,
     })),
-    shouldRetry: (result) => {
-      const action = result as { type: string; payload?: unknown; meta: { condition?: boolean; requestId: string } };
-      return action.payload === 'snapshot-stale' || action.meta.condition === true
-        || (action.type === fetchBoardDataThunk.fulfilled.type
-          && store.getState().board.appliedSnapshotRequestId !== action.meta.requestId);
-    },
+    shouldRetry: (result) => shouldRetryBoardSnapshot({
+      result, appliedRequestId: store.getState().board.appliedSnapshotRequestId,
+    }),
   });
   const applyPolledEvents = useCallback((events: Parameters<typeof handleEvent>[0][]) => {
     events.forEach(handleEvent);

@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { configureStore } from '@reduxjs/toolkit';
 import type { AppDispatch } from '~/store';
+import { AxiosError, AxiosHeaders } from 'axios';
 import type { Board } from '../../api';
 import type { List } from '../../../List/api';
 import type { Card } from '../../../Card/api';
-import reducer, { boardSliceActions, fetchBoardDataThunk, fetchListCardsBatchThunk } from '../boardSlice';
+import reducer, { boardSliceActions, fetchBoardDataThunk, fetchListCardsBatchThunk, shouldRetryBoardSnapshot } from '../boardSlice';
 
 const lists = ['l1', 'l2'].map((id, index) => ({ id, title: id, position: String(index), archived: false }) as List);
 const cards = lists.map((list, index) => ({ id: `c${String(index + 1)}`, title: 'Card', list_id: list.id, position: 'a', archived: false }) as Card);
@@ -135,5 +136,25 @@ describe('board reconnect snapshots', () => {
     store.dispatch(boardSliceActions.clearDragSnapshot());
     await dispatch(fetchBoardDataThunk(arg));
     expect(calls).toBe(1);
+  });
+
+  test('failed background snapshots retain UI and retry only transient outages', async () => {
+    for (const [status, expected] of [[502, true], [401, false], [403, false], [404, false]] as const) {
+      const error = new AxiosError('Unavailable');
+      error.response = { status, statusText: 'Failure', data: null, headers: {}, config: { headers: new AxiosHeaders() } };
+      const store = configureStore({
+        reducer: { board: reducer }, preloadedState: { board: hydrated() },
+        middleware: (defaults) => defaults({ thunk: { extraArgument: { api: {
+          get: () => Promise.reject(error),
+        } } } }),
+      });
+      const dispatch = store.dispatch as unknown as AppDispatch;
+      const result = await dispatch(fetchBoardDataThunk(arg));
+      expect(shouldRetryBoardSnapshot({ result, appliedRequestId: store.getState().board.appliedSnapshotRequestId })).toBe(expected);
+      expect(store.getState().board.status).toBe('idle');
+      expect(store.getState().board.cardsByList.l1).toEqual(['c1']);
+    }
+    const cancelled = fetchBoardDataThunk.rejected(Object.assign(new Error('Aborted'), { name: 'AbortError' }), 'aborted', arg);
+    expect(shouldRetryBoardSnapshot({ result: cancelled, appliedRequestId: undefined })).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { RealtimeSocket } from '../client/socket';
+import { RetryableRecoveryError } from '~/common/api/recoveryErrors';
 
 class FakeWebSocket extends EventTarget {
   static readonly OPEN = 1;
@@ -183,5 +184,70 @@ describe('production socket recovery', () => {
     await Promise.resolve();
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(timers.size).toBe(0);
+  });
+
+  test('transient renewal failures retry with fallback without reopening the expired token', async () => {
+    latest().open();
+    let attempts = 0;
+    let logouts = 0;
+    client.setExpiredTokenCallback(() => {
+      attempts++;
+      return attempts <= 3
+        ? Promise.reject(new RetryableRecoveryError('Refresh unavailable'))
+        : Promise.resolve('fresh-token');
+    });
+    client.setForcedLogoutCallback(() => { logouts++; });
+    latest().closed(4001, 'session expired');
+    for (let index = 0; index < 3; index++) {
+      await Promise.resolve();
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      tick(1_000 * 2 ** index);
+    }
+    expect(client.usingPollingFallback).toBe(true);
+    await Promise.resolve();
+    expect(attempts).toBe(4);
+    expect(logouts).toBe(0);
+    expect(latest().url).toContain('token=fresh-token');
+    latest().open();
+    expect(client.usingPollingFallback).toBe(false);
+  });
+
+  test('board subscriber replacement during renewal opens the validated token', async () => {
+    latest().open();
+    let finish: ((token: string) => void) | undefined;
+    client.setExpiredTokenCallback(() => new Promise((resolve) => { finish = resolve; }));
+    latest().closed(4001, 'session expired');
+    client.disconnect({ boardId: 'b1' });
+    client.connect({ boardId: 'b2', token: 'token' });
+    finish?.('fresh-token');
+    await Promise.resolve();
+    expect(latest().url).toContain('token=fresh-token');
+    client.disconnect({ boardId: 'b2' });
+  });
+
+  test('newer supplied session token wins over a retired renewal response', async () => {
+    latest().open();
+    let finish: ((token: string) => void) | undefined;
+    client.setExpiredTokenCallback(() => new Promise((resolve) => { finish = resolve; }));
+    latest().closed(4001, 'session expired');
+    client.disconnect({ boardId: 'b1' });
+    client.connect({ boardId: 'b2', token: 'new-session-token' });
+    finish?.('retired-token');
+    await Promise.resolve();
+    expect(latest().url).toContain('token=new-session-token');
+    client.disconnect({ boardId: 'b2' });
+  });
+
+  test('disconnect cancels a scheduled transient renewal retry', async () => {
+    latest().open();
+    let attempts = 0;
+    client.setExpiredTokenCallback(() => { attempts++; return Promise.reject(new RetryableRecoveryError('Unavailable')); });
+    latest().closed(4001, 'session expired');
+    await Promise.resolve();
+    client.disconnect({ boardId: 'b1' });
+    tick(30_000);
+    expect(attempts).toBe(1);
+    expect(timers.size).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

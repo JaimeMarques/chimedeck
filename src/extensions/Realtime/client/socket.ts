@@ -3,6 +3,7 @@
 //
 // WHY singleton: one physical WebSocket per browser tab is enough; all Redux
 // middleware and React hooks share the same connection object.
+import { RetryableRecoveryError } from '~/common/api/recoveryErrors';
 
 export type WsEventHandler = (event: RealtimeEvent) => void;
 
@@ -44,8 +45,10 @@ export class RealtimeSocket {
   private failedAttempts = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private lastFrameAt = 0;
-  private renewalGeneration = 0;
+  private renewalAttemptId = 0;
   private renewingToken = false;
+  private needsTokenRenewal = false;
+  private renewalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryPending = false;
   private expiredTokenCallback: (() => Promise<string | null>) | null = null;
 
@@ -77,6 +80,10 @@ export class RealtimeSocket {
   connect({ boardId, token }: { boardId?: string; token: string }) {
     this.connectionRefCount += 1;
     if (this.renewingToken) this.recoveryPending = true;
+    if (this.token !== token) {
+      this.needsTokenRenewal = false;
+      this._clearRenewalRetry();
+    }
     if (this.token !== token && this.ws) {
       this.recoveryPending = true;
       const ws = this.ws;
@@ -118,8 +125,8 @@ export class RealtimeSocket {
     }
 
     this.intentionalClose = true;
-    this.renewalGeneration++;
     this._clearReconnect();
+    this._clearRenewalRetry();
     this._clearWatchdog();
     this.failedAttempts = 0;
     this.recoveryPending = false;
@@ -158,6 +165,11 @@ export class RealtimeSocket {
   /** Recover a half-open connection after sleep, or bypass suspended backoff. */
   recover() {
     if (this.intentionalClose || this.renewingToken || this.connectionRefCount === 0) return;
+    if (this.needsTokenRenewal) {
+      this._clearRenewalRetry();
+      void this._renewExpiredToken();
+      return;
+    }
     if (this.ws && Date.now() - this.lastFrameAt > 60_000) {
       const ws = this.ws;
       this.ws = null;
@@ -173,6 +185,10 @@ export class RealtimeSocket {
 
   private _open() {
     if (!this.token || this.renewingToken || this.connectionRefCount === 0) return;
+    if (this.needsTokenRenewal) {
+      if (this.renewalRetryTimer === null) void this._renewExpiredToken();
+      return;
+    }
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -235,12 +251,14 @@ export class RealtimeSocket {
       if (ev.code === 4001) {
         if (ev.reason === 'session expired' && this.expiredTokenCallback) {
           this.recoveryPending = true;
+          this.needsTokenRenewal = true;
           this.closeHandlers.forEach((h) => { h(); });
           void this._renewExpiredToken();
           return;
         }
         this.intentionalClose = true;
-        this.renewalGeneration++;
+        this.needsTokenRenewal = false;
+        this._clearRenewalRetry();
         this.forcedLogoutCallback?.();
         return;
       }
@@ -277,23 +295,50 @@ export class RealtimeSocket {
   }
 
   private async _renewExpiredToken() {
-    const generation = ++this.renewalGeneration;
+    if (this.renewingToken || this.connectionRefCount === 0 || this.intentionalClose) return;
+    const attemptId = ++this.renewalAttemptId;
+    const tokenAtStart = this.token;
     this.renewingToken = true;
+    let canOpen = false;
     try {
       const token = await this.expiredTokenCallback?.();
-      if (generation !== this.renewalGeneration || this.connectionRefCount === 0) return;
+      if (attemptId !== this.renewalAttemptId) return;
       if (!token) {
-        this.intentionalClose = true;
+        if (this.token === tokenAtStart) this.intentionalClose = true;
+        else canOpen = true;
         return;
       }
-      this.token = token;
-    } catch {
-      if (generation !== this.renewalGeneration || this.connectionRefCount === 0) return;
-      this.intentionalClose = true;
-      this.forcedLogoutCallback?.();
+      // [why] Board navigation may replace subscribers during validated renewal.
+      // Keep a newer token supplied by connect; otherwise adopt the validated token.
+      if (this.token === tokenAtStart) this.token = token;
+      this.needsTokenRenewal = false;
+      canOpen = true;
+    } catch (error) {
+      if (attemptId !== this.renewalAttemptId || this.connectionRefCount === 0) return;
+      if (this.token !== tokenAtStart) {
+        this.needsTokenRenewal = false;
+        canOpen = true;
+      } else if (error instanceof RetryableRecoveryError) {
+        this._recordFailure();
+        this.renewalRetryTimer = setTimeout(() => {
+          this.renewalRetryTimer = null;
+          void this._renewExpiredToken();
+        }, this.backoffMs);
+        this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
+      } else {
+        this.intentionalClose = true;
+        this.forcedLogoutCallback?.();
+      }
     } finally {
       this.renewingToken = false;
-      if (!this.intentionalClose && this.connectionRefCount > 0) this._open();
+      if (canOpen && !this.intentionalClose && this.connectionRefCount > 0) this._open();
+    }
+  }
+
+  private _clearRenewalRetry() {
+    if (this.renewalRetryTimer !== null) {
+      clearTimeout(this.renewalRetryTimer);
+      this.renewalRetryTimer = null;
     }
   }
 

@@ -6,6 +6,7 @@ import { getBoard, listCardsByListBatch, type Board, type ListCardHydration } fr
 import type { List } from '../../List/api';
 import type { ListSortBy } from '../../List/types';
 import type { Card } from '../../Card/api';
+import { isRetryableRequestError } from '~/common/api/recoveryErrors';
 
 const INITIAL_CARDS_PER_LIST = 50;
 const DEFAULT_HYDRATION_BATCH_SIZE = 50;
@@ -57,15 +58,22 @@ export const fetchBoardDataThunk = createAppAsyncThunk(
     { extra, getState, rejectWithValue },
   ) => {
     const revision = (getState() as unknown as { board: BoardState }).board.revision;
-    const response = await getBoard({
-      api: (extra as { api: { get: <T>(url: string) => Promise<T> } }).api,
-      boardId,
-      ...(background ? {} : { initialCardsPerList:
-        typeof initialCardsPerList === 'number' && initialCardsPerList > 0
-          ? initialCardsPerList
-          : INITIAL_CARDS_PER_LIST,
-      }),
-    });
+    let response: Awaited<ReturnType<typeof getBoard>>;
+    try {
+      response = await getBoard({
+        api: (extra as { api: { get: <T>(url: string) => Promise<T> } }).api,
+        boardId,
+        ...(background ? {} : {
+          initialCardsPerList:
+            typeof initialCardsPerList === 'number' && initialCardsPerList > 0
+              ? initialCardsPerList
+              : INITIAL_CARDS_PER_LIST,
+        }),
+      });
+    } catch (error) {
+      if (background) return rejectWithValue({ retryable: isRetryableRequestError(error) });
+      throw error;
+    }
     const current = (getState() as unknown as { board: BoardState }).board;
     if (background && (current.revision !== revision || current.dragSnapshot)) {
       return rejectWithValue('snapshot-stale');
@@ -507,6 +515,18 @@ const boardSlice = createSlice({
 });
 
 export const boardSliceActions = boardSlice.actions;
+export function shouldRetryBoardSnapshot({ result, appliedRequestId }: {
+  result: unknown;
+  appliedRequestId: string | undefined;
+}): boolean {
+  const action = result as { type: string; payload?: unknown; meta: { condition?: boolean; requestId: string; aborted?: boolean } };
+  if (action.meta.aborted) return false;
+  return action.payload === 'snapshot-stale' || action.meta.condition === true
+    || (typeof action.payload === 'object' && action.payload !== null
+      && (action.payload as { retryable?: boolean }).retryable === true)
+    || (action.type === fetchBoardDataThunk.fulfilled.type && appliedRequestId !== action.meta.requestId);
+}
+
 export default function boardReducer(
   state: Parameters<typeof boardSlice.reducer>[0],
   action: Parameters<typeof boardSlice.reducer>[1],
