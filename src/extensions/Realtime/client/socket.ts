@@ -17,7 +17,7 @@ export interface RealtimeEvent {
 
 interface SocketOptions {
   /** Called when the connection opens (or re-opens after reconnect) */
-  onOpen?: () => void;
+  onOpen?: (recovered: boolean) => void;
   /** Called when the connection closes unexpectedly */
   onClose?: () => void;
   /** Called on each incoming parsed event */
@@ -46,10 +46,11 @@ export class RealtimeSocket {
   private lastFrameAt = 0;
   private renewalGeneration = 0;
   private renewingToken = false;
+  private recoveryPending = false;
   private expiredTokenCallback: (() => Promise<string | null>) | null = null;
 
   private handlers: Set<WsEventHandler> = new Set();
-  private openHandlers: Set<() => void> = new Set();
+  private openHandlers: Set<(recovered: boolean) => void> = new Set();
   private closeHandlers: Set<() => void> = new Set();
   private pollingActiveHandlers: Set<() => void> = new Set();
   private pollingInactiveHandlers: Set<() => void> = new Set();
@@ -75,7 +76,9 @@ export class RealtimeSocket {
 
   connect({ boardId, token }: { boardId?: string; token: string }) {
     this.connectionRefCount += 1;
+    if (this.renewingToken) this.recoveryPending = true;
     if (this.token !== token && this.ws) {
+      this.recoveryPending = true;
       const ws = this.ws;
       this.ws = null;
       this._clearWatchdog();
@@ -119,6 +122,7 @@ export class RealtimeSocket {
     this._clearReconnect();
     this._clearWatchdog();
     this.failedAttempts = 0;
+    this.recoveryPending = false;
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
@@ -191,7 +195,9 @@ export class RealtimeSocket {
       for (const activeBoardId of this.boardRefCounts.keys()) {
         this.send({ type: 'subscribe', board_id: activeBoardId });
       }
-      this.openHandlers.forEach((h) => { h(); });
+      const recovered = this.recoveryPending;
+      this.recoveryPending = false;
+      this.openHandlers.forEach((h) => { h(recovered); });
       // Notify that polling is no longer needed now that WS is back
       if (wasPolling) {
         this.pollingInactiveHandlers.forEach((h) => { h(); });
@@ -228,6 +234,7 @@ export class RealtimeSocket {
       // Code 4001 = server-initiated forced logout (session revoked)
       if (ev.code === 4001) {
         if (ev.reason === 'session expired' && this.expiredTokenCallback) {
+          this.recoveryPending = true;
           this.closeHandlers.forEach((h) => { h(); });
           void this._renewExpiredToken();
           return;
@@ -261,6 +268,7 @@ export class RealtimeSocket {
   }
 
   private _recordFailure() {
+    this.recoveryPending = true;
     this.failedAttempts++;
     this.closeHandlers.forEach((h) => { h(); });
     if (this.failedAttempts === POLLING_FALLBACK_THRESHOLD) {

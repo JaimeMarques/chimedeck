@@ -63,7 +63,9 @@ export function useWebSocket({
   const isReplayingRef = useRef(false);
   const activeRef = useRef(false);
   const generationRef = useRef(0);
+  const recoveryRef = useRef(false);
   const boardRef = useRef(boardId);
+  if (boardRef.current !== boardId) recoveryRef.current = false;
   boardRef.current = boardId;
 
   // Keep lastSequence ref current so reconnect handler always uses latest value
@@ -108,12 +110,14 @@ export function useWebSocket({
     isReplayingRef.current = false;
   }, [token, onMutationConflict]);
 
-  const handleOpen = useCallback(async () => {
+  const handleOpen = useCallback(async (recovered: boolean) => {
     const generation = generationRef.current;
+    const needsRecovery = recovered || recoveryRef.current;
+    recoveryRef.current = needsRecovery;
     setConnectionState('connected');
 
     // Re-sync missed events from server
-    if (fetchMissedEvents) {
+    if (needsRecovery && fetchMissedEvents) {
       try {
         const missed = await fetchMissedEvents(boardId, lastSeqRef.current);
         for (const ev of missed) {
@@ -125,13 +129,18 @@ export function useWebSocket({
     }
 
     // Replay queued mutations in order
+    const hadQueuedMutations = messageQueue.size() > 0;
+    if (hadQueuedMutations) recoveryRef.current = true;
     await replayQueue();
-    if (activeRef.current && generationRef.current === generation && boardRef.current === boardId) {
+    if ((needsRecovery || hadQueuedMutations) && activeRef.current
+      && generationRef.current === generation && boardRef.current === boardId) {
+      recoveryRef.current = false;
       await callbacksRef.current.onReconnect?.();
     }
   }, [boardId, fetchMissedEvents, onEvent, replayQueue, onReconnect]);
 
   const handleClose = useCallback(() => {
+    recoveryRef.current = true;
     setConnectionState('reconnecting');
   }, []);
 
@@ -153,7 +162,7 @@ export function useWebSocket({
         pingPropagationDelay(event);
         callbacksRef.current.onEvent(event);
       },
-      onOpen: () => { void callbacksRef.current.handleOpen(); },
+      onOpen: (recovered) => { void callbacksRef.current.handleOpen(recovered); },
       onClose: handleClose,
       onPollingActive: () => { setPollingActive(true); },
       onPollingInactive: () => { setPollingActive(false); },
@@ -166,8 +175,6 @@ export function useWebSocket({
     const recover = () => {
       if (document.visibilityState === 'hidden') return;
       socket.recover();
-      if (socket.isConnected) void callbacksRef.current.handleOpen();
-      else void callbacksRef.current.onReconnect?.();
     };
     window.addEventListener('online', recover);
     document.addEventListener('visibilitychange', recover);

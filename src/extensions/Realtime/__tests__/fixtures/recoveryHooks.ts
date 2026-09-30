@@ -23,6 +23,10 @@ class FakeWebSocket extends EventTarget {
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.dispatchEvent(new Event('open')); }
   message() { this.dispatchEvent(new MessageEvent('message', { data: '{"type":"board_event"}' })); }
+  closed(code = 1006, reason = '') {
+    this.readyState = 3;
+    this.dispatchEvent(Object.assign(new Event('close'), { code, reason }));
+  }
 }
 globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
 // [why] Only IndexedDB persistence is replaced; socket, queue and hooks are real.
@@ -57,18 +61,69 @@ await act(async () => {
   document.dispatchEvent(new dom.window.Event('visibilitychange'));
   await Promise.resolve();
 });
-assert.equal(snapshots, 1, 'returning to visible tab refreshes board');
+assert.equal(snapshots, 0, 'healthy tab return preserves progressive hydration');
 await act(async () => {
   window.dispatchEvent(new dom.window.Event('online'));
   await Promise.resolve();
 });
-assert.equal(snapshots, 2, 'network recovery refreshes board');
+assert.equal(snapshots, 0, 'healthy online notification does not fetch a full board');
+const originalNow = Date.now;
+const wakeAt = Date.now() + 61_000;
+Date.now = () => wakeAt;
+await act(async () => {
+  document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  await Promise.resolve();
+});
+assert.equal(snapshots, 0, 'wake while reconnecting does not race an offline full-board fetch');
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+Date.now = originalNow;
+assert.equal(snapshots, 1, 'stale socket recovery fetches exactly once on successful open');
 hook.unmount();
 document.dispatchEvent(new dom.window.Event('visibilitychange'));
 window.dispatchEvent(new dom.window.Event('online'));
-assert.equal(snapshots, 2, 'unmount removes recovery listeners');
+assert.equal(snapshots, 1, 'unmount removes recovery listeners');
 socket.disconnect();
 assert.equal(socket.isConnected, false);
+
+let initialSnapshots = 0;
+const initial = renderHook(() => useWebSocket({
+  boardId: 'first', token: 'token', lastSequence: 0, onEvent: () => {},
+  onReconnect: () => { initialSnapshots++; },
+}));
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(initialSnapshots, 0, 'first successful open keeps the paged foreground snapshot');
+act(() => { FakeWebSocket.current.closed(); });
+await act(async () => {
+  window.dispatchEvent(new dom.window.Event('online'));
+  await Promise.resolve();
+});
+assert.equal(initialSnapshots, 0, 'down connection waits for open instead of duplicate GETs');
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(initialSnapshots, 1);
+initial.unmount();
+
+let renewedSnapshots = 0;
+let finishSocketRenewal: ((token: string) => void) | undefined;
+socket.setExpiredTokenCallback(() => new Promise((resolve) => { finishSocketRenewal = resolve; }));
+const renewingHook = renderHook(({ token }) => useWebSocket({
+  boardId: 'same-board', token, lastSequence: 0, onEvent: () => {},
+  onReconnect: () => { renewedSnapshots++; },
+}), { initialProps: { token: 'old-token' } });
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(renewedSnapshots, 0);
+act(() => { FakeWebSocket.current.closed(4001, 'session expired'); });
+renewingHook.rerender({ token: 'renewed-token' });
+await act(async () => {
+  finishSocketRenewal?.('renewed-token');
+  await Promise.resolve();
+});
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(renewedSnapshots, 1, 'same-board token lifecycle preserves real recovery intent');
+act(() => { FakeWebSocket.current.closed(); });
+renewingHook.rerender({ token: 'http-renewed-token' });
+await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(renewedSnapshots, 2, 'HTTP renewal during transport outage still reconciles once');
+renewingHook.unmount();
 
 let completeMutation: ((response: Response) => void) | undefined;
 const originalFetch = globalThis.fetch;
@@ -89,12 +144,25 @@ await act(async () => {
 assert.equal(oldSnapshots, 0, 'a delayed queued replay cannot refresh the previous board');
 assert.equal(newSnapshots, 0, 'retired open handler cannot refresh the replacement board');
 await act(async () => { FakeWebSocket.current.open(); await Promise.resolve(); });
+assert.equal(newSnapshots, 0, 'new board initial open does not replay retired recovery');
+act(() => { FakeWebSocket.current.closed(); });
+await act(async () => {
+  window.dispatchEvent(new dom.window.Event('online'));
+  FakeWebSocket.current.open();
+  await Promise.resolve();
+});
 assert.equal(newSnapshots, 1);
 navigating.unmount();
 globalThis.fetch = originalFetch;
 
 let snapshotPolls = 0;
 let eventPolls = 0;
+const originalSetInterval = globalThis.setInterval;
+const pollIntervals: number[] = [];
+globalThis.setInterval = ((callback: () => void, delay: number) => {
+  pollIntervals.push(delay);
+  return originalSetInterval(callback, delay);
+}) as unknown as typeof setInterval;
 const fetchSnapshot = () => { snapshotPolls++; return Promise.resolve(); };
 const onEvents = () => { eventPolls++; };
 const polling = renderHook(({ active }) => { usePollingFallback({
@@ -103,10 +171,17 @@ const polling = renderHook(({ active }) => { usePollingFallback({
 await act(async () => { await Promise.resolve(); });
 assert.equal(snapshotPolls, 1);
 assert.equal(eventPolls, 0, 'zero cursor must not replay event history in snapshot mode');
+assert.deepEqual(pollIntervals, [30_000], 'snapshot fallback has a bounded thirty-second cadence');
 polling.rerender({ active: true });
 assert.equal(snapshotPolls, 1, 'rerender must not restart immediate polling');
 polling.rerender({ active: false });
 polling.unmount();
+const eventsPolling = renderHook(() => { usePollingFallback({
+  boardId: 'b1', active: true, lastSequence: 0, onEvents,
+}); });
+assert.deepEqual(pollIntervals, [30_000, 5_000], 'generic event polling retains five-second cadence');
+eventsPolling.unmount();
+globalThis.setInterval = originalSetInterval;
 
 let requests = 0;
 let aborts = 0;
@@ -179,14 +254,15 @@ retryHook.unmount();
 globalThis.setTimeout = originalSetTimeout;
 globalThis.clearTimeout = originalClearTimeout;
 
-const { apiClient, setTokenGetter, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, AuthRecoveryCancelledError } =
+const { apiClient, setTokenGetter, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } =
   await import('../../../../common/api/client');
-const { authDuckReducer, setCredentials, clearAuth } = await import('../../../Auth/duck/authDuck');
+const { authDuckReducer, setCredentials, clearAuth, refreshCredentials } = await import('../../../Auth/duck/authDuck');
 const authStore = configureStore({ reducer: { auth: authDuckReducer } });
 const user = { id: 'u1', name: 'User', email: 'user@example.test' };
-authStore.dispatch(setCredentials({ user, accessToken: 'old-token' }));
 setTokenGetter(() => authStore.getState().auth.accessToken);
-setCredentialsCallback((credentials) => { authStore.dispatch(setCredentials(credentials)); });
+setCredentialsCallback((credentials) => {
+  authStore.dispatch(authStore.getState().auth.user ? refreshCredentials(credentials) : setCredentials(credentials));
+});
 let refreshCalls = 0;
 let completeRefresh: ((credentials: { data: { user: typeof user; accessToken: string } }) => void) | undefined;
 apiClient.defaults.adapter = async (config) => {
@@ -195,7 +271,7 @@ apiClient.defaults.adapter = async (config) => {
     const data = await new Promise((resolve) => { completeRefresh = resolve; });
     return { config, data, status: 200, statusText: 'OK', headers: {} };
   }
-  if (config.headers.Authorization === 'Bearer old-token') {
+  if (config.headers.Authorization !== 'Bearer fresh-token') {
     throw new AxiosError('Expired token', '401', config, undefined, {
       config, status: 401, statusText: 'Unauthorized', headers: {},
       data: { error: { message: 'Invalid or expired access token' } },
@@ -208,12 +284,18 @@ const httpRequest = apiClient.get('/protected');
 const socketRenewal = renewAccessToken();
 for (let index = 0; index < 10; index++) await Promise.resolve();
 assert.equal(refreshCalls, 1, 'HTTP and socket renewal share one refresh-cookie rotation');
-assert.equal(authStore.getState().auth.status, 'authenticated', 'silent renewal cannot unmount protected routes');
+assert.equal(authStore.getState().auth.accessToken, null, 'cookie-only recovery starts without a Redux access token');
 completeRefresh?.({ data: { user, accessToken: 'fresh-token' } });
 const [httpResponse, freshToken] = await Promise.all([httpRequest, socketRenewal]);
 assert.deepEqual(httpResponse, { data: 'protected-response' });
 assert.equal(freshToken, 'fresh-token');
 assert.equal(authStore.getState().auth.accessToken, 'fresh-token');
+
+const sameSessionRenewal = renewAccessToken();
+for (let index = 0; index < 10; index++) await Promise.resolve();
+assert.equal(authStore.getState().auth.status, 'authenticated', 'silent renewal cannot unmount protected routes');
+completeRefresh?.({ data: { user, accessToken: 'fresh-token' } });
+await sameSessionRenewal;
 
 const lateRenewal = renewAccessToken();
 for (let index = 0; index < 10; index++) await Promise.resolve();
@@ -222,5 +304,14 @@ cancelAuthRecovery();
 completeRefresh?.({ data: { user, accessToken: 'resurrected-token' } });
 await assert.rejects(lateRenewal, AuthRecoveryCancelledError);
 assert.equal(authStore.getState().auth.accessToken, null, 'late refresh cannot resurrect logout');
+const callsAtLogout = refreshCalls;
+await assert.rejects(renewAccessToken(), AuthRecoveryCancelledError);
+assert.equal(refreshCalls, callsAtLogout, 'explicit logout also prevents cookie-only reauthentication');
+authStore.dispatch(setCredentials({ user, accessToken: 'new-login' }));
+allowAuthRecovery();
+const newSessionRenewal = renewAccessToken();
+for (let index = 0; index < 10; index++) await Promise.resolve();
+completeRefresh?.({ data: { user, accessToken: 'fresh-token' } });
+assert.equal(await newSessionRenewal, 'fresh-token', 'a new validated login permits its own renewal');
 dom.window.close();
 console.info('hook recovery and snapshot polling passed');

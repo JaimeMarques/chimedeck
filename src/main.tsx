@@ -2,8 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { store } from './store';
-import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
-import { clearAuth, setCredentials } from './extensions/Auth/duck/authDuck';
+import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
+import { clearAuth, refreshCredentials, setCredentials } from './extensions/Auth/duck/authDuck';
 import { socket } from './extensions/Realtime/client/socket';
 import { initSentry } from './common/monitoring/sentryClient';
 import { ErrorBoundary } from './common/monitoring/ErrorBoundary';
@@ -65,15 +65,23 @@ setTokenGetter(
 );
 setClearAuthCallback(() => store.dispatch(clearAuth()));
 setCredentialsCallback((credentials) => {
-  if (store.getState().auth.user?.id !== credentials.user.id) throw new Error('Session user changed during renewal');
-  store.dispatch(setCredentials(credentials));
+  const user = store.getState().auth.user;
+  if (user && user.id !== credentials.user.id) throw new Error('Session user changed during renewal');
+  store.dispatch(user ? refreshCredentials(credentials) : setCredentials(credentials));
 });
 let currentToken = store.getState().auth.accessToken;
+let currentAuthStatus = store.getState().auth.status;
 store.subscribe(() => {
   const nextToken = store.getState().auth.accessToken;
+  const nextStatus = store.getState().auth.status;
+  if (nextStatus !== currentAuthStatus) {
+    currentAuthStatus = nextStatus;
+    if (nextStatus === 'unauthenticated') cancelAuthRecovery();
+  }
   if (nextToken !== currentToken) {
     currentToken = nextToken;
-    if (!nextToken) cancelAuthRecovery();
+    if (nextToken) allowAuthRecovery();
+    else cancelAuthRecovery();
   }
 });
 socket.setExpiredTokenCallback(async () => {

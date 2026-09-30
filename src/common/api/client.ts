@@ -9,6 +9,7 @@ let clearAuthCallback: (() => void) | null = null;
 let refreshRequestPromise: Promise<string> | null = null;
 let credentialsCallback: ((credentials: AuthResponse) => void) | null = null;
 let authGeneration = 0;
+let authRecoveryBlocked = false;
 let didHandleSessionExpiry = false;
 
 export const setTokenGetter = (fn: () => string | null) => {
@@ -27,19 +28,26 @@ export const setCredentialsCallback = (fn: (credentials: AuthResponse) => void) 
 export class AuthRecoveryCancelledError extends Error {}
 
 export function cancelAuthRecovery() {
+  authRecoveryBlocked = true;
   authGeneration++;
   refreshRequestPromise = null;
+}
+
+/** Only a newly established validated session can undo explicit logout/revocation. */
+export function allowAuthRecovery() {
+  authRecoveryBlocked = false;
+  didHandleSessionExpiry = false;
 }
 
 /** Shared renewal for HTTP expiry and WebSocket expiry; never changes auth to loading. */
 export function renewAccessToken(): Promise<string> {
   if (refreshRequestPromise) return refreshRequestPromise;
   const generation = authGeneration;
-  const previousToken = tokenGetter?.();
-  if (!previousToken) return Promise.reject(new AuthRecoveryCancelledError('Session already ended'));
+  const previousToken = tokenGetter?.() ?? null;
+  if (authRecoveryBlocked) return Promise.reject(new AuthRecoveryCancelledError('Session already ended'));
   const request = apiClient.post<unknown, { data: unknown }>('/auth/refresh')
     .then((response) => {
-      if (generation !== authGeneration || !previousToken || tokenGetter?.() !== previousToken) {
+      if (generation !== authGeneration || authRecoveryBlocked || (tokenGetter?.() ?? null) !== previousToken) {
         throw new AuthRecoveryCancelledError('Session changed during renewal');
       }
       const credentials = response.data;

@@ -7,6 +7,7 @@ import { apiClient } from '~/common/api/client';
 import type { RealtimeEvent } from './client/socket';
 
 const POLL_INTERVAL_MS = 5_000;
+const SNAPSHOT_POLL_INTERVAL_MS = 30_000;
 
 interface UsePollingFallbackOptions {
   boardId: string;
@@ -81,7 +82,7 @@ export function usePollingFallback({
 
     // Fire an immediate poll then set up the recurring interval
     void poll();
-    intervalRef.current = setInterval(() => { void poll(); }, POLL_INTERVAL_MS);
+    intervalRef.current = setInterval(() => { void poll(); }, fetchSnapshot ? SNAPSHOT_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
 
     return () => {
       if (intervalRef.current !== null) {
@@ -89,5 +90,5 @@ export function usePollingFallback({
         intervalRef.current = null;
       }
     };
-  }, [active, poll]);
+  }, [active, poll, fetchSnapshot]);
 }
