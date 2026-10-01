@@ -64,7 +64,7 @@ function groupContinuousCardDiscussionNotifications(notifications: Notification[
 const NotificationPanel: FC<Props> = ({
   onClose,
   onNavigate,
-  className = 'absolute right-0 top-12 w-[380px] max-h-[calc(100vh-5rem)]',
+  className = 'absolute right-0 top-12 w-[380px] max-h-[calc(100dvh-5rem)]',
 }) => {
   const dispatch = useAppDispatch();
   const notifications = useAppSelector(selectNotifications);
