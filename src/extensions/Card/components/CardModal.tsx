@@ -288,7 +288,7 @@ const CardModal = ({
         >
           {/* Visually-hidden title for screen-reader accessibility (Radix requirement) */}
           <Dialog.Title className="sr-only">Card: {card.title}</Dialog.Title>
-          <div className="bg-bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col max-h-[calc(100vh-5rem)]" data-card-modal-content="true">
+          <div className="bg-bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col max-h-[calc(100dvh-5rem)]" data-card-modal-content="true">
             <input
               ref={coverInputRef}
               type="file"
@@ -476,7 +476,7 @@ const CardModal = ({
               <ResizablePanels
                 className="flex-1 min-h-0"
                 left={
-                  <div className="h-full min-h-0 p-5 pt-3 pr-3 space-y-6">
+                  <div className="md:h-full min-h-0 p-5 pt-3 md:pr-3 space-y-6">
                     <CardDescriptionTiptap
                       boardId={boardId}
                       cardId={card.id}
@@ -539,7 +539,7 @@ const CardModal = ({
                   </div>
                 }
                 right={
-                  <div className="h-full min-h-0 p-5 pt-3 pl-3 border-l border-gray-100">
+                  <div className="md:h-full min-h-0 p-5 pt-3 md:pl-3 border-t md:border-t-0 md:border-l border-gray-100">
                     <ActivityFeed
                       boardId={boardId}
                       cardId={card.id}
