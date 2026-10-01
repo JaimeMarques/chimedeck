@@ -102,6 +102,19 @@ defineToolScenarios(import.meta, registerListBoardAdmin, {
     assert.deepEqual(await h.ok('archive_list', { boardId: 'b1', listId: 'abcd1234' }), row);
     assert.ok(h.requests.every((r) => r.method === 'GET'), 'no toggle for an archived list');
   },
+  archive_list_bad_readback: async (h) => {
+    // The pre-PATCH roster is valid; only the post-PATCH archived read-back is bad.
+    for (const bad of [() => json(null), html]) {
+      let patched = false;
+      h.respond(routes({
+        'GET /lists': () => json({ data: [list('l1')] }),
+        'GET /archived-lists': () => (patched ? bad() : json({ data: [] })),
+        'PATCH /lists/l1/archive': () => { patched = true; return json({ data: list('l1', { archived: true }) }); },
+      }));
+      await h.fail('archive_list', { boardId: 'b1', listId: 'l1' }, 'invalid-response');
+      assert.deepEqual(calls(h).map(([method]) => method), ['GET', 'GET', 'PATCH', 'GET']);
+    }
+  },
   archive_list_state_conflict: async (h) => {
     const open = { 'GET /lists': () => json({ data: [list('l1')] }), 'GET /archived-lists': () => json({ data: [] }) };
     // The PATCH reports the list open (a concurrent archive toggled it back).

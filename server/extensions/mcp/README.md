@@ -582,7 +582,7 @@ Destructive. The comment must be on `cardId` (`not-in-card` otherwise, no DELETE
 | `cardId` | string | ✅ | ID of the card the attachment is on |
 | `attachmentId` | string | ✅ | ID of the attachment (from `get_attachments`) |
 
-Returns the attachment metadata as text, then the file as an image block for `image/*` types or an embedded resource with a base64 blob and `mimeType` otherwise. Nothing is written to the server's disk. Files over 10 MB fail with `attachment-too-large`; link attachments fail with `not-a-file`; an upload that is not finished fails with `not-ready`; any non-200 view response fails with `http-<status>`.
+The attachment must be on `cardId` (`not-in-card` otherwise). Returns the attachment metadata as text, then the file as an image block for `image/*` types or an embedded resource with a base64 blob and `mimeType` otherwise. Nothing is written to the server's disk. Files over 10 MB fail with `attachment-too-large`; link attachments fail with `not-a-file`; an upload that is not finished fails with `not-ready`; any non-200 view response fails with `http-<status>`.
 
 #### `add_url_attachment`
 | Parameter | Type | Required | Description |

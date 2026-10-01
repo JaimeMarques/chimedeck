@@ -95,7 +95,7 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
   }, async (args) => {
     let block: CallToolResult['content'][number] | undefined;
     const result = await runTool(token, async () => {
-      const row = attachmentRow.safeParse(findRow(await cardAttachments(args.cardId), 'id', args.attachmentId));
+      const row = attachmentRow.safeParse(inParent(await cardAttachments(args.cardId), args.attachmentId, 'card'));
       if (!row.success) throw new ToolError('invalid-response');
       const file = await download(row.data, token);
       block = file.block;

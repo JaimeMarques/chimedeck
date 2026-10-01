@@ -23,6 +23,10 @@ type Card = z.infer<typeof cardWithChecklists>;
 const readCard = (cardId: string, token: string) =>
   request({ path: apiPath`/api/v1/cards/${cardId}`, token, schema: cardWithChecklists });
 
+// card/api/get.ts appends a synthetic `__ungrouped__` checklist for legacy items
+// with no checklist_id; it has no row, so it is never a scope match.
+const realChecklists = (card: Card) => card.includes.checklists.filter((row) => row.id !== '__ungrouped__');
+
 // Python _checklist_view: {checklist, items, card}.
 function checklistView(card: Card, id: string) {
   const checklist = findRow(card.includes.checklists, 'id', id);
@@ -102,7 +106,7 @@ export function registerChecklistTools(server: McpServer, token: string): void {
     inputSchema: { cardId: z.string().min(1).describe('ID of the card the checklist is on'), checklistId },
     annotations: destructive,
   }, (args) => runTool(token, () => deleteFromCard(
-    args.cardId, args.checklistId, (card) => card.includes.checklists, (id) => apiPath`/api/v1/checklists/${id}`,
+    args.cardId, args.checklistId, realChecklists, (id) => apiPath`/api/v1/checklists/${id}`,
   )));
 
   server.registerTool('delete_checklist_item', {

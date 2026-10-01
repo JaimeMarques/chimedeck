@@ -152,5 +152,12 @@ defineToolScenarios(import.meta, registerChecklistTools, {
   delete_checklist_item: (h) => deleteContract(h, 'delete_checklist_item', { cardId: 'card-1', itemId: 'it1' },
     '/api/v1/checklist-items/it1', { data: card.data, includes: { checklists: [], checklistItems: [it1] } }),
   delete_checklist_not_in_card: (h) => notInCard(h, 'delete_checklist', { cardId: 'card-1', checklistId: 'cl-on-card-b' }),
+  delete_checklist_ungrouped: async (h) => {
+    // card/api/get.ts appends a synthetic `__ungrouped__` checklist; it is not a real row on the card.
+    const ungrouped = { ...card, includes: { ...card.includes, checklists: [...card.includes.checklists, { id: '__ungrouped__', title: 'Checklist' }] } };
+    h.respond(writeThen(() => new Response(null, { status: 204 }), () => json(ungrouped)));
+    await h.fail('delete_checklist', { cardId: 'card-1', checklistId: '__ungrouped__' }, 'not-in-card');
+    assert.deepEqual(calls(h), [['GET', '/api/v1/cards/card-1', undefined]]);
+  },
   delete_checklist_item_not_in_card: (h) => notInCard(h, 'delete_checklist_item', { cardId: 'card-1', itemId: 'it-on-card-b' }),
 });

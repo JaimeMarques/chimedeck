@@ -64,7 +64,7 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
     await refuse(file({ external_url: 'https://example.test/x' }), 'not-a-file');
     await refuse(file({ status: 'PENDING' }), 'not-ready');
     await refuse(file({ size_bytes: MAX_DOWNLOAD_BYTES + 1 }), 'attachment-too-large');
-    await refuse(file({ id: 'other' }), 'readback-failed');
+    await refuse(file({ id: 'other' }), 'not-in-card');
     await refuse(file({ size_bytes: 'four' }), 'invalid-response');
   },
   download_too_large: async (h) => {
