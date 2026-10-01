@@ -288,7 +288,7 @@ const CardModal = ({
         >
           {/* Visually-hidden title for screen-reader accessibility (Radix requirement) */}
           <Dialog.Title className="sr-only">Card: {card.title}</Dialog.Title>
-          <div className="bg-bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col max-h-[calc(100dvh-5rem)]" data-card-modal-content="true">
+          <div className="bg-bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col max-h-[calc(100vh-5rem)] supports-[height:100dvh]:max-h-[calc(100dvh-5rem)]" data-card-modal-content="true">
             <input
               ref={coverInputRef}
               type="file"

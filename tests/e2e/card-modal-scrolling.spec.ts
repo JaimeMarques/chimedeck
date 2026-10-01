@@ -107,9 +107,20 @@ test('desktop panes scroll independently, including a short landscape viewport',
 });
 
 test('mobile full cover keeps the footer and close control available', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await openCard(page, true);
-  await assertContained(page);
-  await page.getByText('Last attachment', { exact: true }).scrollIntoViewIfNeeded();
-  await expect(page.getByText('Last attachment', { exact: true })).toBeInViewport();
+  for (const viewport of [{ width: 390, height: 844 }, { width: 667, height: 375 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport);
+    const surface = await openCard(page, true);
+    const body = surface.locator(':scope > .flex-1');
+    const height = await body.evaluate((element) => element.clientHeight);
+    console.log(`Full cover ${viewport.width}x${viewport.height}: body height ${height}`);
+    expect(height).toBeGreaterThanOrEqual(80);
+    await assertContained(page);
+    await page.getByText('Last attachment', { exact: true }).scrollIntoViewIfNeeded();
+    await expect(page.getByText('Last attachment', { exact: true })).toBeInViewport();
+    await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    expect(await surface.locator(':scope > .flex-1').evaluate((element) => element.clientHeight)).toBeGreaterThanOrEqual(80);
+    await page.getByText('Last attachment', { exact: true }).scrollIntoViewIfNeeded();
+    await expect(page.getByText('Last attachment', { exact: true })).toBeInViewport();
+    await assertContained(page);
+  }
 });
