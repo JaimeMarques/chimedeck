@@ -47,29 +47,37 @@ export async function handleDeleteList(req: Request, listId: string): Promise<Re
   const roleError = requireRole(scopedReq, 'ADMIN');
   if (roleError) return roleError;
 
-  // Count cards in the list to determine if confirmation is required.
-  const cardRows = await db('cards').where({ list_id: listId }).count('id as count').first();
-  const cardCount = Number(cardRows?.count ?? 0);
+  // Parse request body — DELETE with a body is valid per HTTP spec.
+  let body: { confirm?: boolean } = {};
+  try {
+    const text = await req.text();
+    if (text) body = JSON.parse(text) as typeof body;
+  } catch {
+    // Treat unparseable body as no confirmation.
+  }
 
-  if (cardCount > 0) {
-    // Parse request body — DELETE with a body is valid per HTTP spec.
-    let body: { confirm?: boolean } = {};
-    try {
-      const text = await req.text();
-      if (text) body = JSON.parse(text) as typeof body;
-    } catch {
-      // Treat unparseable body as no confirmation.
-    }
+  // Count and delete under one row lock on the list. Card inserts/moves into this list
+  // take a FK KEY SHARE lock on the list row, which conflicts with FOR UPDATE, so no card
+  // can land between the confirmation check and the cascading delete.
+  const confirmationResponse = await db.transaction(async (trx) => {
+    const lockedList = await trx<ListRow>('lists').where({ id: listId }).forUpdate().first();
+    if (!lockedList) return null;
 
-    if (!body.confirm) {
+    // Count cards in the list to determine if confirmation is required.
+    const cardRows = await trx('cards').where({ list_id: listId }).count('id as count').first();
+    const cardCount = Number(cardRows?.count ?? 0);
+
+    if (cardCount > 0 && !body.confirm) {
       return Response.json(
         { name: 'delete-requires-confirmation', data: { cardCount } },
         { status: 409 },
       );
     }
-  }
 
-  await db('lists').where({ id: listId }).del();
+    await trx('lists').where({ id: listId }).del();
+    return null;
+  });
+  if (confirmationResponse) return confirmationResponse;
 
   if (featureFlags.STATE_TRANSITIONS_ENABLED) {
     await syncStateTransitionsOnListDelete(list.board_id);
