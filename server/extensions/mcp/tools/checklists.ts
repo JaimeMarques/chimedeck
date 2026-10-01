@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ToolError, apiPath, dataOf, findRow, request, rowWithId, runTool } from './toolSupport';
+import {
+  ToolError, apiPath, dataOf, deleteNoContent, expectFields, findRow, inParent, request, rowWithId, runTool,
+} from './toolSupport';
 
 // Checklist writes. Names, arguments and return shapes mirror the local Python
 // server (chimedeck_mcp/tools.py); every write reads the card back.
@@ -34,11 +36,15 @@ export function registerChecklistTools(server: McpServer, token: string): void {
   const write = async (method: string, path: string, body: unknown) =>
     (await request({ method, path, body, token, schema: written })).data;
 
-  // There is no GET route for a checklist or item, so a delete is verified on the card.
-  const deleteFromCard = async (path: string, cardId: string, id: string, rows: (card: Card) => Array<{ id: string }>) => {
-    await request({ method: 'DELETE', path, token, schema: z.unknown() });
-    if (rows(await readCard(cardId, token)).some((row) => row.id === id)) throw new ToolError('delete-failed');
-    return { deleted: true, id };
+  // There is no GET route for a checklist or item, so the card is the scope
+  // check before the delete (not-in-card, no DELETE sent) and the read-back after.
+  const deleteFromCard = async (cardId: string, id: string, rows: (card: Card) => Array<{ id: string }>,
+    path: (id: string) => string) => {
+    const card = await readCard(cardId, token);
+    const target = inParent(rows(card), id, 'card');
+    await deleteNoContent(path(target.id), token);
+    if (rows(await readCard(card.data.id, token)).some((row) => row.id === target.id)) throw new ToolError('delete-failed');
+    return { deleted: true, id: target.id };
   };
 
   server.registerTool('create_checklist', {
@@ -49,7 +55,10 @@ export function registerChecklistTools(server: McpServer, token: string): void {
     },
   }, (args) => runTool(token, async () => {
     const created = await write('POST', apiPath`/api/v1/cards/${args.cardId}/checklists`, { title: args.title });
-    return checklistView(await readCard(created.card_id, token), created.id);
+    const view = checklistView(await readCard(created.card_id, token), created.id);
+    // Stored as title.trim() || 'Checklist' (card/api/checklistGroup.ts).
+    expectFields(view.checklist, { title: args.title.trim() || 'Checklist' });
+    return view;
   }));
 
   server.registerTool('add_checklist_item', {
@@ -57,7 +66,9 @@ export function registerChecklistTools(server: McpServer, token: string): void {
     inputSchema: { checklistId, title: z.string().min(1).describe('Item text') },
   }, (args) => runTool(token, async () => {
     const created = await write('POST', apiPath`/api/v1/checklists/${args.checklistId}/items`, { title: args.title });
-    return itemView(await readCard(created.card_id, token), created.id);
+    const view = itemView(await readCard(created.card_id, token), created.id);
+    expectFields(view.item, { title: args.title.trim() });
+    return view;
   }));
 
   server.registerTool('set_checklist_item', {
@@ -71,7 +82,9 @@ export function registerChecklistTools(server: McpServer, token: string): void {
     // [why] Python's schema anyOf(checked, title); a zod raw shape cannot express it.
     if (checked === undefined && title === undefined) throw new ToolError('nothing-to-update');
     const updated = await write('PATCH', apiPath`/api/v1/checklist-items/${id}`, { checked, title });
-    return itemView(await readCard(updated.card_id, token), updated.id);
+    const view = itemView(await readCard(updated.card_id, token), updated.id);
+    expectFields(view.item, { checked, title: title?.trim() });
+    return view;
   }));
 
   server.registerTool('rename_checklist', {
@@ -79,22 +92,24 @@ export function registerChecklistTools(server: McpServer, token: string): void {
     inputSchema: { checklistId, title: z.string().min(1).describe('New title') },
   }, (args) => runTool(token, async () => {
     const updated = await write('PATCH', apiPath`/api/v1/checklists/${args.checklistId}`, { title: args.title });
-    return checklistView(await readCard(updated.card_id, token), updated.id);
+    const view = checklistView(await readCard(updated.card_id, token), updated.id);
+    expectFields(view.checklist, { title: args.title.trim() });
+    return view;
   }));
 
   server.registerTool('delete_checklist', {
-    description: 'Delete a checklist and all its items.',
+    description: 'Delete a checklist and all its items. It must be on cardId (not-in-card otherwise).',
     inputSchema: { cardId: z.string().min(1).describe('ID of the card the checklist is on'), checklistId },
     annotations: destructive,
   }, (args) => runTool(token, () => deleteFromCard(
-    apiPath`/api/v1/checklists/${args.checklistId}`, args.cardId, args.checklistId, (card) => card.includes.checklists,
+    args.cardId, args.checklistId, (card) => card.includes.checklists, (id) => apiPath`/api/v1/checklists/${id}`,
   )));
 
   server.registerTool('delete_checklist_item', {
-    description: 'Delete one checklist item.',
+    description: 'Delete one checklist item. It must be on cardId (not-in-card otherwise).',
     inputSchema: { cardId: z.string().min(1).describe('ID of the card the item is on'), itemId },
     annotations: destructive,
   }, (args) => runTool(token, () => deleteFromCard(
-    apiPath`/api/v1/checklist-items/${args.itemId}`, args.cardId, args.itemId, (card) => card.includes.checklistItems,
+    args.cardId, args.itemId, (card) => card.includes.checklistItems, (id) => apiPath`/api/v1/checklist-items/${id}`,
   )));
 }

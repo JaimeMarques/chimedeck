@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ToolError, apiPath, dataOf, findRow, readCard, request, rowWithId, rowsOf, runTool } from './toolSupport';
+import {
+  ToolError, apiPath, dataOf, deleteNoContent, findRow, readCard, request, rowWithId, rowsOf, runTool,
+} from './toolSupport';
 
 // Card assignees and board membership. Names, arguments and read-backs mirror
 // the local Python server (chimedeck_mcp/tools.py, "Extensions: members").
@@ -46,9 +48,7 @@ export function registerMemberTools(server: McpServer, token: string): void {
     description: 'Unassign a member from a card. Returns the card with its includes.',
     inputSchema: { cardId, userId: z.string().min(1).describe('User ID') },
   }, (args) => runTool(token, async () => {
-    await request({
-      method: 'DELETE', path: apiPath`/api/v1/cards/${args.cardId}/members/${args.userId}`, token, schema: z.unknown(),
-    });
+    await deleteNoContent(apiPath`/api/v1/cards/${args.cardId}/members/${args.userId}`, token);
     return cardWithMember(args.cardId, args.userId, false, token);
   }));
 

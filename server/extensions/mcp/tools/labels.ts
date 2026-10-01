@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ToolError, apiPath, dataOf, findRow, readCard, request, rowWithId, rowsOf, runTool } from './toolSupport';
+import {
+  ToolError, apiPath, dataOf, deleteNoContent, expectFields, findRow, inParent, readCard, request, rowWithId, rowsOf, runTool,
+} from './toolSupport';
 
 // Board labels and card labels. Names, arguments and read-backs mirror the
 // local Python server (chimedeck_mcp/tools.py, "Extensions: labels").
@@ -37,9 +39,7 @@ export function registerLabelTools(server: McpServer, token: string): void {
     description: 'Remove a label from a card. Returns the card with its includes.',
     inputSchema: { cardId, labelId: z.string().min(1).describe('ID of the label') },
   }, (args) => runTool(token, async () => {
-    await request({
-      method: 'DELETE', path: apiPath`/api/v1/cards/${args.cardId}/labels/${args.labelId}`, token, schema: z.unknown(),
-    });
+    await deleteNoContent(apiPath`/api/v1/cards/${args.cardId}/labels/${args.labelId}`, token);
     return cardWithLabel(args.cardId, args.labelId, false, token);
   }));
 
@@ -55,20 +55,26 @@ export function registerLabelTools(server: McpServer, token: string): void {
       method: 'POST', path: apiPath`/api/v1/boards/${args.boardId}/labels`,
       body: { name: args.name, color: args.color }, token, schema: dataOf(rowWithId),
     });
-    return findRow(await boardLabels(args.boardId), 'id', created.data.id);
+    const row = findRow(await boardLabels(args.boardId), 'id', created.data.id);
+    // Stored as name.trim() and the color verbatim (board/api/labels.ts).
+    expectFields(row, { name: args.name.trim(), color: args.color });
+    return row;
   }));
 
   server.registerTool('delete_label', {
-    description: 'Delete a board label. It is removed from every card that carried it.',
+    description: 'Delete a board label. It is removed from every card that carried it. '
+      + 'The label must be on boardId (not-in-board otherwise).',
     inputSchema: {
       boardId: z.string().min(1).describe('ID of the board the label belongs to'),
       labelId: z.string().min(1).describe('ID of the label'),
     },
     annotations: { destructiveHint: true },
   }, (args) => runTool(token, async () => {
-    await request({ method: 'DELETE', path: apiPath`/api/v1/labels/${args.labelId}`, token, schema: z.unknown() });
-    // [why] There is no GET /labels/:id to 404, so the board's label list is the read-back.
-    if ((await boardLabels(args.boardId)).some((label) => label.id === args.labelId)) throw new ToolError('delete-failed');
-    return { deleted: true, id: args.labelId };
+    // [why] There is no GET /labels/:id, so the board's label list is both the
+    // scope check (DELETE /labels/:id alone would delete it on any board) and the read-back.
+    const target = inParent(await boardLabels(args.boardId), args.labelId, 'board');
+    await deleteNoContent(apiPath`/api/v1/labels/${target.id}`, token);
+    if ((await boardLabels(args.boardId)).some((label) => label.id === target.id)) throw new ToolError('delete-failed');
+    return { deleted: true, id: target.id };
   }));
 }

@@ -106,9 +106,14 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
       get('/api/v1/cards/c1/attachments'),
     ]);
     // name omitted defaults to the URL; the server requires a name.
-    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [link] })));
+    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [{ ...link, name: link.view_url }] })));
     await h.ok('add_url_attachment', { cardId: 'c1', url: 'https://example.test/docs' });
     assert.deepEqual(calls(h)[0]?.body, { url: 'https://example.test/docs', name: 'https://example.test/docs' });
+    // Read back with another name or URL: not success.
+    for (const wrong of [{ name: 'Other' }, { url: 'https://example.test/other' }]) {
+      h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [link] })));
+      await h.fail('add_url_attachment', { ...args, ...wrong }, 'readback-failed');
+    }
     h.respond(route(() => apiError(400, 'bad-request'), () => json({ data: [] })));
     await h.fail('add_url_attachment', args, 'bad-request');
     h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [file()] })));
@@ -122,20 +127,32 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
   },
   delete_attachment: async (h) => {
     const args = { cardId: 'c1', attachmentId: 'a1' };
-    h.respond(route(() => json({ data: { id: 'a1' } }), () => json({ data: [link] })));
+    let deleted = false;
+    h.respond((r) => {
+      if (r.method === 'DELETE') { deleted = true; return json({ data: { id: 'a1' } }); }
+      return json({ data: deleted ? [link] : [file(), link] });
+    });
     assert.deepEqual(await h.ok('delete_attachment', args), { deleted: true, id: 'a1' });
     assert.deepEqual(calls(h), [
+      get('/api/v1/cards/c1/attachments'),
       { method: 'DELETE', path: '/api/v1/attachments/a1', body: undefined },
       get('/api/v1/cards/c1/attachments'),
     ]);
-    // Still listed (also covers a null or HTML-200 DELETE).
-    h.respond(route(html, () => json({ data: [file()] })));
+    h.respond(route(() => json({ data: { id: 'a1' } }), () => json({ data: [file()] })));
     await h.fail('delete_attachment', args, 'delete-failed');
-    h.respond(route(() => json(null), () => json({ data: [file()] })));
-    await h.fail('delete_attachment', args, 'delete-failed');
-    h.respond(route(() => apiError(403, 'forbidden'), () => json({ data: [] })));
+    // The route answers 200 {data: {id}}: null, HTML-200 or another id is invalid-response.
+    for (const bad of [() => json(null), html, () => json({ data: { id: 'a9' } }), () => new Response(null, { status: 204 })]) {
+      h.respond(route(bad, () => json({ data: [file()] })));
+      await h.fail('delete_attachment', args, 'invalid-response');
+    }
+    h.respond(route(() => apiError(403, 'forbidden'), () => json({ data: [file()] })));
     await h.fail('delete_attachment', args, 'forbidden');
     h.respond(route(() => json({ data: { id: 'a1' } }), html));
     await h.fail('delete_attachment', args, 'invalid-response');
+  },
+  delete_attachment_not_in_card: async (h) => {
+    h.respond(route(() => json({ data: { id: 'a1' } }), () => json({ data: [link] })));
+    await h.fail('delete_attachment', { cardId: 'c1', attachmentId: 'a1' }, 'not-in-card');
+    assert.deepEqual(calls(h).map((r) => r.method), ['GET'], 'no DELETE on an attachment from another card');
   },
 });

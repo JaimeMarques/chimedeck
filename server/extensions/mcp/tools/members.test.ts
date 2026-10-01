@@ -13,6 +13,8 @@ const empty = () => new Response(null, { status: 204 });
 // Write-then-read tools: the write fails, null/HTML-200 answers, the read-back fails.
 async function writeErrors(h: Harness, name: string, args: Record<string, unknown>, write: string) {
   const isWrite = (r: RecordedRequest) => r.method === write;
+  // A DELETE route's success is 204; the other writes answer JSON.
+  const done = () => (write === 'DELETE' ? empty() : json({ data: { id: 'x' } }));
   h.respond((r) => (isWrite(r) ? apiError(404, 'board-not-found') : json(null)));
   await h.fail(name, args, 'board-not-found');
   assert.equal(h.requests.length, 1, 'no read-back after a failed write');
@@ -22,9 +24,9 @@ async function writeErrors(h: Harness, name: string, args: Record<string, unknow
   await h.fail(name, args, 'invalid-response');
   h.respond(html);
   await h.fail(name, args, 'invalid-response');
-  h.respond((r) => (isWrite(r) ? json({ data: { id: 'x' } }) : apiError(500)));
+  h.respond((r) => (isWrite(r) ? done() : apiError(500)));
   await h.fail(name, args, 'http-500');
-  h.respond((r) => (isWrite(r) ? json({ data: { id: 'x' } }) : html()));
+  h.respond((r) => (isWrite(r) ? done() : html()));
   await h.fail(name, args, 'invalid-response');
 }
 
@@ -58,6 +60,11 @@ defineToolScenarios(import.meta, registerMemberTools, {
     h.respond((r) => (r.method === 'DELETE' ? empty() : json(card([user]))));
     await h.fail('remove_card_member', { cardId: 'c1', userId: 'u1' }, 'readback-failed');
     await writeErrors(h, 'remove_card_member', { cardId: 'c1', userId: 'u1' }, 'DELETE');
+  },
+  remove_card_member_html: async (h) => {
+    // DELETE /cards/:id/members/:userId answers 204; HTML-200 is not success.
+    h.respond((r) => (r.method === 'DELETE' ? html() : json(card([]))));
+    await h.fail('remove_card_member', { cardId: 'c1', userId: 'u1' }, 'invalid-response');
   },
   add_board_member: async (h) => {
     const roster = { data: [member('ADMIN'), { ...member('MEMBER'), user_id: 'u2' }] };

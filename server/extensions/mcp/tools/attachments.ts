@@ -2,7 +2,9 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { config } from '../config';
-import { ToolError, apiFetch, apiPath, dataOf, findRow, request, rowWithId, rowsOf, runTool } from './toolSupport';
+import {
+  ToolError, apiFetch, apiPath, dataOf, expectFields, findRow, inParent, request, rowWithId, rowsOf, runTool,
+} from './toolSupport';
 
 // Card attachments. Names, arguments and read-backs mirror the local Python
 // server (chimedeck_mcp/tools.py), except download_attachment, which returns
@@ -116,19 +118,26 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
       // [why] The server rejects a missing name; Python leaves it optional.
       body: { url: args.url, name: args.name || args.url }, token, schema: dataOf(rowWithId),
     });
-    return findRow(await cardAttachments(args.cardId), 'id', created.data.id);
+    const row = findRow(await cardAttachments(args.cardId), 'id', created.data.id);
+    // Stored verbatim (attachment/api/addUrl.ts); a link's view_url is its URL.
+    expectFields(row, { name: args.name || args.url, view_url: args.url });
+    return row;
   }));
 
   server.registerTool('delete_attachment', {
-    description: 'Remove an attachment from a card.',
+    description: 'Remove an attachment from a card. It must be on cardId (not-in-card otherwise).',
     inputSchema: { cardId: attachmentCardId, attachmentId: z.string().min(1).describe('ID of the attachment') },
     annotations: { destructiveHint: true },
   }, (args) => runTool(token, async () => {
-    await request({ method: 'DELETE', path: apiPath`/api/v1/attachments/${args.attachmentId}`, token, schema: z.unknown() });
-    // [why] There is no GET /attachments/:id to 404, so the card's list is the read-back.
-    if ((await cardAttachments(args.cardId)).some((row) => row.id === args.attachmentId)) {
-      throw new ToolError('delete-failed');
-    }
-    return { deleted: true, id: args.attachmentId };
+    // [why] There is no GET /attachments/:id, so the card's list is both the
+    // scope check (DELETE /attachments/:id alone would delete it on any card) and the read-back.
+    const target = inParent(await cardAttachments(args.cardId), args.attachmentId, 'card');
+    // The route answers 200 {data: {id}}; anything else (HTML-200, null) is invalid-response.
+    const { data } = await request({
+      method: 'DELETE', path: apiPath`/api/v1/attachments/${target.id}`, token, schema: dataOf(rowWithId),
+    });
+    if (data.id !== target.id) throw new ToolError('invalid-response');
+    if ((await cardAttachments(args.cardId)).some((row) => row.id === target.id)) throw new ToolError('delete-failed');
+    return { deleted: true, id: target.id };
   }));
 }

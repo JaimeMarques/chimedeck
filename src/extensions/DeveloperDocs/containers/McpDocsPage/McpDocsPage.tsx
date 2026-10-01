@@ -381,7 +381,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="available-tools">
             <H2>Available Tools</H2>
             <P>
-              Each tool maps to a specific REST API endpoint. The board coverage tools (from <Code>get_me</Code> on) use the same names and arguments as the local Python <Code>chimedeck-mcp</Code> server, and every write returns the object read back after the change.
+              Each tool maps to a specific REST API endpoint. The board coverage tools (from <Code>get_me</Code> on) use the same names and arguments as the local Python <Code>chimedeck-mcp</Code> server, and every write returns the object read back after the change. Every requested field is compared on the read-back (text as the server stores it: trimmed and sanitized); a mismatch is <Code>readback-failed</Code>. A DELETE succeeds only with its route’s real answer (<Code>204</Code>, or <Code>200</Code> naming the deleted row for attachments and comments); an HTML or other body is <Code>invalid-response</Code>. Tools that take a parent ID (<Code>cardId</Code>, <Code>boardId</Code>) next to a child ID require the child to belong to that parent and fail with <Code>not-in-card</Code> / <Code>not-in-board</Code> before sending any write.
+            </P>
+            <P>
+              Known limitation: the card and list archive routes toggle the stored state. <Code>archive_card</Code> and <Code>archive_list</Code> resolve the UUID and current state first, only PATCH when the state differs, and report any other post-state as <Code>archive-state-conflict</Code>; a concurrent toggle by another client between the read and the PATCH can still flip it. An explicit <Code>archived: boolean</Code> body on those routes would make the operation atomic.
             </P>
             <Table
               headers={['Tool', 'Description', 'Endpoint']}
@@ -1530,7 +1533,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* update_card */}
           <Section id="tool-update-card">
             <H3>update_card</H3>
-            <P>Update a card’s title, description, due date and/or completion tick. Give at least one field, otherwise the tool fails with <Code>nothing-to-update</Code> before any request. The PATCH body uses the server’s snake_case fields (<Code>due_date</Code>, <Code>due_complete</Code>). Returns the card read back with its includes.</P>
+            <P>Update a card’s title, description, due date and/or completion tick. Give at least one field, otherwise the tool fails with <Code>nothing-to-update</Code> before any request. The PATCH body uses the server’s snake_case fields (<Code>due_date</Code>, <Code>due_complete</Code>). Returns the card read back with its includes; every given field must read back as written.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1624,7 +1627,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* archive_card */}
           <Section id="tool-archive-card">
             <H3>archive_card</H3>
-            <P>Archive or restore a card. The server route toggles, so the tool reads the card first and only PATCHes when its state differs from <Code>archived</Code>. Returns the card read back; a mismatch is <Code>readback-failed</Code>.</P>
+            <P>Archive or restore a card. The server route toggles, so the tool reads the card first (a short ID resolves to the UUID used for every later request) and only PATCHes when its state differs from <Code>archived</Code>. Returns the card read back; any other post-state is <Code>archive-state-conflict</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1653,7 +1656,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_card */}
           <Section id="tool-delete-card">
             <H3>delete_card</H3>
-            <P>Permanently delete a card. Destructive. Prefer <Code>archive_card</Code>. Verifies the card now returns 404 and returns <Code>&#123;deleted: true, id, title&#125;</Code>.</P>
+            <P>Permanently delete a card. Destructive. Prefer <Code>archive_card</Code>. Requires a <Code>204</Code> DELETE, verifies the card now returns 404 and returns <Code>&#123;deleted: true, id, title&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1749,7 +1752,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* edit_comment */}
           <Section id="tool-edit-comment">
             <H3>edit_comment</H3>
-            <P>Edit the text of an existing comment. Returns the comment read back from the card’s top-level comments, or for a reply from its parent’s replies.</P>
+            <P>Edit the text of an existing comment. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no PATCH sent; pass the comment UUID). Returns the comment read back from the card’s top-level comments, or for a reply from its parent’s replies.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1787,7 +1790,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_comment */}
           <Section id="tool-delete-comment">
             <H3>delete_comment</H3>
-            <P>Delete a comment (the server keeps a placeholder). Destructive. The server soft-deletes: for a top-level comment the tool requires the re-read row to have <Code>deleted: true</Code> and returns that <Code>[deleted]</Code> placeholder; a deleted reply must be absent from its parent’s replies, and the tool returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <P>Delete a comment (the server keeps a placeholder). Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). The server soft-deletes: for a top-level comment the tool requires the re-read row to have <Code>deleted: true</Code> and returns that <Code>[deleted]</Code> placeholder; a deleted reply must be absent from its parent’s replies, and the tool returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1903,7 +1906,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_attachment */}
           <Section id="tool-delete-attachment">
             <H3>delete_attachment</H3>
-            <P>Remove an attachment from a card. Destructive. Verifies the attachment is absent from the card’s attachment list.</P>
+            <P>Remove an attachment from a card. Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the attachment is absent from the card’s attachment list.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2028,7 +2031,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_label */}
           <Section id="tool-delete-label">
             <H3>delete_label</H3>
-            <P>Delete a board label from the board and every card. Destructive. Verifies the label is absent from the board’s label list.</P>
+            <P>Delete a board label from the board and every card. Destructive. It must be on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no DELETE sent). Verifies the label is absent from the board’s label list.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2249,7 +2252,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* set_checklist_item */}
           <Section id="tool-set-checklist-item">
             <H3>set_checklist_item</H3>
-            <P>Check, uncheck or rename a checklist item. Give <Code>checked</Code>, <Code>title</Code> or both (<Code>nothing-to-update</Code> otherwise). Returns <Code>&#123;item, card&#125;</Code>.</P>
+            <P>Check, uncheck or rename a checklist item. Give <Code>checked</Code>, <Code>title</Code> or both (<Code>nothing-to-update</Code> otherwise). Returns <Code>&#123;item, card&#125;</Code>; the item must read back with the requested <Code>checked</Code> and trimmed <Code>title</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2287,7 +2290,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* rename_checklist */}
           <Section id="tool-rename-checklist">
             <H3>rename_checklist</H3>
-            <P>Rename a checklist. Returns <Code>&#123;checklist, items, card&#125;</Code>.</P>
+            <P>Rename a checklist. Returns <Code>&#123;checklist, items, card&#125;</Code>; the checklist must read back with the trimmed title.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2316,7 +2319,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_checklist */}
           <Section id="tool-delete-checklist">
             <H3>delete_checklist</H3>
-            <P>Delete a checklist and all its items. Destructive. Verifies the checklist is absent from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <P>Delete a checklist and all its items. Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the checklist is absent from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2345,7 +2348,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_checklist_item */}
           <Section id="tool-delete-checklist-item">
             <H3>delete_checklist_item</H3>
-            <P>Delete one checklist item. Destructive. Verifies the item is absent from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <P>Delete one checklist item. Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the item is absent from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2374,7 +2377,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* rename_list */}
           <Section id="tool-rename-list">
             <H3>rename_list</H3>
-            <P>Rename a list. Returns the list read back from the board’s lists.</P>
+            <P>Rename a list. The list (open or archived) must be on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no PATCH sent). Returns the list read back from the board’s lists; its title must match the sanitized, trimmed text.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2412,7 +2415,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* archive_list */}
           <Section id="tool-archive-list">
             <H3>archive_list</H3>
-            <P>Archive a list. The server route toggles, so a list already in the board’s archived lists is returned without a PATCH. Returns the list read back from the archived lists.</P>
+            <P>Archive a list. The tool finds the list among the board’s open and archived lists (by UUID or short ID; <Code>not-in-board</Code> otherwise). The server route toggles, so a list already archived is returned without a PATCH, and the PATCH uses the UUID. Returns the list read back from the archived lists; anything else is <Code>archive-state-conflict</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2441,7 +2444,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_list */}
           <Section id="tool-delete-list">
             <H3>delete_list</H3>
-            <P>Permanently delete an empty list. Destructive. Prefer <Code>archive_list</Code>. The server refuses a list that still has cards (<Code>delete-requires-confirmation</Code>); this tool sends no confirmation, matching the local Python server. Verifies the list is absent from the board and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <P>Permanently delete an empty list. Destructive. Prefer <Code>archive_list</Code>. The server refuses a list that still has cards (<Code>delete-requires-confirmation</Code>); this tool sends no confirmation, matching the local Python server. The list must be on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no DELETE sent) and the DELETE must answer <Code>204</Code>. Verifies the list is absent from both the board’s open and archived lists and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2470,7 +2473,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* update_board */}
           <Section id="tool-update-board">
             <H3>update_board</H3>
-            <P>Update a board’s title, description or visibility. Give at least one field (<Code>nothing-to-update</Code> otherwise). Returns the board read back.</P>
+            <P>Update a board’s title, description or visibility. Give at least one field (<Code>nothing-to-update</Code> otherwise). Returns the board read back; every given field must match.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[

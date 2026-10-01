@@ -88,7 +88,11 @@ The server exits immediately with a clear error message if `CHIMEDECK_TOKEN` is 
 
 List creation honours the board's existing writable-member permission checks. Agents should create workflow lists only on an explicitly scoped board.
 
-Board coverage tools mirror the local Python `chimedeck-mcp` server: the same tool names and camelCase argument names, so agents switch servers without changes. Lookups (`get_me`, `list_workspaces`, `list_lists`, `list_labels`, `list_board_members`, …) resolve IDs before writing. Every write returns the object read back after the change (a fresh card, or the row found in its list/card read); deletes verify the object is gone and return a small confirmation. A read-back that disagrees with the request is an error (`readback-failed`, `delete-failed`), and a missing, HTML or wrong-shaped response is `invalid-response`, never success. Read tools advertise `readOnlyHint`; deletes and `archive_list` advertise `destructiveHint`.
+Board coverage tools mirror the local Python `chimedeck-mcp` server: the same tool names and camelCase argument names, so agents switch servers without changes. Lookups (`get_me`, `list_workspaces`, `list_lists`, `list_labels`, `list_board_members`, …) resolve IDs before writing. Every write returns the object read back after the change (a fresh card, or the row found in its list/card read); deletes verify the object is gone and return a small confirmation. Every requested field is compared on the read-back: booleans, enums and roles exactly, due dates as instants, and text the way the server's handler stores it (trimmed, and passed through the server's own `sanitizeText`/`sanitizeRichText` where the handler sanitizes; an empty description is `null`). A read-back that disagrees with the request is an error (`readback-failed`, `delete-failed`), and a missing, HTML or wrong-shaped response is `invalid-response`, never success. A DELETE succeeds only with its route's real answer: `204 No Content` for lists, labels, checklists, checklist items, cards and card labels/members; `200 {data}` naming the deleted row for attachments and comments. Read tools advertise `readOnlyHint`; deletes and `archive_list` advertise `destructiveHint`.
+
+Tools that take a parent ID (`cardId`, `boardId`) next to a child ID read the parent first and require the child to belong to it, by UUID or by a short ID the parent's rows expose (lists do; attachments and comments do not, so pass their UUIDs). On a mismatch they fail with `not-in-card` / `not-in-board` and send no write: the REST routes for checklists, checklist items, attachments, labels, lists and comments act on the child ID alone, on any card or board.
+
+**Known limitation — archive toggles.** `PATCH /cards/:id/archive` and `PATCH /lists/:id/archive` toggle the stored state and ignore their body. `archive_card` and `archive_list` resolve the canonical UUID and current state first and only send the PATCH when the state differs, then re-read; a post-state other than the requested one is `archive-state-conflict`, never success. A concurrent toggle by another client between that read and the PATCH can still flip the object the other way; this cannot be closed from the MCP side. For the maintainer: an explicit `archived: boolean` body on those routes (set, not toggle) would make the operation atomic and idempotent.
 
 ---
 
@@ -506,7 +510,7 @@ Archived cards are not included; use `list_archived_cards`.
 | `dueDate` | string \| null | No | ISO-8601 due date; `null` or empty string clears it |
 | `dueComplete` | boolean | No | Mark the due date complete (the visible tick) or not |
 
-Give at least one field, otherwise the tool fails with `nothing-to-update` before any request. The PATCH body uses the server's snake_case fields (`due_date`, `due_complete`). Returns the card read back with its includes.
+Give at least one field, otherwise the tool fails with `nothing-to-update` before any request. The PATCH body uses the server's snake_case fields (`due_date`, `due_complete`). Returns the card read back with its includes; `title`, `description`, `due_date` and `due_complete` must read back as written (`readback-failed` otherwise).
 
 #### `set_card_due`
 | Parameter | Type | Required | Description |
@@ -523,14 +527,14 @@ Give `dueDate`, `dueComplete` or both (`nothing-to-update` otherwise). `dueDate`
 | `cardId` | string | ✅ | ID of the card |
 | `archived` | boolean | No | `true` to archive (default), `false` to restore |
 
-The server route toggles, so the tool reads the card first and only PATCHes when its state differs from `archived`. Returns the card read back; a mismatch is `readback-failed`.
+The server route toggles, so the tool reads the card first (a short ID resolves to the UUID used for every later request) and only PATCHes when its state differs from `archived`. Returns the card read back; a post-state other than `archived` is `archive-state-conflict` (see the known limitation above).
 
 #### `delete_card`
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card |
 
-Destructive. Prefer `archive_card`. Verifies the card now returns 404 and returns `{deleted: true, id, title}`.
+Destructive. Prefer `archive_card`. Requires a `204` DELETE, verifies the card now returns 404 and returns `{deleted: true, id, title}`.
 
 #### `copy_card`
 | Parameter | Type | Required | Description |
@@ -557,7 +561,7 @@ Replies are not included; use `get_card_discussion`.
 | `commentId` | string | ✅ | ID of the comment |
 | `content` | string | ✅ | New comment text |
 
-Returns the comment read back from the card's top-level comments, or for a reply from its parent's replies.
+The comment must be on `cardId` (top level or a reply; `not-in-card` otherwise, no PATCH sent). Returns the comment read back from the card's top-level comments, or for a reply from its parent's replies; its content must match the sanitized, trimmed text.
 
 #### `delete_comment`
 | Parameter | Type | Required | Description |
@@ -565,7 +569,7 @@ Returns the comment read back from the card's top-level comments, or for a reply
 | `cardId` | string | ✅ | ID of the card the comment is on |
 | `commentId` | string | ✅ | ID of the comment |
 
-Destructive. The server soft-deletes: for a top-level comment the tool requires the re-read row to have `deleted: true` and returns that `[deleted]` placeholder; a deleted reply must be absent from its parent's replies, and the tool returns `{deleted: true, id}`.
+Destructive. The comment must be on `cardId` (`not-in-card` otherwise, no DELETE sent). The server soft-deletes: for a top-level comment the tool requires the re-read row to have `deleted: true` and returns that `[deleted]` placeholder; a deleted reply must be absent from its parent's replies, and the tool returns `{deleted: true, id}`.
 
 #### `get_attachments`
 | Parameter | Type | Required | Description |
@@ -595,7 +599,7 @@ The server requires a name, so an omitted `name` is sent as the URL. Returns the
 | `cardId` | string | ✅ | ID of the card the attachment is on |
 | `attachmentId` | string | ✅ | ID of the attachment |
 
-Destructive. Verifies the attachment is absent from the card's attachment list.
+Destructive. The attachment must be on `cardId` (`not-in-card` otherwise, no DELETE sent). Verifies the attachment is absent from the card's attachment list.
 
 #### `add_card_label`
 | Parameter | Type | Required | Description |
@@ -628,7 +632,7 @@ Returns the label read back from the board's label list.
 | `boardId` | string | ✅ | ID of the board the label belongs to |
 | `labelId` | string | ✅ | ID of the label |
 
-Destructive. Verifies the label is absent from the board's label list.
+Destructive. The label must be on `boardId` (`not-in-board` otherwise, no DELETE sent). Verifies the label is absent from the board's label list.
 
 #### `add_card_member`
 | Parameter | Type | Required | Description |
@@ -687,7 +691,7 @@ Returns `{item, card}` read back from the card.
 | `checked` | boolean | No | `true` to tick, `false` to untick |
 | `title` | string | No | New item text |
 
-Give `checked`, `title` or both (`nothing-to-update` otherwise). Returns `{item, card}`.
+Give `checked`, `title` or both (`nothing-to-update` otherwise). Returns `{item, card}`; the item must read back with the requested `checked` and trimmed `title`.
 
 #### `rename_checklist`
 | Parameter | Type | Required | Description |
@@ -695,7 +699,7 @@ Give `checked`, `title` or both (`nothing-to-update` otherwise). Returns `{item,
 | `checklistId` | string | ✅ | ID of the checklist |
 | `title` | string | ✅ | New title |
 
-Returns `{checklist, items, card}`.
+Returns `{checklist, items, card}`; the checklist must read back with the trimmed title.
 
 #### `delete_checklist`
 | Parameter | Type | Required | Description |
@@ -703,7 +707,7 @@ Returns `{checklist, items, card}`.
 | `cardId` | string | ✅ | ID of the card the checklist is on |
 | `checklistId` | string | ✅ | ID of the checklist |
 
-Destructive. Verifies the checklist is absent from the card and returns `{deleted: true, id}`.
+Destructive. The checklist must be on `cardId` (`not-in-card` otherwise, no DELETE sent). Verifies the checklist is absent from the card and returns `{deleted: true, id}`.
 
 #### `delete_checklist_item`
 | Parameter | Type | Required | Description |
@@ -711,7 +715,7 @@ Destructive. Verifies the checklist is absent from the card and returns `{delete
 | `cardId` | string | ✅ | ID of the card the item is on |
 | `itemId` | string | ✅ | ID of the checklist item |
 
-Destructive. Verifies the item is absent from the card and returns `{deleted: true, id}`.
+Destructive. The item must be on `cardId` (`not-in-card` otherwise, no DELETE sent). Verifies the item is absent from the card and returns `{deleted: true, id}`.
 
 #### `rename_list`
 | Parameter | Type | Required | Description |
@@ -720,7 +724,7 @@ Destructive. Verifies the item is absent from the card and returns `{deleted: tr
 | `listId` | string | ✅ | ID of the list |
 | `title` | string | ✅ | New title |
 
-Returns the list read back from the board's lists.
+The list (open or archived, by UUID or short ID) must be on `boardId` (`not-in-board` otherwise, no PATCH sent). Returns the list read back from the board's lists; its title must match the sanitized, trimmed text.
 
 #### `archive_list`
 | Parameter | Type | Required | Description |
@@ -728,7 +732,7 @@ Returns the list read back from the board's lists.
 | `boardId` | string | ✅ | ID of the board the list is on |
 | `listId` | string | ✅ | ID of the list |
 
-The server route toggles, so a list already in the board's archived lists is returned without a PATCH. Returns the list read back from the archived lists.
+The tool finds the list among the board's open and archived lists (by UUID or short ID; `not-in-board` otherwise). The server route toggles, so a list already archived is returned without a PATCH, and the PATCH uses the UUID. Returns the list read back from the archived lists; anything else is `archive-state-conflict` (see the known limitation above).
 
 #### `delete_list`
 | Parameter | Type | Required | Description |
@@ -736,7 +740,7 @@ The server route toggles, so a list already in the board's archived lists is ret
 | `boardId` | string | ✅ | ID of the board the list is on |
 | `listId` | string | ✅ | ID of the list |
 
-Destructive. Prefer `archive_list`. The server refuses a list that still has cards (`delete-requires-confirmation`); this tool sends no confirmation, matching the local Python server. Verifies the list is absent from the board and returns `{deleted: true, id}`.
+Destructive. Prefer `archive_list`. The server refuses a list that still has cards (`delete-requires-confirmation`); this tool sends no confirmation, matching the local Python server. The list (open or archived) must be on `boardId` (`not-in-board` otherwise, no DELETE sent); the DELETE must answer `204`. Verifies the list is absent from both the board's open and archived lists and returns `{deleted: true, id}`.
 
 #### `update_board`
 | Parameter | Type | Required | Description |
@@ -746,4 +750,4 @@ Destructive. Prefer `archive_list`. The server refuses a list that still has car
 | `description` | string | No | New description |
 | `visibility` | `PRIVATE` \| `WORKSPACE` \| `PUBLIC` | No | New visibility |
 
-Give at least one field (`nothing-to-update` otherwise). Returns the board read back.
+Give at least one field (`nothing-to-update` otherwise). Returns the board read back; every given field must match (`readback-failed` otherwise).

@@ -38,19 +38,40 @@ async function writeErrors(h: Harness, name: string, args: Record<string, unknow
   await h.fail(name, args, 'readback-failed');
 }
 
+// Deletes read the card first (scope), DELETE by id, then read the card again.
 async function deleteContract(h: Harness, name: string, args: Record<string, unknown>, path: string, stillThere: unknown) {
-  h.respond(writeThen(() => new Response(null, { status: 204 }), () => json(emptyCard)));
-  assert.deepEqual(await h.ok(name, args), { deleted: true, id: Object.values(args)[1] });
-  assert.deepEqual(calls(h), [['DELETE', path, undefined], ['GET', '/api/v1/cards/card-1', undefined]]);
+  const id = Object.values(args)[1];
+  const before = () => json(card);
+  let deleted = false;
+  h.respond((r) => {
+    if (r.method === 'DELETE') { deleted = true; return new Response(null, { status: 204 }); }
+    return deleted ? json(emptyCard) : before();
+  });
+  assert.deepEqual(await h.ok(name, args), { deleted: true, id });
+  assert.deepEqual(calls(h), [
+    ['GET', '/api/v1/cards/card-1', undefined], ['DELETE', path, undefined], ['GET', '/api/v1/cards/card-1', undefined],
+  ]);
   h.respond(writeThen(() => new Response(null, { status: 204 }), () => json(stillThere)));
   await h.fail(name, args, 'delete-failed');
-  h.respond(writeThen(() => apiError(404), () => json(emptyCard)));
+  h.respond(writeThen(() => apiError(404), before));
   await h.fail(name, args, 'http-404');
-  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests.length, 2);
+  // Only 204 is the route's success: HTML-200 or a JSON body is invalid-response.
+  for (const bad of [html, () => json({ data: { id } })]) {
+    h.respond(writeThen(bad, before));
+    await h.fail(name, args, 'invalid-response');
+  }
   for (const bad of [() => json(null), html]) {
     h.respond(writeThen(() => new Response(null, { status: 204 }), bad));
     await h.fail(name, args, 'invalid-response');
   }
+}
+
+// The target sits on another card: not-in-card and no DELETE sent.
+async function notInCard(h: Harness, name: string, args: Record<string, unknown>) {
+  h.respond(writeThen(() => new Response(null, { status: 204 }), () => json(emptyCard)));
+  await h.fail(name, args, 'not-in-card');
+  assert.deepEqual(calls(h), [['GET', '/api/v1/cards/card-1', undefined]]);
 }
 
 defineToolScenarios(import.meta, registerChecklistTools, {
@@ -69,6 +90,8 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       ['GET', '/api/v1/cards/card-1', undefined],
     ]);
     await writeErrors(h, 'create_checklist', { cardId: 'card-1', title: 'Todo' }, cl1);
+    h.respond(writeThen(() => json({ data: cl1 }, 201), () => json(card)));
+    await h.fail('create_checklist', { cardId: 'card-1', title: 'Other' }, 'readback-failed');
   },
   add_checklist_item: async (h) => {
     h.respond(writeThen(() => json({ data: it1 }, 201), () => json(card)));
@@ -78,6 +101,8 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       ['GET', '/api/v1/cards/card-1', undefined],
     ]);
     await writeErrors(h, 'add_checklist_item', { checklistId: 'cl1', title: 'one' }, it1);
+    h.respond(writeThen(() => json({ data: it1 }, 201), () => json(card)));
+    await h.fail('add_checklist_item', { checklistId: 'cl1', title: 'two' }, 'readback-failed');
   },
   set_checklist_item: async (h) => {
     const bodies: Array<[Record<string, unknown>, unknown]> = [
@@ -87,8 +112,9 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       [{ checked: true, title: 'renamed' }, { checked: true, title: 'renamed' }],
     ];
     for (const [extra, body] of bodies) {
-      h.respond(writeThen(() => json({ data: it1 }), () => json(card)));
-      assert.deepEqual(await h.ok('set_checklist_item', { itemId: 'it1', ...extra }), { item: it1, card });
+      const after = { ...card, includes: { ...card.includes, checklistItems: [{ ...it1, ...extra }, it2] } };
+      h.respond(writeThen(() => json({ data: it1 }), () => json(after)));
+      assert.deepEqual(await h.ok('set_checklist_item', { itemId: 'it1', ...extra }), { item: { ...it1, ...extra }, card: after });
       assert.deepEqual(calls(h), [
         ['PATCH', '/api/v1/checklist-items/it1', body],
         ['GET', '/api/v1/cards/card-1', undefined],
@@ -97,7 +123,17 @@ defineToolScenarios(import.meta, registerChecklistTools, {
     h.respond(() => json({ data: it1 }));
     await h.fail('set_checklist_item', { itemId: 'it1' }, 'nothing-to-update');
     assert.equal(h.requests.length, 0);
-    await writeErrors(h, 'set_checklist_item', { itemId: 'it1', checked: true }, it1);
+    await writeErrors(h, 'set_checklist_item', { itemId: 'it1', checked: false }, it1);
+  },
+  set_checklist_item_readback_mismatch: async (h) => {
+    // it1 reads back unchecked and titled 'one': a request for anything else is not success.
+    for (const wrong of [{ checked: true }, { title: 'renamed' }, { checked: false, title: 'renamed' }]) {
+      h.respond(writeThen(() => json({ data: it1 }), () => json(card)));
+      await h.fail('set_checklist_item', { itemId: 'it1', ...wrong }, 'readback-failed');
+    }
+    // Trimmed as the server stores it.
+    h.respond(writeThen(() => json({ data: it1 }), () => json(card)));
+    await h.ok('set_checklist_item', { itemId: 'it1', title: '  one ' });
   },
   rename_checklist: async (h) => {
     h.respond(writeThen(() => json({ data: { ...cl1, items: [it1] } }), () => json(card)));
@@ -108,9 +144,13 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       ['GET', '/api/v1/cards/card-1', undefined],
     ]);
     await writeErrors(h, 'rename_checklist', { checklistId: 'cl1', title: 'Todo' }, cl1);
+    h.respond(writeThen(() => json({ data: cl1 }), () => json(card)));
+    await h.fail('rename_checklist', { checklistId: 'cl1', title: 'Renamed' }, 'readback-failed');
   },
   delete_checklist: (h) => deleteContract(h, 'delete_checklist', { cardId: 'card-1', checklistId: 'cl1' },
     '/api/v1/checklists/cl1', { data: card.data, includes: { checklists: [cl1], checklistItems: [] } }),
   delete_checklist_item: (h) => deleteContract(h, 'delete_checklist_item', { cardId: 'card-1', itemId: 'it1' },
     '/api/v1/checklist-items/it1', { data: card.data, includes: { checklists: [], checklistItems: [it1] } }),
+  delete_checklist_not_in_card: (h) => notInCard(h, 'delete_checklist', { cardId: 'card-1', checklistId: 'cl-on-card-b' }),
+  delete_checklist_item_not_in_card: (h) => notInCard(h, 'delete_checklist_item', { cardId: 'card-1', itemId: 'it-on-card-b' }),
 });
