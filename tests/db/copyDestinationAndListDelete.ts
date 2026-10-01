@@ -36,7 +36,7 @@ const boards = {
 };
 const boardIds = Object.values(boards);
 const lists = Object.fromEntries(Object.keys(boards).map((key) => [key, randomUUID()])) as Record<keyof typeof boards, string>;
-const deleteLists = { empty: randomUUID(), withCard: randomUUID(), race: randomUUID() };
+const deleteLists = { empty: randomUUID(), withCard: randomUUID(), race: randomUUID(), relocated: randomUUID() };
 const relocatedListId = randomUUID();
 const sourceCardId = randomUUID();
 const tokens = Object.fromEntries(userIds.map((id) => [id, { id: randomUUID(), token: `hf_${randomUUID()}` }]));
@@ -118,6 +118,7 @@ try {
   await db('cards').insert([
     { id: sourceCardId, list_id: lists.source, title: 'Fixture', short_id: shortId(), position: 'a0', archived: false },
     { id: randomUUID(), list_id: deleteLists.withCard, title: 'Keep me', short_id: shortId(), position: 'a0', archived: false },
+    { id: randomUUID(), list_id: deleteLists.relocated, title: 'Keep me too', short_id: shortId(), position: 'a0', archived: false },
   ]);
   await db('api_tokens').insert(Object.entries(tokens).map(([userId, { id, token }]) => ({
     id, user_id: userId, name: 'Disposable copy/delete integration token',
@@ -216,6 +217,27 @@ try {
   }
   await assert.rejects(pendingInsert, (error: { code?: string }) => error.code === '23503');
   console.info('PASS Card insert blocks on the delete row lock and fails on the FK after commit');
+
+  // Race 3: the list is relocated to another workspace's board while a confirmed delete is
+  // in flight. The delete must wait, see the new board and refuse, keeping the list and cards.
+  const relocatingList = await db.transaction();
+  let pendingRelocatedDelete: Promise<Response> | undefined;
+  try {
+    await relocatingList('lists').where({ id: deleteLists.relocated }).update({ board_id: boards.otherWorkspace });
+    pendingRelocatedDelete = deleteList(deleteLists.relocated, { confirm: true });
+    assert.equal(await isPending(pendingRelocatedDelete), true, 'delete must wait for the in-flight list relocation');
+    await relocatingList.commit();
+  } catch (error) {
+    await relocatingList.rollback();
+    if (pendingRelocatedDelete) await pendingRelocatedDelete.catch(() => {});
+    throw error;
+  }
+  const relocatedDelete = await pendingRelocatedDelete;
+  assert.equal(relocatedDelete.status, 409);
+  assert.equal(await errorCode(relocatedDelete), 'target-list-changed');
+  assert.ok(await db('lists').where({ id: deleteLists.relocated }).first(), 'relocated list must survive');
+  assert.equal(await cardCount(deleteLists.relocated), 1);
+  console.info('PASS Confirmed delete waits for a list relocation and refuses, keeping the list and its cards');
 } finally {
   try { await cleanup(); } finally { await db.destroy(); }
 }

@@ -62,6 +62,13 @@ export async function handleDeleteList(req: Request, listId: string): Promise<Re
   const confirmationResponse = await db.transaction(async (trx) => {
     const lockedList = await trx<ListRow>('lists').where({ id: listId }).forUpdate().first();
     if (!lockedList) return null;
+    // PUT /lists/:id/idBoard may have moved the list after authorization; never delete it there.
+    if (lockedList.board_id !== list.board_id) {
+      return Response.json(
+        { error: { code: 'target-list-changed', message: 'List changed; reload and retry' } },
+        { status: 409 },
+      );
+    }
 
     // Count cards in the list to determine if confirmation is required.
     const cardRows = await trx('cards').where({ list_id: listId }).count('id as count').first();
