@@ -1,5 +1,6 @@
 // POST /api/v1/cards/:id/copy — copy card to a writable list in the same workspace, with optional checklists & members; min role: MEMBER.
 import { randomUUID } from 'node:crypto';
+import type { Knex } from 'knex';
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import { dispatchEvent } from '../../../mods/events/dispatch';
@@ -13,6 +14,8 @@ import { applyBoardVisibility } from '../../../middlewares/boardVisibility';
 import { between, LOW_SENTINEL, HIGH_SENTINEL } from '../../list/mods/fractional';
 import { resolveCoverImageUrl } from '../../../common/cards/cover';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
+import { lockBoardMemberMutations } from '../../board/api/members/lock';
 
 type CardRow = {
   id: string;
@@ -76,23 +79,23 @@ function computePosition(
   return between(previousCard.position, nextCard.position);
 }
 
-async function copyChecklists(sourceCardId: string, newCardId: string): Promise<void> {
-  const checklists = await db<ChecklistRow>('checklists')
+async function copyChecklists(trx: Knex.Transaction, sourceCardId: string, newCardId: string): Promise<void> {
+  const checklists = await trx<ChecklistRow>('checklists')
     .where({ card_id: sourceCardId })
     .orderBy('position', 'asc');
   for (const checklist of checklists) {
     const newChecklistId = randomUUID();
-    await db('checklists').insert({
+    await trx('checklists').insert({
       id: newChecklistId,
       card_id: newCardId,
       title: checklist.title,
       position: checklist.position,
     });
-    const items = await db<ChecklistItemRow>('checklist_items')
+    const items = await trx<ChecklistItemRow>('checklist_items')
       .where({ checklist_id: checklist.id })
       .orderBy('position', 'asc');
     if (items.length > 0) {
-      await db('checklist_items').insert(
+      await trx('checklist_items').insert(
         items.map((item: { title: string; position: string; assigned_member_id?: string | null; due_date?: string | null }) => ({
           id: randomUUID(),
           card_id: newCardId,
@@ -190,17 +193,6 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
     if (targetRoleError) return targetRoleError;
   }
 
-  const targetCards = await db<CardRow>('cards')
-    .where({ list_id: body.targetListId, archived: false })
-    .orderBy('position', 'asc');
-
-  const positionIdx =
-    typeof body.position === 'number'
-      ? Math.max(0, Math.min(body.position - 1, targetCards.length))
-      : targetCards.length;
-
-  const newPosition = computePosition(targetCards, positionIdx);
-  const newId = randomUUID();
   const shortId = await generateUniqueShortId('cards');
   const title =
     typeof body.title === 'string' && body.title.trim() ? body.title.trim() : card.title;
@@ -214,34 +206,70 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
     );
   }
 
-  await db('cards').insert({
-    id: newId,
-    short_id: shortId,
-    list_id: body.targetListId,
-    title,
-    description: card.description,
-    position: newPosition,
-    archived: false,
-    due_date: card.due_date,
-    cover_attachment_id: null,
-    cover_color: fullCard.cover_color ?? null,
-    cover_size: fullCard.cover_size ?? 'SMALL',
-  });
-
-  if (body.keepMembers) {
-    const cardMembers = await db<CardMemberRow>('card_members').where({ card_id: cardId });
-    if (cardMembers.length > 0) {
-      await db('card_members').insert(
-        cardMembers.map((m: { user_id: string }) => ({ card_id: newId, user_id: m.user_id })),
+  // The checks above authorized a snapshot of targetList.board_id. Pin the list to that
+  // board while inserting: FOR SHARE conflicts with the lock an UPDATE of lists.board_id
+  // takes, but not with the KEY SHARE other card inserts take on the list row.
+  const newId = randomUUID();
+  const copy = await db.transaction(async (trx) => {
+    // Member/checklist-assignment triggers take these advisory locks; take them before the
+    // row lock, in the order board/workspace deletes use before cascading to lists.
+    if (body.keepMembers || body.keepChecklists) {
+      await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+      await lockBoardMemberMutations(trx, targetList.board_id);
+    }
+    const lockedList = await trx<ListRow>('lists').where({ id: body.targetListId }).forShare().first();
+    if (!lockedList) {
+      return Response.json(
+        { error: { name: 'target-list-not-found', data: { message: 'Target list not found' } } },
+        { status: 404 },
       );
     }
-  }
+    if (lockedList.board_id !== targetList.board_id) {
+      return Response.json(
+        { error: { code: 'target-list-changed', message: 'Target list changed; reload and retry' } },
+        { status: 409 },
+      );
+    }
 
-  if (body.keepChecklists) {
-    await copyChecklists(cardId, newId);
-  }
+    const targetCards = await trx<CardRow>('cards')
+      .where({ list_id: body.targetListId, archived: false })
+      .orderBy('position', 'asc');
 
-  const copy = await db<CardRow>('cards').where({ id: newId }).first();
+    const positionIdx =
+      typeof body.position === 'number'
+        ? Math.max(0, Math.min(body.position - 1, targetCards.length))
+        : targetCards.length;
+
+    await trx('cards').insert({
+      id: newId,
+      short_id: shortId,
+      list_id: body.targetListId,
+      title,
+      description: card.description,
+      position: computePosition(targetCards, positionIdx),
+      archived: false,
+      due_date: card.due_date,
+      cover_attachment_id: null,
+      cover_color: fullCard.cover_color ?? null,
+      cover_size: fullCard.cover_size ?? 'SMALL',
+    });
+
+    if (body.keepMembers) {
+      const cardMembers = await trx<CardMemberRow>('card_members').where({ card_id: cardId });
+      if (cardMembers.length > 0) {
+        await trx('card_members').insert(
+          cardMembers.map((m: { user_id: string }) => ({ card_id: newId, user_id: m.user_id })),
+        );
+      }
+    }
+
+    if (body.keepChecklists) {
+      await copyChecklists(trx, cardId, newId);
+    }
+
+    return trx<CardRow>('cards').where({ id: newId }).first();
+  });
+  if (copy instanceof Response) return copy;
   if (!copy) {
     return Response.json(
       { error: { name: 'card-not-found', data: { message: 'Copied card not found' } } },

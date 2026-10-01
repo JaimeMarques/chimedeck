@@ -37,6 +37,7 @@ const boards = {
 const boardIds = Object.values(boards);
 const lists = Object.fromEntries(Object.keys(boards).map((key) => [key, randomUUID()])) as Record<keyof typeof boards, string>;
 const deleteLists = { empty: randomUUID(), withCard: randomUUID(), race: randomUUID() };
+const relocatedListId = randomUUID();
 const sourceCardId = randomUUID();
 const tokens = Object.fromEntries(userIds.map((id) => [id, { id: randomUUID(), token: `hf_${randomUUID()}` }]));
 
@@ -112,6 +113,7 @@ try {
   await db('lists').insert([
     ...Object.entries(lists).map(([key, id]) => ({ id, board_id: boards[key as keyof typeof boards], title: key, short_id: shortId(), position: 'a0' })),
     ...Object.entries(deleteLists).map(([key, id], index) => ({ id, board_id: boards.allowed, title: `delete-${key}`, short_id: shortId(), position: `b${index}` })),
+    { id: relocatedListId, board_id: boards.allowed, title: 'relocated', short_id: shortId(), position: 'c0' },
   ]);
   await db('cards').insert([
     { id: sourceCardId, list_id: lists.source, title: 'Fixture', short_id: shortId(), position: 'a0', archived: false },
@@ -143,6 +145,27 @@ try {
   const sameBoard = await copyTo(guestId, lists.source);
   assert.equal(sameBoard.status, 201);
   console.info('PASS Copy into an authorized board (and within the source board) still succeeds');
+
+  // Race: the authorized destination list is relocated to another workspace's board while
+  // the copy is in flight (as PUT /lists/:id/idBoard does). The copy must wait for the
+  // relocation, see the new board and refuse, instead of landing in the other workspace.
+  const relocating = await db.transaction();
+  let pendingCopy: Promise<Response> | undefined;
+  try {
+    await relocating('lists').where({ id: relocatedListId }).update({ board_id: boards.otherWorkspace });
+    pendingCopy = copyTo(memberId, relocatedListId);
+    assert.equal(await isPending(pendingCopy), true, 'copy must wait for the in-flight list relocation');
+    await relocating.commit();
+  } catch (error) {
+    await relocating.rollback();
+    if (pendingCopy) await pendingCopy.catch(() => {});
+    throw error;
+  }
+  const racedCopy = await pendingCopy;
+  assert.equal(racedCopy.status, 409);
+  assert.equal(await errorCode(racedCopy), 'target-list-changed');
+  assert.equal(await cardCount(relocatedListId), 0);
+  console.info('PASS Copy waits for a destination list relocation and refuses with no card inserted');
 
   // Delete: unchanged contract for empty, unconfirmed and confirmed deletes.
   assert.equal((await deleteList(deleteLists.empty)).status, 204);
