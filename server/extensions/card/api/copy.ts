@@ -9,6 +9,7 @@ import {
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { requireCardWritable, type CardScopedRequest } from '../middlewares/requireCardWritable';
+import { applyBoardVisibility } from '../../../middlewares/boardVisibility';
 import { between, LOW_SENTINEL, HIGH_SENTINEL } from '../../list/mods/fractional';
 import { resolveCoverImageUrl } from '../../../common/cards/cover';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
@@ -34,6 +35,7 @@ type ListRow = {
 type BoardRow = {
   id: string;
   workspace_id: string;
+  state: string;
 };
 
 type ChecklistRow = {
@@ -157,7 +159,36 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
     );
   }
 
-  const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
+  // The source checks above do not cover the destination. Mirror Move's cross-board
+  // preflight before any insert; visibility must run before the role check so a
+  // guestType resolved for the source board cannot satisfy the target's guest gate.
+  if (targetList.board_id !== board.id) {
+    const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
+    if (!targetBoard) {
+      return Response.json({ error: { name: 'target-board-not-found' } }, { status: 404 });
+    }
+    if (targetBoard.workspace_id !== board.workspace_id) {
+      return Response.json(
+        {
+          error: {
+            code: 'cross-workspace-copy-forbidden',
+            message: 'Cards can only be copied between boards in the same workspace',
+          },
+        },
+        { status: 403 },
+      );
+    }
+    const targetVisibilityError = await applyBoardVisibility(req, targetBoard.id);
+    if (targetVisibilityError) return targetVisibilityError;
+    if (targetBoard.state === 'ARCHIVED') {
+      return Response.json(
+        { error: { code: 'board-is-archived', message: 'The target board is archived and cannot be modified' } },
+        { status: 403 },
+      );
+    }
+    const targetRoleError = await requireMemberOrBoardGuestMember(scopedReq, targetBoard.id);
+    if (targetRoleError) return targetRoleError;
+  }
 
   const targetCards = await db<CardRow>('cards')
     .where({ list_id: body.targetListId, archived: false })
@@ -221,7 +252,7 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
 
   await dispatchEvent({
     type: 'card.copied',
-    boardId: targetBoard?.id ?? board.id,
+    boardId: targetList.board_id,
     entityId: newId,
     actorId: (req as AuthenticatedRequest).currentUser?.id ?? 'system',
     payload: { sourceId: cardId },
