@@ -1,4 +1,4 @@
-// POST /api/v1/cards/:id/copy — copy card to any list with optional checklists & members; min role: MEMBER.
+// POST /api/v1/cards/:id/copy — copy card to a writable list in the same workspace, with optional checklists & members; min role: MEMBER.
 import { randomUUID } from 'node:crypto';
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
