@@ -283,7 +283,7 @@ Returns `204 No Content` on success.
 | `delete_checklist_item` | Delete one checklist item | `DELETE /api/v1/checklist-items/:itemId` |
 | `rename_list` | Rename a list | `PATCH /api/v1/lists/:listId` |
 | `archive_list` | Archive a list | `PATCH /api/v1/lists/:listId/archive` |
-| `delete_list` | Permanently delete a list | `DELETE /api/v1/lists/:listId` |
+| `delete_list` | Permanently delete an empty list | `DELETE /api/v1/lists/:listId` |
 | `update_board` | Update a board's title, description or visibility | `PATCH /api/v1/boards/:boardId` |
 
 ### Tool Parameters
@@ -515,7 +515,7 @@ Give at least one field, otherwise the tool fails with `nothing-to-update` befor
 | `dueDate` | string \| null | No | ISO-8601 due date; `null` or empty string clears it |
 | `dueComplete` | boolean | No | Mark complete (`true`) or not (`false`) |
 
-Give `dueDate`, `dueComplete` or both (`nothing-to-update` otherwise). Returns the card read back with its includes.
+Give `dueDate`, `dueComplete` or both (`nothing-to-update` otherwise). `dueDate` is sent as a UTC instant, so a bare date means UTC midnight. Returns the card read back with its includes.
 
 #### `archive_card`
 | Parameter | Type | Required | Description |
@@ -557,7 +557,7 @@ Replies are not included; use `get_card_discussion`.
 | `commentId` | string | ✅ | ID of the comment |
 | `content` | string | ✅ | New comment text |
 
-Returns the comment read back from the card's top-level comments; editing a reply returns `readback-failed`.
+Returns the comment read back from the card's top-level comments, or for a reply from its parent's replies.
 
 #### `delete_comment`
 | Parameter | Type | Required | Description |
@@ -565,7 +565,7 @@ Returns the comment read back from the card's top-level comments; editing a repl
 | `cardId` | string | ✅ | ID of the card the comment is on |
 | `commentId` | string | ✅ | ID of the comment |
 
-Destructive. The server soft-deletes: the tool requires the re-read row to have `deleted: true` and returns that `[deleted]` placeholder.
+Destructive. The server soft-deletes: for a top-level comment the tool requires the re-read row to have `deleted: true` and returns that `[deleted]` placeholder; a deleted reply must be absent from its parent's replies, and the tool returns `{deleted: true, id}`.
 
 #### `get_attachments`
 | Parameter | Type | Required | Description |
@@ -585,9 +585,9 @@ Returns the attachment metadata as text, then the file as an image block for `im
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card |
 | `url` | string | ✅ | Link URL |
-| `name` | string | No | Display name |
+| `name` | string | No | Display name (defaults to the URL) |
 
-The server currently requires `name`; omitting it returns `bad-request`. Returns the attachment read back from the card's attachment list.
+The server requires a name, so an omitted `name` is sent as the URL. Returns the attachment read back from the card's attachment list.
 
 #### `delete_attachment`
 | Parameter | Type | Required | Description |

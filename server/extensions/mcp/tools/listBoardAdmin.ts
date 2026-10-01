@@ -42,7 +42,9 @@ export function registerListBoardAdmin(server: McpServer, token: string): void {
 
   // No GET /lists/:id route exists, so the delete is verified on the board, as Python does.
   server.registerTool('delete_list', {
-    description: 'Permanently delete a list and every card in it. Prefer archive_list unless deletion is intended.',
+    // [why] No confirm:true is sent (as in Python), so the server refuses a list that still has cards.
+    description: 'Permanently delete an empty list. A list that still has cards is refused '
+      + '(delete-requires-confirmation). Prefer archive_list unless deletion is intended.',
     inputSchema: { boardId, listId },
     annotations: { destructiveHint: true },
   }, (args) => runTool(token, async () => {

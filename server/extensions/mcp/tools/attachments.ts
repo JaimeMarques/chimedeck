@@ -108,12 +108,13 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
     inputSchema: {
       cardId: z.string().min(1).describe('ID of the card'),
       url: z.string().min(1).describe('Link URL'),
-      name: z.string().optional().describe('Display name'),
+      name: z.string().optional().describe('Display name (defaults to the URL)'),
     },
   }, (args) => runTool(token, async () => {
     const created = await request({
       method: 'POST', path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
-      body: { url: args.url, name: args.name }, token, schema: dataOf(rowWithId),
+      // [why] The server rejects a missing name; Python leaves it optional.
+      body: { url: args.url, name: args.name || args.url }, token, schema: dataOf(rowWithId),
     });
     return findRow(await cardAttachments(args.cardId), 'id', created.data.id);
   }));

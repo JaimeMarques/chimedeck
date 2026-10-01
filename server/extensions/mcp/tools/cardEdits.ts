@@ -33,7 +33,9 @@ async function patchCard(id: string, fields: CardFields, token: string) {
 // snake_case body; camelCase keys are silently ignored by the server.
 function dueFields(args: { dueDate?: string | null | undefined; dueComplete?: boolean | undefined }): CardFields {
   const fields: CardFields = {};
-  if (args.dueDate !== undefined) fields.due_date = args.dueDate || null;
+  // [why] An explicit UTC instant: a bare date would be stored in the DB session's
+  // timezone and fail the read-back comparison on a non-UTC database.
+  if (args.dueDate !== undefined) fields.due_date = args.dueDate ? new Date(args.dueDate).toISOString() : null;
   if (args.dueComplete !== undefined) fields.due_complete = args.dueComplete;
   return fields;
 }

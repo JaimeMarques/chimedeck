@@ -105,10 +105,12 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
       { method: 'POST', path: '/api/v1/cards/c1/attachments/url', body: { url: 'https://example.test/docs', name: 'Docs' } },
       get('/api/v1/cards/c1/attachments'),
     ]);
-    // name omitted is not sent; the server currently requires it.
+    // name omitted defaults to the URL; the server requires a name.
+    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [link] })));
+    await h.ok('add_url_attachment', { cardId: 'c1', url: 'https://example.test/docs' });
+    assert.deepEqual(calls(h)[0]?.body, { url: 'https://example.test/docs', name: 'https://example.test/docs' });
     h.respond(route(() => apiError(400, 'bad-request'), () => json({ data: [] })));
-    await h.fail('add_url_attachment', { cardId: 'c1', url: 'https://example.test/docs' }, 'bad-request');
-    assert.deepEqual(calls(h)[0]?.body, { url: 'https://example.test/docs' });
+    await h.fail('add_url_attachment', args, 'bad-request');
     h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [file()] })));
     await h.fail('add_url_attachment', args, 'readback-failed');
     h.respond(route(() => json(null), () => json({ data: [link] })));

@@ -830,7 +830,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                   rowId: 'tool-delete-list',
                   cells: [
                     { key: 'tool', content: <Code>delete_list</Code> },
-                    { key: 'desc', content: 'Permanently delete a list' },
+                    { key: 'desc', content: 'Permanently delete an empty list' },
                     { key: 'endpoint', content: <Code>DELETE /api/v1/lists/:listId</Code> },
                   ],
                 },
@@ -1749,7 +1749,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* edit_comment */}
           <Section id="tool-edit-comment">
             <H3>edit_comment</H3>
-            <P>Edit the text of an existing comment. Returns the comment read back from the card’s top-level comments; editing a reply returns <Code>readback-failed</Code>.</P>
+            <P>Edit the text of an existing comment. Returns the comment read back from the card’s top-level comments, or for a reply from its parent’s replies.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1787,7 +1787,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_comment */}
           <Section id="tool-delete-comment">
             <H3>delete_comment</H3>
-            <P>Delete a comment (the server keeps a placeholder). Destructive. The server soft-deletes: the tool requires the re-read row to have <Code>deleted: true</Code> and returns that <Code>[deleted]</Code> placeholder.</P>
+            <P>Delete a comment (the server keeps a placeholder). Destructive. The server soft-deletes: for a top-level comment the tool requires the re-read row to have <Code>deleted: true</Code> and returns that <Code>[deleted]</Code> placeholder; a deleted reply must be absent from its parent’s replies, and the tool returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -1865,7 +1865,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* add_url_attachment */}
           <Section id="tool-add-url-attachment">
             <H3>add_url_attachment</H3>
-            <P>Attach a link to a card. The server currently requires <Code>name</Code>; omitting it returns <Code>bad-request</Code>. Returns the attachment read back from the card’s attachment list.</P>
+            <P>Attach a link to a card. The server requires a name, so an omitted <Code>name</Code> is sent as the URL. Returns the attachment read back from the card’s attachment list.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2441,7 +2441,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* delete_list */}
           <Section id="tool-delete-list">
             <H3>delete_list</H3>
-            <P>Permanently delete a list. Destructive. Prefer <Code>archive_list</Code>. The server refuses a list that still has cards (<Code>delete-requires-confirmation</Code>); this tool sends no confirmation, matching the local Python server. Verifies the list is absent from the board and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <P>Permanently delete an empty list. Destructive. Prefer <Code>archive_list</Code>. The server refuses a list that still has cards (<Code>delete-requires-confirmation</Code>); this tool sends no confirmation, matching the local Python server. Verifies the list is absent from the board and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[

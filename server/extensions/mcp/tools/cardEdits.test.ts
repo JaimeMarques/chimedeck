@@ -40,7 +40,7 @@ defineToolScenarios(import.meta, registerCardEdits, {
     }), after);
     assert.deepEqual(calls(h), [
       { method: 'PATCH', path: '/api/v1/cards/c%2F1',
-        body: { title: 'New', description: 'D', due_date: '2026-09-20T12:00:00Z', due_complete: true } },
+        body: { title: 'New', description: 'D', due_date: '2026-09-20T12:00:00.000Z', due_complete: true } },
       get('/api/v1/cards/c%2F1'),
     ]);
     // Empty string clears the date; only passed keys are sent.
@@ -64,9 +64,13 @@ defineToolScenarios(import.meta, registerCardEdits, {
     h.respond(() => json(after));
     assert.deepEqual(await h.ok('set_card_due', { cardId: 'c1', dueDate: '2026-09-20', dueComplete: false }), after);
     assert.deepEqual(calls(h), [
-      { method: 'PATCH', path: '/api/v1/cards/c1', body: { due_date: '2026-09-20', due_complete: false } },
+      // A bare date is sent as an explicit UTC instant.
+      { method: 'PATCH', path: '/api/v1/cards/c1', body: { due_date: '2026-09-20T00:00:00.000Z', due_complete: false } },
       get('/api/v1/cards/c1'),
     ]);
+    h.respond(() => json(card({ due_date: '2026-09-20T10:00:00.000Z' })));
+    await h.ok('set_card_due', { cardId: 'c1', dueDate: '2026-09-20T12:00:00+02:00' });
+    assert.deepEqual(calls(h)[0]?.body, { due_date: '2026-09-20T10:00:00.000Z' });
     h.respond(() => json(card()));
     await h.ok('set_card_due', { cardId: 'c1', dueDate: null });
     assert.deepEqual(calls(h)[0]?.body, { due_date: null });

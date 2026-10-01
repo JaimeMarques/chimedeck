@@ -31,9 +31,22 @@ defineToolScenarios(import.meta, registerCommentTools, {
       { method: 'PATCH', path: '/api/v1/comments/m1', body: { content: 'new' } },
       { method: 'GET', path: '/api/v1/cards/c1/comments', body: undefined },
     ]);
-    // Not in the top-level list (e.g. a reply) after the write.
+    // Not in the top-level list after the write.
     h.respond(route(() => json({ data: edited }), () => json({ data: [] })));
     await h.fail('edit_comment', args, 'readback-failed');
+    // A reply is read back from its parent's replies.
+    const reply = comment({ id: 'r1', parent_id: 'p/1', content: 'new' });
+    const replyArgs = { cardId: 'c1', commentId: 'r1', content: 'new' };
+    h.respond(route(() => json({ data: reply }), () => json({ data: [comment({ id: 'r0' }), reply] })));
+    assert.deepEqual(await h.ok('edit_comment', replyArgs), reply);
+    assert.deepEqual(calls(h), [
+      { method: 'PATCH', path: '/api/v1/comments/r1', body: { content: 'new' } },
+      { method: 'GET', path: '/api/v1/comments/p%2F1/replies', body: undefined },
+    ]);
+    h.respond(route(() => json({ data: reply }), () => json({ data: [] })));
+    await h.fail('edit_comment', replyArgs, 'readback-failed');
+    h.respond(route(() => json({ data: reply }), html));
+    await h.fail('edit_comment', replyArgs, 'invalid-response');
     h.respond(route(() => apiError(403, 'comment-not-owner'), () => json({ data: [edited] })));
     await h.fail('edit_comment', args, 'comment-not-owner');
     h.respond(route(() => json(null), () => json({ data: [edited] })));
@@ -65,5 +78,20 @@ defineToolScenarios(import.meta, registerCommentTools, {
     await h.fail('delete_comment', args, 'comment-deleted');
     h.respond(route(() => json({ data: placeholder }), html));
     await h.fail('delete_comment', args, 'invalid-response');
+    // A deleted reply drops out of its parent's (non-deleted) replies.
+    const reply = comment({ id: 'r1', parent_id: 'p1', deleted: true, content: '[deleted]' });
+    const replyArgs = { cardId: 'c1', commentId: 'r1' };
+    h.respond(route(() => json({ data: reply }), () => json({ data: [comment({ id: 'r0', parent_id: 'p1' })] })));
+    assert.deepEqual(await h.ok('delete_comment', replyArgs), { deleted: true, id: 'r1' });
+    assert.deepEqual(calls(h), [
+      { method: 'DELETE', path: '/api/v1/comments/r1', body: undefined },
+      { method: 'GET', path: '/api/v1/comments/p1/replies', body: undefined },
+    ]);
+    h.respond(route(() => json({ data: reply }), () => json({ data: [comment({ id: 'r1', parent_id: 'p1' })] })));
+    await h.fail('delete_comment', replyArgs, 'delete-failed');
+    h.respond(route(() => json({ data: reply }), () => apiError(404)));
+    await h.fail('delete_comment', replyArgs, 'http-404');
+    h.respond(route(() => json({ data: reply }), html));
+    await h.fail('delete_comment', replyArgs, 'invalid-response');
   },
 });
