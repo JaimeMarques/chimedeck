@@ -23,7 +23,7 @@ Call the `get_card` MCP tool with a valid `cardId` to verify the card's full det
 ## Activity Feed
 1. Invoke `get_card` with `cardId`: `CARD_ID` and `include_activities`: `true`.
 2. Expect `includes.activities` to list the card's activity rows oldest first;
-   the `card_created` row's `actor_id` is the card's creator.
+   when present, the `card_created` row's `actor_id` is the card's creator (some cards, e.g. duplicated or copied ones, have none).
 3. Without `include_activities` (or with `false`), `includes.activities` is `[]`.
 
 ## Error Cases

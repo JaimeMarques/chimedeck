@@ -333,7 +333,7 @@ The existing list API enforces board writable-member permission checks.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card to retrieve |
-| `include_activities` | boolean | No | Also return the card's activity feed in `includes.activities` (default false). Rows are oldest first; the `card_created` row's `actor_id` is the card's creator. |
+| `include_activities` | boolean | No | Also return the card's activity feed in `includes.activities` (default false). Rows are oldest first; when present, the `card_created` row's `actor_id` is the card's creator (some cards, e.g. duplicated or copied ones, have none). |
 
 #### `get_card_discussion`
 

@@ -845,7 +845,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     {
                       key: 'desc',
                       content:
-                        "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; the 'card_created' row's actor_id is the card's creator.",
+                        "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; when present, the 'card_created' row's actor_id is the card's creator (some cards, e.g. duplicated or copied ones, have none).",
                     },
                   ],
                 },

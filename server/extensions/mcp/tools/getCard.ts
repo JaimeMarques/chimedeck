@@ -13,7 +13,7 @@ export function registerGetCard(server: McpServer, token: string): void {
           .boolean()
           .optional()
           .describe(
-            "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; the 'card_created' row's actor_id is the card's creator.",
+            "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; when present, the 'card_created' row's actor_id is the card's creator (some cards, e.g. duplicated or copied ones, have none).",
           ),
       },
     },
