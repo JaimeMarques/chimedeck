@@ -699,6 +699,7 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
       due_complete: false,
       start_date: typeof start === 'string' && start.trim() ? start : null,
       position,
+      created_by: user.id,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

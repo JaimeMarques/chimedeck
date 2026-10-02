@@ -477,6 +477,7 @@ async function performCreate(
           throw new Error('FILE attachment import requires status READY');
         }
       }
+      if (entity_type === 'card' && authorUserId) row.created_by = authorUserId;
       if (entity_type === 'activity' && sourceReferences.length > 0) {
         const anchor = (await trx('boards').where({ id: board_id }).first()) as
           | { id: string }

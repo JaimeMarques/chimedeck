@@ -602,6 +602,7 @@ export async function handleConvertChecklistItemToCard(req: Request, itemId: str
     description: null,
     position,
     archived: false,
+    created_by: (req as AuthenticatedRequest).currentUser?.id ?? null,
   });
 
   await db<ChecklistItemRow>('checklist_items').where({ id: itemId }).delete();
