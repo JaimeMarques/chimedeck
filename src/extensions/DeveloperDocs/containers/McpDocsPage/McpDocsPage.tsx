@@ -430,8 +430,8 @@ curl -X POST http://localhost:3000/api/mcp \\
                   rowId: 'tool-get-card',
                   cells: [
                     { key: 'tool', content: <Code>get_card</Code> },
-                    { key: 'desc', content: 'Retrieve the full details of a single card by its ID' },
-                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId</Code> },
+                    { key: 'desc', content: 'Retrieve the full details of a single card by its ID, optionally with its activity feed' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId[?include=activities]</Code> },
                   ],
                 },
                 {
@@ -834,6 +834,19 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'type', content: 'string' },
                     { key: 'req', content: '✅' },
                     { key: 'desc', content: 'ID of the card to retrieve' },
+                  ],
+                },
+                {
+                  rowId: 'gc-include-activities',
+                  cells: [
+                    { key: 'param', content: <Code>include_activities</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content:
+                        "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; the 'card_created' row's actor_id is the card's creator.",
+                    },
                   ],
                 },
               ]}

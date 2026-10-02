@@ -6,7 +6,7 @@ void mock.module('../apiClient', () => ({
   apiCall: apiCallMock,
 }));
 
-type ToolHandler = (args: { cardId: string }) => Promise<{
+type ToolHandler = (args: { cardId: string; include_activities?: boolean }) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
@@ -58,6 +58,38 @@ describe('registerGetCard', () => {
     expect(result).toEqual({
       content: [{ type: 'text', text: JSON.stringify({ data: { id: 'card-1', title: 'Demo card' } }) }],
     });
+  });
+
+  test('requests activities only when include_activities is true', async () => {
+    apiCallMock.mockResolvedValue({ data: { data: { id: 'card-1' }, includes: { activities: [] } } });
+    registerGetCard(server as never, 'token-1');
+
+    const registeredHandler = handler;
+    if (!registeredHandler) throw new Error('get_card handler was not registered');
+
+    await registeredHandler({ cardId: 'card-1', include_activities: true });
+    await registeredHandler({ cardId: 'card-1', include_activities: false });
+
+    expect(apiCallMock.mock.calls.map(([call]) => (call as { path: string }).path)).toEqual([
+      '/api/v1/cards/card-1?include=activities',
+      '/api/v1/cards/card-1',
+    ]);
+  });
+
+  test('encodes the card ID so it cannot inject query parameters', async () => {
+    apiCallMock.mockResolvedValue({ data: { data: { id: 'card-1' } } });
+    registerGetCard(server as never, 'token-1');
+
+    const registeredHandler = handler;
+    if (!registeredHandler) throw new Error('get_card handler was not registered');
+
+    await registeredHandler({ cardId: 'card-1?include=activities' });
+    await registeredHandler({ cardId: '../boards/x', include_activities: true });
+
+    expect(apiCallMock.mock.calls.map(([call]) => (call as { path: string }).path)).toEqual([
+      '/api/v1/cards/card-1%3Finclude%3Dactivities',
+      '/api/v1/cards/..%2Fboards%2Fx?include=activities',
+    ]);
   });
 
   test('returns a structured MCP error when the card cannot be read', async () => {

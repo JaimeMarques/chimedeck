@@ -236,7 +236,7 @@ Returns `204 No Content` on success.
 | `invite_to_board` | Invite a user to a board by email (requires board admin) | `POST /api/v1/boards/:boardId/members` |
 | `search_cards` | Full-text search over cards within a workspace | `GET /api/v1/workspaces/:workspaceId/search` |
 | `search_board` | Full-text search over cards and lists scoped to a single board | `GET /api/v1/boards/:boardId/search` |
-| `get_card` | Retrieve the full details of a single card by its ID | `GET /api/v1/cards/:cardId` |
+| `get_card` | Retrieve the full details of a single card by its ID, optionally with its activity feed | `GET /api/v1/cards/:cardId[?include=activities]` |
 | `get_card_discussion` | Read top-level comments and their replies with completeness status | `GET /api/v1/cards/:cardId/comments` + `GET /api/v1/comments/:commentId/replies` |
 | `get_comment_replies` | Read one parent's non-deleted direct replies | `GET /api/v1/comments/:commentId/replies` |
 | `get_state_transitions` | Retrieve state transition graph and enabled flag for a board | `GET /api/v1/boards/:boardId/state-transitions` |
@@ -333,6 +333,7 @@ The existing list API enforces board writable-member permission checks.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card to retrieve |
+| `include_activities` | boolean | No | Also return the card's activity feed in `includes.activities` (default false). Rows are oldest first; the `card_created` row's `actor_id` is the card's creator. |
 
 #### `get_card_discussion`
 

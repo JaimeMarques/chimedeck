@@ -20,6 +20,12 @@ Call the `get_card` MCP tool with a valid `cardId` to verify the card's full det
 - The returned `id` matches `CARD_ID`.
 - No `isError` flag is set.
 
+## Activity Feed
+1. Invoke `get_card` with `cardId`: `CARD_ID` and `include_activities`: `true`.
+2. Expect `includes.activities` to list the card's activity rows oldest first;
+   the `card_created` row's `actor_id` is the card's creator.
+3. Without `include_activities` (or with `false`), `includes.activities` is `[]`.
+
 ## Error Cases
 - If `cardId` does not exist or the token has no access to it, the tool returns `{ isError: true, content: [{ type: "text", text: "Error: ..." }] }` and the server does not crash.
 - If `cardId` is omitted, the MCP SDK rejects the call before it reaches the handler (Zod validation), returning a structured error.
