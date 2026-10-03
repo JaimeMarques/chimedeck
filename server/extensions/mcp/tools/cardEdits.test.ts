@@ -50,8 +50,10 @@ defineToolScenarios(import.meta, registerCardEdits, {
     // No fields or a non-date: rejected before any request.
     h.respond(() => json(card()));
     await h.fail('update_card', { cardId: 'c1' }, 'nothing-to-update');
-    assert.equal((await h.call('update_card', { cardId: 'c1', dueDate: 'soon' })).isError, true);
-    assert.equal(h.requests.length, 0);
+    for (const invalid of ['soon', '0', '2026-02-30', '2026-09-20T12:00:00', '2026-09-20T12:00:00Zmore']) {
+      assert.equal((await h.call('update_card', { cardId: 'c1', dueDate: invalid })).isError, true, invalid);
+      assert.equal(h.requests.length, 0, `${invalid} must not write`);
+    }
     // Read-back disagrees with the written due fields.
     h.respond(() => json(card({ due_complete: false })));
     await h.fail('update_card', { cardId: 'c1', dueComplete: true }, 'readback-failed');
@@ -84,6 +86,9 @@ defineToolScenarios(import.meta, registerCardEdits, {
     h.respond(() => json(card({ due_date: '2026-09-20T10:00:00.000Z' })));
     await h.ok('set_card_due', { cardId: 'c1', dueDate: '2026-09-20T12:00:00+02:00' });
     assert.deepEqual(calls(h)[0]?.body, { due_date: '2026-09-20T10:00:00.000Z' });
+    h.respond(() => json(card({ due_date: '0001-01-01T00:00:00.000Z' })));
+    await h.ok('set_card_due', { cardId: 'c1', dueDate: '0001-01-01' });
+    assert.deepEqual(calls(h)[0]?.body, { due_date: '0001-01-01T00:00:00.000Z' });
     h.respond(() => json(card()));
     await h.ok('set_card_due', { cardId: 'c1', dueDate: null });
     assert.deepEqual(calls(h)[0]?.body, { due_date: null });
@@ -183,7 +188,7 @@ defineToolScenarios(import.meta, registerCardEdits, {
     await h.fail('delete_card', { cardId: 'c1' }, 'invalid-response');
   },
   copy_card: async (h) => {
-    const copy = card({ id: 'c2', title: 'Copy' });
+    const copy = card({ id: 'c2', title: 'Copy', list_id: 'l2' });
     h.respond(route(() => json({ data: { id: 'c2' } }, 201), () => json(copy)));
     assert.deepEqual(await h.ok('copy_card', {
       cardId: 'c1', targetListId: 'l2', title: 'Copy', keepChecklists: true, keepMembers: false,
@@ -200,6 +205,11 @@ defineToolScenarios(import.meta, registerCardEdits, {
     h.respond(route(() => json({ data: { id: 'c2' } }, 201), () => json(copy)));
     await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2', title: ' Copy ' });
     await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2', title: 'Other' }, 'readback-failed');
+    // A successful POST is not proof that the copy reached the requested list or kept its ID.
+    h.respond(route(() => json({ data: { id: 'c2' } }, 201), () => json(card({ id: 'c2', title: 'Copy', list_id: 'l3' }))));
+    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'readback-failed');
+    h.respond(route(() => json({ data: { id: 'c2' } }, 201), () => json(card({ id: 'c3', title: 'Copy', list_id: 'l2' }))));
+    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'readback-failed');
     h.respond(route(() => apiError(404, 'list-not-found'), () => json(copy)));
     await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'list-not-found');
     h.respond(route(() => json(null), () => json(copy)));
