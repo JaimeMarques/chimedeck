@@ -3,10 +3,7 @@
 // then streams the object from S3 through the server to the browser.
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
-import {
-  requireWorkspaceMembership,
-  type WorkspaceScopedRequest,
-} from '../../../middlewares/permissionManager';
+import { authorizeAttachmentRead } from './authorizeRead';
 import { proxyS3Object } from '../common/proxyS3Object';
 
 interface ViewAttachmentRow {
@@ -20,6 +17,9 @@ interface ViewAttachmentRow {
   alias: string | null;
   name: string | null;
   mime_type: string | null;
+  upload_context: string;
+  comment_id: string | null;
+  uploaded_by: string;
 }
 
 interface CardRow {
@@ -170,9 +170,8 @@ export async function handleViewAttachment(req: Request, attachmentId: string): 
     return Response.json({ name: 'board-not-found', data: { message: 'Board not found' } }, { status: 404 });
   }
 
-  const scopedReq = req as WorkspaceScopedRequest;
-  const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
-  if (membershipError) return membershipError;
+  const accessError = await authorizeAttachmentRead(req, board, attachment);
+  if (accessError) return accessError;
 
   // URL-type attachments: redirect directly to the external URL
   if (attachment.type === 'URL') {

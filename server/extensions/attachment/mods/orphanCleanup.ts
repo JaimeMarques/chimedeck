@@ -44,13 +44,16 @@ export async function cleanupOrphanAttachments(): Promise<void> {
       const keysToDelete = [orphan.s3_key, orphan.thumbnail_key].filter(
         (key): key is string => typeof key === 'string' && key.length > 0,
       );
+      let s3DeletionFailed = false;
       for (const s3Key of keysToDelete) {
         try {
           await deleteObject({ s3Key });
         } catch {
-          // Best-effort S3 deletion — proceed to remove DB row regardless
+          // Keep the row so the next cleanup pass can retry this key.
+          s3DeletionFailed = true;
         }
       }
+      if (s3DeletionFailed) return;
       await trx<OrphanAttachment>('attachments').where({ id: orphan.id }).delete();
     });
   }

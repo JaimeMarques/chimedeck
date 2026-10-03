@@ -1331,7 +1331,7 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
 
   const attachmentMatch = subPath.match(/^attachments\/([^/]+)$/);
   if (attachmentMatch && req.method === 'GET') {
-    const attachment = await db('attachments').where({ id: attachmentMatch[1], card_id: context.card.id }).first() as {
+    const attachment = await db('attachments').where({ id: attachmentMatch[1], card_id: context.card.id, upload_context: 'card' }).first() as {
       id: string;
       card_id: string;
       uploaded_by: string;
@@ -1348,7 +1348,8 @@ export async function cardsRouter(req: AuthenticatedRequest, path: string): Prom
 
   if (attachmentMatch && req.method === 'DELETE') {
     if (!(await canMutateBoard(user.id, context.board))) return TRELLO_PERMISSION_DENIED();
-    await db('attachments').where({ id: attachmentMatch[1], card_id: context.card.id }).delete();
+    const deleted = await db('attachments').where({ id: attachmentMatch[1], card_id: context.card.id, upload_context: 'card' }).delete();
+    if (deleted === 0) return TRELLO_NOT_FOUND();
     return Response.json({});
   }
 

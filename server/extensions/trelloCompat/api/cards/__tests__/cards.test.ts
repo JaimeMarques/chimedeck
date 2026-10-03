@@ -320,6 +320,24 @@ describe('trelloCompat cards', () => {
     expect(dataStore.cards.find((row) => row.id === 'card-1')).toBeUndefined();
   });
 
+  it('does not expose or delete comment images through Trello card attachment endpoints', async () => {
+    const request = (method: 'GET' | 'DELETE', id: string) => {
+      const path = `/trello/1/cards/card-1/attachments/${id}`;
+      return trelloCompatRouter(new Request(`http://localhost${path}`, {
+        method, headers: { Authorization: 'Bearer hf_admin_token' },
+      }), path);
+    };
+    const listedPath = '/trello/1/cards/card-1/attachments';
+    const listed = await trelloCompatRouter(new Request(`http://localhost${listedPath}`, {
+      headers: { Authorization: 'Bearer hf_admin_token' },
+    }), listedPath);
+    expect((await readJson<Array<{ id: string }>>(listed, 200)).map((row) => row.id)).toEqual(['att-1']);
+    expect((await readJson<{ id: string }>(await request('GET', 'att-1'), 200)).id).toBe('att-1');
+    expect((await request('GET', 'comment-image'))?.status).toBe(404);
+    expect((await request('DELETE', 'comment-image'))?.status).toBe(404);
+    expect(dataStore.attachments.some((row) => row.id === 'comment-image')).toBe(true);
+  });
+
   it('GET /cards/{id}/board, /list, /checklists returns includes', async () => {
     const boardReq = new Request('http://localhost/trello/1/cards/card-1/board', {
       method: 'GET',

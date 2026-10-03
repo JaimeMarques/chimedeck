@@ -59,7 +59,10 @@ void mock.module('../../../common/db', () => ({ db: Object.assign(query, { trans
   try { return await callback(query); } catch (error) { Object.assign(rows, snapshot); throw error; }
 } }) }));
 void mock.module('../../../config/env', () => ({ env: { APP_URL: 'https://deck.example.test' } }));
-void mock.module('../../attachment/mods/s3/deleteObject', () => ({ deleteObject: async ({ s3Key }: { s3Key: string }) => { events.push(s3Key); } }));
+void mock.module('../../attachment/mods/s3/deleteObject', () => ({ deleteObject: async ({ s3Key }: { s3Key: string }) => {
+  events.push(s3Key);
+  if (scenario === 'cleanup-s3-failure' && s3Key === 'abandoned-object') throw new Error('Synthetic S3 deletion failure');
+} }));
 void mock.module('../../auth/middlewares/authentication', () => ({
   authenticate: async (req: Request & { currentUser?: { id: string } }) => { req.currentUser = { id: userId }; return null; },
 }));
@@ -106,7 +109,7 @@ if (scenario.startsWith('delete-')) {
     assert.equal(attachments[0]!.comment_id, null);
     assert.equal(typeof attachments[0]!.abandoned_at, 'string');
   }
-} else if (scenario === 'cleanup-drafts') {
+} else if (scenario === 'cleanup-drafts' || scenario === 'cleanup-s3-failure') {
   const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const recent = new Date().toISOString();
   const staleDraft = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
@@ -123,7 +126,9 @@ if (scenario.startsWith('delete-')) {
   const { cleanupOrphanAttachments, orphanCleanupInterval } = await import('../../attachment/mods/orphanCleanup');
   try {
     await cleanupOrphanAttachments();
-    assert.deepEqual(rows.attachments!.map((row) => row.id).sort(), ['draft-ready', 'draft-scanning', 'published', 'published-stale', 'removed-recently']);
+    const survivors = ['draft-ready', 'draft-scanning', 'published', 'published-stale', 'removed-recently'];
+    if (scenario === 'cleanup-s3-failure') survivors.push('abandoned');
+    assert.deepEqual(rows.attachments!.map((row) => row.id).sort(), survivors.sort());
     assert.deepEqual(events.sort(), ['abandoned-object', 'stale-draft-object', 'unfinished-object']);
   } finally { clearInterval(orphanCleanupInterval); }
 } else if (scenario.startsWith('association')) {

@@ -6,7 +6,7 @@ for (const scenario of [
   'single-wrong-user', 'multipart-wrong-user', 'non-image', 'denied',
   'association-ready', 'association-wrong-card', 'association-wrong-user',
   'association-stolen', 'association-card-upload', 'association-pending', 'association-scanning',
-  'association-offline-replay', 'association-absolute', 'association-external', 'cleanup-drafts',
+  'association-offline-replay', 'association-absolute', 'association-external', 'cleanup-drafts', 'cleanup-s3-failure',
   'association-canonical', 'association-pdf', 'association-missing-raw', 'association-missing-old-id', 'association-missing-new-id',
   'delete-success', 'delete-rollback',
   'association-cross-card-link', 'association-claimed-rejected', 'association-rejected-new',
