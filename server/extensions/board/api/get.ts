@@ -72,6 +72,7 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .as('cc');
 
     const attachmentCountsQuery = db('attachments')
+      .where({ upload_context: 'card' })
       .select('card_id')
       .select(
         db.raw(`SUM(CASE WHEN status = 'READY' AND referenced_card_id IS NULL THEN 1 ELSE 0 END) as attachment_count`),
@@ -218,10 +219,12 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .map((c) => (typeof c.id === 'string' ? c.id : null))
       .filter((id): id is string => id !== null);
     if (cardIds.length > 0) {
+      // [why] Explicit columns: ip_address / user_agent are audit-only and PUBLIC boards are readable without auth.
       activities = await db('activities')
         .whereIn('entity_id', cardIds)
         .whereIn('action', VISIBLE_EVENT_TYPES)
-        .orderBy('created_at', 'asc');
+        .orderBy('created_at', 'asc')
+        .select('id', 'entity_type', 'entity_id', 'board_id', 'action', 'actor_id', 'payload', 'created_at');
     }
   }
 

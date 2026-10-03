@@ -1,5 +1,8 @@
 // BoardCommentsPanel — paginated list of all comments across cards in a board.
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useGetBoardMembersQuery } from '~/extensions/Board/slices/boardMembersSlice';
+import { useGetBoardGuestsQuery } from '~/extensions/Board/slices/boardGuestsSlice';
+import { buildMentionNames, replaceUuidMentionLabels } from '~/extensions/Comment/utils/mentionNames';
 import { getBoardComments } from './api';
 import type { BoardComment } from './types';
 import translations from './translations/en.json';
@@ -11,6 +14,9 @@ interface Props {
 }
 
 const BoardCommentsPanel = ({ boardId, onCardClick }: Props) => {
+  const { currentData: members } = useGetBoardMembersQuery(boardId, { skip: !boardId.trim() });
+  const { currentData: guests } = useGetBoardGuestsQuery(boardId, { skip: !boardId.trim() });
+  const mentionNames = useMemo(() => buildMentionNames(members, guests), [members, guests]);
   const [comments, setComments] = useState<BoardComment[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -36,7 +42,7 @@ const BoardCommentsPanel = ({ boardId, onCardClick }: Props) => {
   );
 
   useEffect(() => {
-    loadPage(null);
+    void loadPage(null);
   }, [loadPage]);
 
   if (error) {
@@ -79,7 +85,7 @@ const BoardCommentsPanel = ({ boardId, onCardClick }: Props) => {
           {comment.deleted ? (
             <p className="italic text-muted">This comment was deleted.</p>
           ) : (
-            <p className="text-base whitespace-pre-wrap">{comment.content}</p>
+            <p className="text-base whitespace-pre-wrap">{replaceUuidMentionLabels(comment.content, mentionNames)}</p>
           )}
         </div>
       ))}

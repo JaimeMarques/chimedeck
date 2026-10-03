@@ -17,6 +17,14 @@ import { registerGetStateTransitionRules } from './tools/getStateTransitionRules
 import { registerCopyStateTransitions } from './tools/copyStateTransitions';
 import { registerImportValidate } from './tools/importValidate';
 import { registerImportDryRun, registerImportReset } from './tools/importRun';
+import { registerBoardLookups } from './tools/boardLookups';
+import { registerCardEdits } from './tools/cardEdits';
+import { registerCommentTools } from './tools/comments';
+import { registerAttachmentTools } from './tools/attachments';
+import { registerLabelTools } from './tools/labels';
+import { registerMemberTools } from './tools/members';
+import { registerChecklistTools } from './tools/checklists';
+import { registerListBoardAdmin } from './tools/listBoardAdmin';
 
 // token is threaded through to every tool so each API call uses the correct
 // credential — the env token for stdio mode, the request's Bearer token for HTTP mode.
@@ -40,4 +48,12 @@ export function registerMcpTools(server: McpServer, token: string): void {
   registerImportValidate(server, token);
   registerImportDryRun(server, token);
   registerImportReset(server, token);
+  registerBoardLookups(server, token);
+  registerCardEdits(server, token);
+  registerCommentTools(server, token);
+  registerAttachmentTools(server, token);
+  registerLabelTools(server, token);
+  registerMemberTools(server, token);
+  registerChecklistTools(server, token);
+  registerListBoardAdmin(server, token);
 }

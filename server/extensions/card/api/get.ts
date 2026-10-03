@@ -131,7 +131,9 @@ export async function handleGetCard(req: Request, cardId: string): Promise<Respo
       .andWhere((qb) => {
         qb.whereIn('action', VISIBLE_EVENT_TYPES).orWhere('action', 'card.description.updated');
       })
-      .orderBy('created_at', 'asc');
+      .orderBy('created_at', 'asc')
+      // [why] Explicit columns: ip_address / user_agent are audit-only, never sent to clients.
+      .select('id', 'entity_type', 'entity_id', 'board_id', 'action', 'actor_id', 'payload', 'created_at');
 
     const actorIds = [...new Set(rows.flatMap((activity) => activity.actor_id ? [activity.actor_id] : []))];
     const rawActors = actorIds.length

@@ -21,6 +21,7 @@ import { deleteBoardOptimisticThunk } from '../Board/slices/boardsSlice';
 import { fetchBoardDataThunk } from '../Board/slices/boardSlice';
 import { boardStarSet } from '../Board/boardStarEvents';
 import type { WorkspaceFilter } from './helpers';
+import { DEFAULT_PANEL_WIDTH, normalizePanelWidth } from './panelWidth';
 
 export const PREFS_STORAGE_KEY = 'board_switcher_prefs';
 
@@ -30,6 +31,7 @@ export interface BoardSwitcherPrefs {
   workspaceFilter: WorkspaceFilter;
   layout: 'grid' | 'list';
   boardsCollapsed: boolean;
+  panelWidth: number;
 }
 
 /** A board's star toggles: the latest one, how many are unsettled, and when the
@@ -97,9 +99,10 @@ const DEFAULT_PREFS: BoardSwitcherPrefs = {
   workspaceFilter: 'all',
   layout: 'grid',
   boardsCollapsed: false,
+  panelWidth: DEFAULT_PANEL_WIDTH,
 };
 
-function loadPrefs(): BoardSwitcherPrefs {
+export function loadPrefs(): BoardSwitcherPrefs {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY) ?? 'null');
     if (!parsed || typeof parsed !== 'object') return DEFAULT_PREFS;
@@ -111,6 +114,7 @@ function loadPrefs(): BoardSwitcherPrefs {
       workspaceFilter: typeof p.workspaceFilter === 'string' ? p.workspaceFilter : DEFAULT_PREFS.workspaceFilter,
       layout: p.layout === 'list' ? 'list' : 'grid',
       boardsCollapsed: typeof p.boardsCollapsed === 'boolean' ? p.boardsCollapsed : DEFAULT_PREFS.boardsCollapsed,
+      panelWidth: normalizePanelWidth(p.panelWidth),
     };
   } catch {
     return DEFAULT_PREFS;
@@ -313,6 +317,7 @@ const boardSwitcherSlice = createSlice({
   reducers: {
     setSwitcherPrefs(state, action: PayloadAction<Partial<BoardSwitcherPrefs>>) {
       state.prefs = { ...state.prefs, ...action.payload };
+      state.prefs.panelWidth = normalizePanelWidth(state.prefs.panelWidth);
     },
     /** The open board was renamed, got a new background or was archived (BoardPage's own
      *  actions carry no id). */

@@ -113,7 +113,19 @@ export async function handleBoardActivity(req: Request, boardId: string): Promis
 
   let query = db('activities')
     .leftJoin('users', 'activities.actor_id', 'users.id')
-    .select('activities.*', 'users.name as actor_name')
+    // [why] Explicit columns: ip_address / user_agent are audit-only and this
+    //       feed is readable without auth on PUBLIC boards.
+    .select(
+      'activities.id',
+      'activities.entity_type',
+      'activities.entity_id',
+      'activities.board_id',
+      'activities.action',
+      'activities.actor_id',
+      'activities.payload',
+      'activities.created_at',
+      'users.name as actor_name',
+    )
     .where({ board_id: resolvedBoardId })
     .whereIn('action', VISIBLE_EVENT_TYPES)
     .orderBy('activities.created_at', 'desc')

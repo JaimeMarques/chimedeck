@@ -15,6 +15,8 @@ export interface CardPreview {
 }
 
 export interface Attachment {
+  upload_context?: 'card' | 'comment';
+  comment_id?: string | null;
   id: string;
   card_id: string;
   name: string;
@@ -50,6 +52,7 @@ export interface Attachment {
 // ---------- Upload URL ----------
 
 export interface UploadUrlRequest {
+  uploadContext?: 'card' | 'comment';
   filename: string;
   mimeType: string;
   sizeBytes: number;
@@ -70,6 +73,7 @@ export interface ConfirmUploadRequest {
 // ---------- Multipart ----------
 
 export interface MultipartStartRequest {
+  uploadContext?: 'card' | 'comment';
   filename: string;
   mimeType: string;
   sizeBytes: number;

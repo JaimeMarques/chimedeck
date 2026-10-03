@@ -1,5 +1,6 @@
 // GET /api/v1/cards/:id/comments — list comments for a card; min role: MEMBER.
 import { db } from '../../../common/db';
+import { loadCommentImages } from './images';
 import { buildAvatarProxyUrl } from '../../../common/avatar/resolveAvatarUrl';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import {
@@ -147,6 +148,7 @@ export async function handleListComments(req: Request, cardId: string): Promise<
     reactionMap.set(row.comment_id, emojiMap);
   }
 
+  const images = await loadCommentImages(comments);
   const data = comments.map((comment) => {
     const emojiMap = reactionMap.get(comment.id);
     const reactions: ReactionSummary[] = emojiMap
@@ -157,6 +159,7 @@ export async function handleListComments(req: Request, cardId: string): Promise<
 
     return {
       ...comment,
+      images: images.get(comment.id) ?? [],
       author_avatar_url: buildAvatarProxyUrl({
         userId: comment.user_id,
         avatarUrl: comment.author_avatar_url,

@@ -2,6 +2,7 @@
 // Completes a multipart S3 upload, marks the attachment READY, enqueues virus scan.
 import { CompleteMultipartUploadCommand } from '@aws-sdk/client-s3';
 import { db } from '../../../../common/db';
+import { serializeAttachment, type AttachmentRow } from '../serializeAttachment';
 import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewares/authentication';
 import {
   requireWorkspaceMembership,
@@ -45,6 +46,8 @@ interface BoardRow {
 }
 
 interface PendingAttachmentRow {
+  upload_context: 'card' | 'comment';
+  uploaded_by: string;
   id: string;
   card_id: string;
   s3_key: string;
@@ -102,6 +105,15 @@ export async function handleMultipartComplete(req: Request, cardId: string): Pro
     );
   }
 
+  const actor = (req as AuthenticatedRequest).currentUser;
+  if (!actor) {
+    return Response.json({ name: 'unauthorized', data: { message: 'Authentication required' } }, { status: 401 });
+  }
+  const actorId = actor.id;
+  if (attachment.upload_context === 'comment' && attachment.uploaded_by !== actorId) {
+    return Response.json({ name: 'attachment-not-owner' }, { status: 403 });
+  }
+
   const completeParts = body.parts
     .map((part) => {
       // Accept both the AWS wire format (PartNumber/ETag) and camelCase, since
@@ -144,16 +156,13 @@ export async function handleMultipartComplete(req: Request, cardId: string): Pro
     );
   }
 
-  const actor = (req as AuthenticatedRequest).currentUser;
-  if (!actor) {
-    return Response.json({ name: 'unauthorized', data: { message: 'Authentication required' } }, { status: 401 });
-  }
-
-  const actorId = actor.id;
-
   // Enqueue virus scan — fires even when VIRUS_SCAN_ENABLED=false (no-op internally)
   await enqueueScan({ attachmentId: attachment.id });
+  if (attachment.upload_context === 'comment') {
+    await db('attachments').where({ id: attachment.id }).update({ upload_confirmed_at: new Date().toISOString() });
+  }
 
+  if (attachment.upload_context !== 'comment') {
   await writeEvent({
     type: 'attachment_added',
     boardId: board.id,
@@ -169,6 +178,7 @@ export async function handleMultipartComplete(req: Request, cardId: string): Pro
     )
     .catch(() => {});
 
-  const updated = await db<PendingAttachmentRow>('attachments').where({ id: attachment.id }).first();
-  return Response.json({ data: updated }, { status: 200 });
+  }
+  const updated = await db<AttachmentRow>('attachments').where({ id: attachment.id }).first();
+  return Response.json({ data: updated ? serializeAttachment(updated, {}) : null }, { status: 200 });
 }

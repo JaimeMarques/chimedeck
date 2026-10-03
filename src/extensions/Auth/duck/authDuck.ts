@@ -120,6 +120,12 @@ const authDuck = createSlice({
       state.status = 'unauthenticated';
       state.error = null;
     },
+    refreshCredentials(state, action: PayloadAction<{ user: AuthUser; accessToken: string }>) {
+      // [why] Silent renewal stays in this session and preserves its UI/mutations.
+      if (state.status !== 'authenticated' || state.user?.id !== action.payload.user.id) return;
+      state.user = action.payload.user;
+      state.accessToken = action.payload.accessToken;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -176,7 +182,7 @@ const authDuck = createSlice({
   },
 });
 
-export const { setCredentials, clearAuth } = authDuck.actions;
+export const { setCredentials, clearAuth, refreshCredentials } = authDuck.actions;
 export const authDuckReducer = authDuck.reducer;
 
 // ---------- Selectors ----------

@@ -51,6 +51,46 @@ const McpDocsPage = () => {
             <NavItem href="#tool-set-state-transitions" label="set_state_transitions" />
             <NavItem href="#tool-get-state-transition-rules" label="get_state_transition_rules" />
             <NavItem href="#tool-copy-state-transitions" label="copy_state_transitions" />
+            <NavItem href="#tool-get-me" label="get_me" />
+            <NavItem href="#tool-list-workspaces" label="list_workspaces" />
+            <NavItem href="#tool-list-workspace-boards" label="list_workspace_boards" />
+            <NavItem href="#tool-list-workspace-members" label="list_workspace_members" />
+            <NavItem href="#tool-get-board" label="get_board" />
+            <NavItem href="#tool-list-lists" label="list_lists" />
+            <NavItem href="#tool-list-labels" label="list_labels" />
+            <NavItem href="#tool-list-board-members" label="list_board_members" />
+            <NavItem href="#tool-list-cards" label="list_cards" />
+            <NavItem href="#tool-list-archived-cards" label="list_archived_cards" />
+            <NavItem href="#tool-update-card" label="update_card" />
+            <NavItem href="#tool-set-card-due" label="set_card_due" />
+            <NavItem href="#tool-archive-card" label="archive_card" />
+            <NavItem href="#tool-delete-card" label="delete_card" />
+            <NavItem href="#tool-copy-card" label="copy_card" />
+            <NavItem href="#tool-get-comments" label="get_comments" />
+            <NavItem href="#tool-edit-comment" label="edit_comment" />
+            <NavItem href="#tool-delete-comment" label="delete_comment" />
+            <NavItem href="#tool-get-attachments" label="get_attachments" />
+            <NavItem href="#tool-download-attachment" label="download_attachment" />
+            <NavItem href="#tool-add-url-attachment" label="add_url_attachment" />
+            <NavItem href="#tool-delete-attachment" label="delete_attachment" />
+            <NavItem href="#tool-add-card-label" label="add_card_label" />
+            <NavItem href="#tool-remove-card-label" label="remove_card_label" />
+            <NavItem href="#tool-create-label" label="create_label" />
+            <NavItem href="#tool-delete-label" label="delete_label" />
+            <NavItem href="#tool-add-card-member" label="add_card_member" />
+            <NavItem href="#tool-remove-card-member" label="remove_card_member" />
+            <NavItem href="#tool-add-board-member" label="add_board_member" />
+            <NavItem href="#tool-set-board-member-role" label="set_board_member_role" />
+            <NavItem href="#tool-create-checklist" label="create_checklist" />
+            <NavItem href="#tool-add-checklist-item" label="add_checklist_item" />
+            <NavItem href="#tool-set-checklist-item" label="set_checklist_item" />
+            <NavItem href="#tool-rename-checklist" label="rename_checklist" />
+            <NavItem href="#tool-delete-checklist" label="delete_checklist" />
+            <NavItem href="#tool-delete-checklist-item" label="delete_checklist_item" />
+            <NavItem href="#tool-rename-list" label="rename_list" />
+            <NavItem href="#tool-archive-list" label="archive_list" />
+            <NavItem href="#tool-delete-list" label="delete_list" />
+            <NavItem href="#tool-update-board" label="update_board" />
           </nav>
         </div>
       </aside>
@@ -341,7 +381,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="available-tools">
             <H2>Available Tools</H2>
             <P>
-              ChimeDeck exposes 15 MCP tools. Each tool maps to a specific REST API endpoint.
+              Each tool maps to a specific REST API endpoint. The board coverage tools (from <Code>get_me</Code> on) use the same names and arguments as the local Python <Code>chimedeck-mcp</Code> server, and every write returns the object read back after the change. Every requested field is compared on the read-back (text as the server stores it: trimmed and sanitized); a mismatch is <Code>readback-failed</Code>. A DELETE succeeds only with its route’s real answer (<Code>204</Code>, or <Code>200</Code> naming the deleted row for attachments and comments); an HTML or other body is <Code>invalid-response</Code>. Tools that take a parent ID (<Code>cardId</Code>, <Code>boardId</Code>) next to a child ID require the child to belong to that parent and fail with <Code>not-in-card</Code> / <Code>not-in-board</Code> before sending any write.
+            </P>
+            <P>
+              Known limitation: the card and list archive routes toggle the stored state. <Code>archive_card</Code> and <Code>archive_list</Code> resolve the UUID and current state first, only PATCH when the state differs, and report any other post-state as <Code>archive-state-conflict</Code>; a concurrent toggle by another client between the read and the PATCH can still flip it. An explicit <Code>archived: boolean</Code> body on those routes would make the operation atomic.
             </P>
             <Table
               headers={['Tool', 'Description', 'Endpoint']}
@@ -430,8 +473,8 @@ curl -X POST http://localhost:3000/api/mcp \\
                   rowId: 'tool-get-card',
                   cells: [
                     { key: 'tool', content: <Code>get_card</Code> },
-                    { key: 'desc', content: 'Retrieve the full details of a single card by its ID' },
-                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId</Code> },
+                    { key: 'desc', content: 'Retrieve the full details of a single card by its ID, optionally with its activity feed' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId[?include=activities]</Code> },
                   ],
                 },
                 {
@@ -480,6 +523,326 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>copy_state_transitions</Code> },
                     { key: 'desc', content: 'Copy state transition graph from one board to another' },
                     { key: 'endpoint', content: <Code>POST /api/v1/boards/:boardId/state-transitions/copy</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-get-me',
+                  cells: [
+                    { key: 'tool', content: <Code>get_me</Code> },
+                    { key: 'desc', content: 'Return the user the token belongs to' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/users/me</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-workspaces',
+                  cells: [
+                    { key: 'tool', content: <Code>list_workspaces</Code> },
+                    { key: 'desc', content: 'List the workspaces the token can see' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/workspaces</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-workspace-boards',
+                  cells: [
+                    { key: 'tool', content: <Code>list_workspace_boards</Code> },
+                    { key: 'desc', content: 'List the boards in a workspace' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/workspaces/:workspaceId/boards</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-workspace-members',
+                  cells: [
+                    { key: 'tool', content: <Code>list_workspace_members</Code> },
+                    { key: 'desc', content: 'List workspace members (userId, email, name, role)' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/workspaces/:workspaceId/members</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-get-board',
+                  cells: [
+                    { key: 'tool', content: <Code>get_board</Code> },
+                    { key: 'desc', content: 'Retrieve a board with its lists and cards' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/boards/:boardId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-lists',
+                  cells: [
+                    { key: 'tool', content: <Code>list_lists</Code> },
+                    { key: 'desc', content: 'List a board\'s lists in board order' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/boards/:boardId/lists</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-labels',
+                  cells: [
+                    { key: 'tool', content: <Code>list_labels</Code> },
+                    { key: 'desc', content: 'List the labels defined on a board' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/boards/:boardId/labels</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-board-members',
+                  cells: [
+                    { key: 'tool', content: <Code>list_board_members</Code> },
+                    { key: 'desc', content: 'List board members (user_id, email, display_name, role)' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/boards/:boardId/members</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-cards',
+                  cells: [
+                    { key: 'tool', content: <Code>list_cards</Code> },
+                    { key: 'desc', content: 'List the open cards in a list, in board order' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/lists/:listId/cards</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-list-archived-cards',
+                  cells: [
+                    { key: 'tool', content: <Code>list_archived_cards</Code> },
+                    { key: 'desc', content: 'List the archived cards on a board' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/boards/:boardId/archived-cards</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-update-card',
+                  cells: [
+                    { key: 'tool', content: <Code>update_card</Code> },
+                    { key: 'desc', content: 'Update a card\'s title, description, due date and/or completion tick' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/cards/:cardId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-set-card-due',
+                  cells: [
+                    { key: 'tool', content: <Code>set_card_due</Code> },
+                    { key: 'desc', content: 'Set or clear a card\'s due date and completion tick' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/cards/:cardId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-archive-card',
+                  cells: [
+                    { key: 'tool', content: <Code>archive_card</Code> },
+                    { key: 'desc', content: 'Archive or restore a card' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/cards/:cardId/archive</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-card',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_card</Code> },
+                    { key: 'desc', content: 'Permanently delete a card' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/cards/:cardId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-copy-card',
+                  cells: [
+                    { key: 'tool', content: <Code>copy_card</Code> },
+                    { key: 'desc', content: 'Copy a card into a list' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/cards/:cardId/copy</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-get-comments',
+                  cells: [
+                    { key: 'tool', content: <Code>get_comments</Code> },
+                    { key: 'desc', content: 'List a card\'s top-level comments, oldest first' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId/comments</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-edit-comment',
+                  cells: [
+                    { key: 'tool', content: <Code>edit_comment</Code> },
+                    { key: 'desc', content: 'Edit the text of an existing comment' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/comments/:commentId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-comment',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_comment</Code> },
+                    { key: 'desc', content: 'Delete a comment (the server keeps a placeholder)' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/comments/:commentId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-get-attachments',
+                  cells: [
+                    { key: 'tool', content: <Code>get_attachments</Code> },
+                    { key: 'desc', content: 'List the attachments on a card' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/cards/:cardId/attachments</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-download-attachment',
+                  cells: [
+                    { key: 'tool', content: <Code>download_attachment</Code> },
+                    { key: 'desc', content: 'Fetch an uploaded attachment\'s bytes (max 10 MB)' },
+                    { key: 'endpoint', content: <Code>GET /api/v1/attachments/:attachmentId/view</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-add-url-attachment',
+                  cells: [
+                    { key: 'tool', content: <Code>add_url_attachment</Code> },
+                    { key: 'desc', content: 'Attach a link to a card' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/cards/:cardId/attachments/url</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-attachment',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_attachment</Code> },
+                    { key: 'desc', content: 'Remove an attachment from a card' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/attachments/:attachmentId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-add-card-label',
+                  cells: [
+                    { key: 'tool', content: <Code>add_card_label</Code> },
+                    { key: 'desc', content: 'Add an existing board label to a card' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/cards/:cardId/labels</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-remove-card-label',
+                  cells: [
+                    { key: 'tool', content: <Code>remove_card_label</Code> },
+                    { key: 'desc', content: 'Remove a label from a card' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/cards/:cardId/labels/:labelId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-create-label',
+                  cells: [
+                    { key: 'tool', content: <Code>create_label</Code> },
+                    { key: 'desc', content: 'Create a label on a board' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/boards/:boardId/labels</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-label',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_label</Code> },
+                    { key: 'desc', content: 'Delete a board label from the board and every card' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/labels/:labelId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-add-card-member',
+                  cells: [
+                    { key: 'tool', content: <Code>add_card_member</Code> },
+                    { key: 'desc', content: 'Assign a board member to a card' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/cards/:cardId/members</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-remove-card-member',
+                  cells: [
+                    { key: 'tool', content: <Code>remove_card_member</Code> },
+                    { key: 'desc', content: 'Unassign a member from a card' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/cards/:cardId/members/:userId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-add-board-member',
+                  cells: [
+                    { key: 'tool', content: <Code>add_board_member</Code> },
+                    { key: 'desc', content: 'Add a workspace member to a board by user ID (requires board admin)' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/boards/:boardId/members</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-set-board-member-role',
+                  cells: [
+                    { key: 'tool', content: <Code>set_board_member_role</Code> },
+                    { key: 'desc', content: 'Change an existing board member\'s role (requires board admin)' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/boards/:boardId/members/:userId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-create-checklist',
+                  cells: [
+                    { key: 'tool', content: <Code>create_checklist</Code> },
+                    { key: 'desc', content: 'Create a checklist on a card' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/cards/:cardId/checklists</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-add-checklist-item',
+                  cells: [
+                    { key: 'tool', content: <Code>add_checklist_item</Code> },
+                    { key: 'desc', content: 'Add an item to a checklist' },
+                    { key: 'endpoint', content: <Code>POST /api/v1/checklists/:checklistId/items</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-set-checklist-item',
+                  cells: [
+                    { key: 'tool', content: <Code>set_checklist_item</Code> },
+                    { key: 'desc', content: 'Check, uncheck or rename a checklist item' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/checklist-items/:itemId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-rename-checklist',
+                  cells: [
+                    { key: 'tool', content: <Code>rename_checklist</Code> },
+                    { key: 'desc', content: 'Rename a checklist' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/checklists/:checklistId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-checklist',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_checklist</Code> },
+                    { key: 'desc', content: 'Delete a checklist and all its items' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/checklists/:checklistId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-checklist-item',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_checklist_item</Code> },
+                    { key: 'desc', content: 'Delete one checklist item' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/checklist-items/:itemId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-rename-list',
+                  cells: [
+                    { key: 'tool', content: <Code>rename_list</Code> },
+                    { key: 'desc', content: 'Rename a list' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/lists/:listId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-archive-list',
+                  cells: [
+                    { key: 'tool', content: <Code>archive_list</Code> },
+                    { key: 'desc', content: 'Archive a list' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/lists/:listId/archive</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-delete-list',
+                  cells: [
+                    { key: 'tool', content: <Code>delete_list</Code> },
+                    { key: 'desc', content: 'Permanently delete an empty list' },
+                    { key: 'endpoint', content: <Code>DELETE /api/v1/lists/:listId</Code> },
+                  ],
+                },
+                {
+                  rowId: 'tool-update-board',
+                  cells: [
+                    { key: 'tool', content: <Code>update_board</Code> },
+                    { key: 'desc', content: 'Update a board\'s title, description or visibility' },
+                    { key: 'endpoint', content: <Code>PATCH /api/v1/boards/:boardId</Code> },
                   ],
                 },
               ]}
@@ -836,6 +1199,19 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'ID of the card to retrieve' },
                   ],
                 },
+                {
+                  rowId: 'gc-include-activities',
+                  cells: [
+                    { key: 'param', content: <Code>include_activities</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content:
+                        "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; when present, the 'card_created' row's actor_id is the card's creator (some cards, e.g. duplicated or copied ones, have none).",
+                    },
+                  ],
+                },
               ]}
             />
           </Section>
@@ -969,6 +1345,1185 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'type', content: 'boolean' },
                     { key: 'req', content: 'No' },
                     { key: 'desc', content: 'Copy source board enabled flag when true' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* get_me */}
+          <Section id="tool-get-me">
+            <H3>get_me</H3>
+            <P>Return the user the token belongs to.</P>
+            <P>No parameters.</P>
+          </Section>
+
+          {/* list_workspaces */}
+          <Section id="tool-list-workspaces">
+            <H3>list_workspaces</H3>
+            <P>List the workspaces the token can see.</P>
+            <P>No parameters.</P>
+          </Section>
+
+          {/* list_workspace_boards */}
+          <Section id="tool-list-workspace-boards">
+            <H3>list_workspace_boards</H3>
+            <P>List the boards in a workspace.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'lwb-workspaceId',
+                  cells: [
+                    { key: 'param', content: <Code>workspaceId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the workspace' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* list_workspace_members */}
+          <Section id="tool-list-workspace-members">
+            <H3>list_workspace_members</H3>
+            <P>List workspace members (userId, email, name, role).</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'lwm-workspaceId',
+                  cells: [
+                    { key: 'param', content: <Code>workspaceId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the workspace' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* get_board */}
+          <Section id="tool-get-board">
+            <H3>get_board</H3>
+            <P>Retrieve a board with its lists and cards.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'gb-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'Board UUID or the short ID from its URL' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* list_lists */}
+          <Section id="tool-list-lists">
+            <H3>list_lists</H3>
+            <P>List a board’s lists in board order.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'll-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* list_labels */}
+          <Section id="tool-list-labels">
+            <H3>list_labels</H3>
+            <P>List the labels defined on a board.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'llb-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* list_board_members */}
+          <Section id="tool-list-board-members">
+            <H3>list_board_members</H3>
+            <P>List board members (user_id, email, display_name, role).</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'lbm-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* list_cards */}
+          <Section id="tool-list-cards">
+            <H3>list_cards</H3>
+            <P>List the open cards in a list, in board order. Archived cards are not included; use <Code>list_archived_cards</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'lc-listId',
+                  cells: [
+                    { key: 'param', content: <Code>listId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the list' },
+                  ],
+                },
+                {
+                  rowId: 'lc-limit',
+                  cells: [
+                    { key: 'param', content: <Code>limit</Code> },
+                    { key: 'type', content: 'integer' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Maximum number of cards to return (min 1)' },
+                  ],
+                },
+                {
+                  rowId: 'lc-offset',
+                  cells: [
+                    { key: 'param', content: <Code>offset</Code> },
+                    { key: 'type', content: 'integer' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Number of cards to skip (min 0)' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* list_archived_cards */}
+          <Section id="tool-list-archived-cards">
+            <H3>list_archived_cards</H3>
+            <P>List the archived cards on a board.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'lac-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* update_card */}
+          <Section id="tool-update-card">
+            <H3>update_card</H3>
+            <P>Update a card’s title, description, due date and/or completion tick. Give at least one field, otherwise the tool fails with <Code>nothing-to-update</Code> before any request. The PATCH body uses the server’s snake_case fields (<Code>due_date</Code>, <Code>due_complete</Code>). Returns the card read back with its includes; every given field must read back as written.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'uc-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'uc-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'New title' },
+                  ],
+                },
+                {
+                  rowId: 'uc-description',
+                  cells: [
+                    { key: 'param', content: <Code>description</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'New description' },
+                  ],
+                },
+                {
+                  rowId: 'uc-dueDate',
+                  cells: [
+                    { key: 'param', content: <Code>dueDate</Code> },
+                    { key: 'type', content: 'string | null' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'ISO-8601 due date; null or empty string clears it' },
+                  ],
+                },
+                {
+                  rowId: 'uc-dueComplete',
+                  cells: [
+                    { key: 'param', content: <Code>dueComplete</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Mark the due date complete (the visible tick) or not' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* set_card_due */}
+          <Section id="tool-set-card-due">
+            <H3>set_card_due</H3>
+            <P>Set or clear a card’s due date and completion tick. Give <Code>dueDate</Code>, <Code>dueComplete</Code> or both (<Code>nothing-to-update</Code> otherwise). Returns the card read back with its includes.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'scd-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'scd-dueDate',
+                  cells: [
+                    { key: 'param', content: <Code>dueDate</Code> },
+                    { key: 'type', content: 'string | null' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'ISO-8601 due date; null or empty string clears it' },
+                  ],
+                },
+                {
+                  rowId: 'scd-dueComplete',
+                  cells: [
+                    { key: 'param', content: <Code>dueComplete</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Mark complete (true) or not (false)' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* archive_card */}
+          <Section id="tool-archive-card">
+            <H3>archive_card</H3>
+            <P>Archive or restore a card. The server route toggles, so the tool reads the card first (a short ID resolves to the UUID used for every later request) and only PATCHes when its state differs from <Code>archived</Code>. Returns the card read back; any other post-state is <Code>archive-state-conflict</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'ac-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'ac-archived',
+                  cells: [
+                    { key: 'param', content: <Code>archived</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'true to archive (default), false to restore' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_card */}
+          <Section id="tool-delete-card">
+            <H3>delete_card</H3>
+            <P>Permanently delete a card. Destructive. Prefer <Code>archive_card</Code>. Requires a <Code>204</Code> DELETE, verifies the card now returns 404 and returns <Code>&#123;deleted: true, id, title&#125;</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dc-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* copy_card */}
+          <Section id="tool-copy-card">
+            <H3>copy_card</H3>
+            <P>Copy a card into a list. Returns the new card read back with its includes.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'cc-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card to copy' },
+                  ],
+                },
+                {
+                  rowId: 'cc-targetListId',
+                  cells: [
+                    { key: 'param', content: <Code>targetListId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the destination list' },
+                  ],
+                },
+                {
+                  rowId: 'cc-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Title for the copy (defaults to the original)' },
+                  ],
+                },
+                {
+                  rowId: 'cc-keepChecklists',
+                  cells: [
+                    { key: 'param', content: <Code>keepChecklists</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Copy checklists too' },
+                  ],
+                },
+                {
+                  rowId: 'cc-keepMembers',
+                  cells: [
+                    { key: 'param', content: <Code>keepMembers</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Copy members too' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* get_comments */}
+          <Section id="tool-get-comments">
+            <H3>get_comments</H3>
+            <P>List a card’s top-level comments, oldest first. Replies are not included; use <Code>get_card_discussion</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'gcm-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* edit_comment */}
+          <Section id="tool-edit-comment">
+            <H3>edit_comment</H3>
+            <P>Edit the text of an existing comment. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no PATCH sent; pass the comment UUID). Returns the comment read back from the card’s top-level comments, or for a reply from its parent’s replies.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'ec-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card the comment is on' },
+                  ],
+                },
+                {
+                  rowId: 'ec-commentId',
+                  cells: [
+                    { key: 'param', content: <Code>commentId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the comment' },
+                  ],
+                },
+                {
+                  rowId: 'ec-content',
+                  cells: [
+                    { key: 'param', content: <Code>content</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'New comment text' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_comment */}
+          <Section id="tool-delete-comment">
+            <H3>delete_comment</H3>
+            <P>Delete a comment (the server keeps a placeholder). Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). The server soft-deletes: for a top-level comment the tool requires the re-read row to have <Code>deleted: true</Code> and returns that <Code>[deleted]</Code> placeholder; a deleted reply must be absent from its parent’s replies, and the tool returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dcm-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card the comment is on' },
+                  ],
+                },
+                {
+                  rowId: 'dcm-commentId',
+                  cells: [
+                    { key: 'param', content: <Code>commentId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the comment' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* get_attachments */}
+          <Section id="tool-get-attachments">
+            <H3>get_attachments</H3>
+            <P>List the attachments on a card.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'ga-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* download_attachment */}
+          <Section id="tool-download-attachment">
+            <H3>download_attachment</H3>
+            <P>Fetch an uploaded attachment’s bytes (max 10 MB). Returns the attachment metadata as text, then the file as an image block for <Code>image/*</Code> types or an embedded resource with a base64 blob and <Code>mimeType</Code> otherwise. Nothing is written to the server’s disk. Files over 10 MB fail with <Code>attachment-too-large</Code>; link attachments fail with <Code>not-a-file</Code>; an upload that is not finished fails with <Code>not-ready</Code>; any non-200 view response fails with <Code>http-&lt;status&gt;</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'da-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card the attachment is on' },
+                  ],
+                },
+                {
+                  rowId: 'da-attachmentId',
+                  cells: [
+                    { key: 'param', content: <Code>attachmentId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the attachment (from get_attachments)' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* add_url_attachment */}
+          <Section id="tool-add-url-attachment">
+            <H3>add_url_attachment</H3>
+            <P>Attach a link to a card. The server requires a name, so an omitted <Code>name</Code> is sent as the URL. Returns the attachment read back from the card’s attachment list.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'aua-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'aua-url',
+                  cells: [
+                    { key: 'param', content: <Code>url</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'Link URL' },
+                  ],
+                },
+                {
+                  rowId: 'aua-name',
+                  cells: [
+                    { key: 'param', content: <Code>name</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Display name' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_attachment */}
+          <Section id="tool-delete-attachment">
+            <H3>delete_attachment</H3>
+            <P>Remove an attachment from a card. Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the attachment is absent from the card’s attachment list.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dat-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card the attachment is on' },
+                  ],
+                },
+                {
+                  rowId: 'dat-attachmentId',
+                  cells: [
+                    { key: 'param', content: <Code>attachmentId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the attachment' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* add_card_label */}
+          <Section id="tool-add-card-label">
+            <H3>add_card_label</H3>
+            <P>Add an existing board label to a card. Returns the card read back; the label must appear in its includes.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'acl-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'acl-labelId',
+                  cells: [
+                    { key: 'param', content: <Code>labelId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the label (see list_labels)' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* remove_card_label */}
+          <Section id="tool-remove-card-label">
+            <H3>remove_card_label</H3>
+            <P>Remove a label from a card. Returns the card read back; the label must be gone from its includes.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'rcl-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'rcl-labelId',
+                  cells: [
+                    { key: 'param', content: <Code>labelId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the label' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* create_label */}
+          <Section id="tool-create-label">
+            <H3>create_label</H3>
+            <P>Create a label on a board. Returns the label read back from the board’s label list.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'cl-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+                {
+                  rowId: 'cl-name',
+                  cells: [
+                    { key: 'param', content: <Code>name</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'Label name (must not be empty)' },
+                  ],
+                },
+                {
+                  rowId: 'cl-color',
+                  cells: [
+                    { key: 'param', content: <Code>color</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'Hex color, e.g. #0079BF' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_label */}
+          <Section id="tool-delete-label">
+            <H3>delete_label</H3>
+            <P>Delete a board label from the board and every card. Destructive. It must be on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no DELETE sent). Verifies the label is absent from the board’s label list.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dl-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board the label belongs to' },
+                  ],
+                },
+                {
+                  rowId: 'dl-labelId',
+                  cells: [
+                    { key: 'param', content: <Code>labelId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the label' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* add_card_member */}
+          <Section id="tool-add-card-member">
+            <H3>add_card_member</H3>
+            <P>Assign a board member to a card. Returns the card read back; the member must appear in its includes.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'acm-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'acm-userId',
+                  cells: [
+                    { key: 'param', content: <Code>userId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'User ID (see list_board_members)' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* remove_card_member */}
+          <Section id="tool-remove-card-member">
+            <H3>remove_card_member</H3>
+            <P>Unassign a member from a card. Returns the card read back; the member must be gone from its includes.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'rcm-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'rcm-userId',
+                  cells: [
+                    { key: 'param', content: <Code>userId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'User ID' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* add_board_member */}
+          <Section id="tool-add-board-member">
+            <H3>add_board_member</H3>
+            <P>Add a workspace member to a board by user ID (requires board admin). An existing member fails with <Code>board-member-exists</Code>; use <Code>set_board_member_role</Code>. Returns the member row read back from the board roster.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'abm-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+                {
+                  rowId: 'abm-userId',
+                  cells: [
+                    { key: 'param', content: <Code>userId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'User ID (see list_workspace_members)' },
+                  ],
+                },
+                {
+                  rowId: 'abm-role',
+                  cells: [
+                    { key: 'param', content: <Code>role</Code> },
+                    { key: 'type', content: 'admin | member' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'Role to assign (defaults to "member")' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* set_board_member_role */}
+          <Section id="tool-set-board-member-role">
+            <H3>set_board_member_role</H3>
+            <P>Change an existing board member’s role (requires board admin). Demoting the last admin fails with <Code>last-board-admin</Code>. Returns the member row read back with the new role.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'sbmr-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+                {
+                  rowId: 'sbmr-userId',
+                  cells: [
+                    { key: 'param', content: <Code>userId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'User ID (see list_board_members)' },
+                  ],
+                },
+                {
+                  rowId: 'sbmr-role',
+                  cells: [
+                    { key: 'param', content: <Code>role</Code> },
+                    { key: 'type', content: 'admin | member' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'New role' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* create_checklist */}
+          <Section id="tool-create-checklist">
+            <H3>create_checklist</H3>
+            <P>Create a checklist on a card. Returns <Code>&#123;checklist, items, card&#125;</Code> read back from the card.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'ccl-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card' },
+                  ],
+                },
+                {
+                  rowId: 'ccl-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'Checklist title' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* add_checklist_item */}
+          <Section id="tool-add-checklist-item">
+            <H3>add_checklist_item</H3>
+            <P>Add an item to a checklist. Returns <Code>&#123;item, card&#125;</Code> read back from the card.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'aci-checklistId',
+                  cells: [
+                    { key: 'param', content: <Code>checklistId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the checklist' },
+                  ],
+                },
+                {
+                  rowId: 'aci-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'Item text' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* set_checklist_item */}
+          <Section id="tool-set-checklist-item">
+            <H3>set_checklist_item</H3>
+            <P>Check, uncheck or rename a checklist item. Give <Code>checked</Code>, <Code>title</Code> or both (<Code>nothing-to-update</Code> otherwise). Returns <Code>&#123;item, card&#125;</Code>; the item must read back with the requested <Code>checked</Code> and trimmed <Code>title</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'sci-itemId',
+                  cells: [
+                    { key: 'param', content: <Code>itemId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the checklist item' },
+                  ],
+                },
+                {
+                  rowId: 'sci-checked',
+                  cells: [
+                    { key: 'param', content: <Code>checked</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'true to tick, false to untick' },
+                  ],
+                },
+                {
+                  rowId: 'sci-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'New item text' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* rename_checklist */}
+          <Section id="tool-rename-checklist">
+            <H3>rename_checklist</H3>
+            <P>Rename a checklist. Returns <Code>&#123;checklist, items, card&#125;</Code>; the checklist must read back with the trimmed title.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'rc-checklistId',
+                  cells: [
+                    { key: 'param', content: <Code>checklistId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the checklist' },
+                  ],
+                },
+                {
+                  rowId: 'rc-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'New title' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_checklist */}
+          <Section id="tool-delete-checklist">
+            <H3>delete_checklist</H3>
+            <P>Delete a checklist and all its items. Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the checklist is absent from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dcl-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card the checklist is on' },
+                  ],
+                },
+                {
+                  rowId: 'dcl-checklistId',
+                  cells: [
+                    { key: 'param', content: <Code>checklistId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the checklist' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_checklist_item */}
+          <Section id="tool-delete-checklist-item">
+            <H3>delete_checklist_item</H3>
+            <P>Delete one checklist item. Destructive. It must be on <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the item is absent from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dci-cardId',
+                  cells: [
+                    { key: 'param', content: <Code>cardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the card the item is on' },
+                  ],
+                },
+                {
+                  rowId: 'dci-itemId',
+                  cells: [
+                    { key: 'param', content: <Code>itemId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the checklist item' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* rename_list */}
+          <Section id="tool-rename-list">
+            <H3>rename_list</H3>
+            <P>Rename a list. The list (open or archived) must be on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no PATCH sent). Returns the list read back from the board’s lists; its title must match the sanitized, trimmed text.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'rl-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board the list is on' },
+                  ],
+                },
+                {
+                  rowId: 'rl-listId',
+                  cells: [
+                    { key: 'param', content: <Code>listId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the list' },
+                  ],
+                },
+                {
+                  rowId: 'rl-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'New title' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* archive_list */}
+          <Section id="tool-archive-list">
+            <H3>archive_list</H3>
+            <P>Archive a list. The tool finds the list among the board’s open and archived lists (by UUID or short ID; <Code>not-in-board</Code> otherwise). The server route toggles, so a list already archived is returned without a PATCH, and the PATCH uses the UUID. Returns the list read back from the archived lists; anything else is <Code>archive-state-conflict</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'al-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board the list is on' },
+                  ],
+                },
+                {
+                  rowId: 'al-listId',
+                  cells: [
+                    { key: 'param', content: <Code>listId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the list' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* delete_list */}
+          <Section id="tool-delete-list">
+            <H3>delete_list</H3>
+            <P>Permanently delete an empty list. Destructive. Prefer <Code>archive_list</Code>. The server refuses a list that still has cards (<Code>delete-requires-confirmation</Code>); this tool sends no confirmation, matching the local Python server. The list must be on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no DELETE sent) and the DELETE must answer <Code>204</Code>. Verifies the list is absent from both the board’s open and archived lists and returns <Code>&#123;deleted: true, id&#125;</Code>.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'dli-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board the list is on' },
+                  ],
+                },
+                {
+                  rowId: 'dli-listId',
+                  cells: [
+                    { key: 'param', content: <Code>listId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the list' },
+                  ],
+                },
+              ]}
+            />
+          </Section>
+
+          {/* update_board */}
+          <Section id="tool-update-board">
+            <H3>update_board</H3>
+            <P>Update a board’s title, description or visibility. Give at least one field (<Code>nothing-to-update</Code> otherwise). Returns the board read back; every given field must match.</P>
+            <Table
+              headers={['Parameter', 'Type', 'Required', 'Description']}
+              rows={[
+                {
+                  rowId: 'ub-boardId',
+                  cells: [
+                    { key: 'param', content: <Code>boardId</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: '✅' },
+                    { key: 'desc', content: 'ID of the board' },
+                  ],
+                },
+                {
+                  rowId: 'ub-title',
+                  cells: [
+                    { key: 'param', content: <Code>title</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'New title' },
+                  ],
+                },
+                {
+                  rowId: 'ub-description',
+                  cells: [
+                    { key: 'param', content: <Code>description</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'New description' },
+                  ],
+                },
+                {
+                  rowId: 'ub-visibility',
+                  cells: [
+                    { key: 'param', content: <Code>visibility</Code> },
+                    { key: 'type', content: 'PRIVATE | WORKSPACE | PUBLIC' },
+                    { key: 'req', content: 'No' },
+                    { key: 'desc', content: 'New visibility' },
                   ],
                 },
               ]}

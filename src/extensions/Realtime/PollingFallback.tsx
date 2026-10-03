@@ -7,6 +7,7 @@ import { apiClient } from '~/common/api/client';
 import type { RealtimeEvent } from './client/socket';
 
 const POLL_INTERVAL_MS = 5_000;
+const SNAPSHOT_POLL_INTERVAL_MS = 30_000;
 
 interface UsePollingFallbackOptions {
   boardId: string;
@@ -15,6 +16,8 @@ interface UsePollingFallbackOptions {
   lastSequence: number;
   /** Called with each batch of new events from the server */
   onEvents: (events: RealtimeEvent[]) => void;
+  /** Snapshot fallback for callers without a reliable event cursor. */
+  fetchSnapshot?: () => Promise<unknown>;
 }
 
 export function usePollingFallback({
@@ -22,6 +25,7 @@ export function usePollingFallback({
   active,
   lastSequence,
   onEvents,
+  fetchSnapshot,
 }: UsePollingFallbackOptions): void {
   const lastSeqRef = useRef(lastSequence);
   const activeRef = useRef(active);
@@ -36,6 +40,10 @@ export function usePollingFallback({
   const poll = useCallback(async () => {
     if (!activeRef.current) return;
     try {
+      if (fetchSnapshot) {
+        await fetchSnapshot();
+        return;
+      }
       // apiClient response interceptor auto-unwraps to response.data
       const result = (await apiClient.get(
         `/boards/${boardId}/events?since=${String(lastSeqRef.current)}`
@@ -61,7 +69,7 @@ export function usePollingFallback({
     } catch {
       // Transient network error — silently retry next interval
     }
-  }, [boardId, onEvents]);
+  }, [boardId, onEvents, fetchSnapshot]);
 
   useEffect(() => {
     if (!active) {
@@ -74,7 +82,7 @@ export function usePollingFallback({
 
     // Fire an immediate poll then set up the recurring interval
     void poll();
-    intervalRef.current = setInterval(() => { void poll(); }, POLL_INTERVAL_MS);
+    intervalRef.current = setInterval(() => { void poll(); }, fetchSnapshot ? SNAPSHOT_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
 
     return () => {
       if (intervalRef.current !== null) {
@@ -82,5 +90,5 @@ export function usePollingFallback({
         intervalRef.current = null;
       }
     };
-  }, [active, poll]);
+  }, [active, poll, fetchSnapshot]);
 }

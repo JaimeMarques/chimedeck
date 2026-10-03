@@ -1,5 +1,6 @@
 // GET /api/v1/comments/:commentId/replies — fetch all direct replies to a comment.
 import { db } from '../../../../common/db';
+import { loadCommentImages } from '../images';
 import { buildAvatarProxyUrl } from '../../../../common/avatar/resolveAvatarUrl';
 import { authenticate, type AuthenticatedRequest } from '../../../auth/middlewares/authentication';
 import {
@@ -116,6 +117,7 @@ export async function handleGetReplies(req: Request, commentId: string): Promise
     reactionMap.set(row.comment_id, emojiMap);
   }
 
+  const images = await loadCommentImages(replies);
   const data = replies.map((r) => {
     const emojiMap = reactionMap.get(r.id);
     const reactions = emojiMap
@@ -126,6 +128,7 @@ export async function handleGetReplies(req: Request, commentId: string): Promise
 
     return {
       ...r,
+      images: images.get(r.id) ?? [],
       author_avatar_url: buildAvatarProxyUrl({
         userId: r.user_id,
         avatarUrl: r.author_avatar_url,

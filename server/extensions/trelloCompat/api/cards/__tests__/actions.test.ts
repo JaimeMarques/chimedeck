@@ -35,6 +35,18 @@ class QueryBuilder {
     return this;
   }
 
+  whereNotIn(key: string, values: unknown[]): this {
+    this.filters.push((row) => !values.includes(row[key]));
+    return this;
+  }
+
+  whereIn(key: string, values: unknown[]): this {
+    this.filters.push((row) => values.includes(row[key]));
+    return this;
+  }
+
+  forUpdate(): this { return this; }
+
   orderBy(field: string, direction: 'asc' | 'desc' = 'asc'): this {
     this.orderByField = field;
     this.orderByDirection = direction;
@@ -151,7 +163,10 @@ const authenticateMock = mock((req: Request & { currentUser?: unknown }) => {
 
 void mock.module('../../../../auth/middlewares/authentication', () => ({ authenticate: authenticateMock }));
 void mock.module('../../../../../common/db', () => ({
-  db: ((tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName)) as unknown as typeof database,
+  db: Object.assign((tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName), {
+    transaction: (callback: (trx: (tableName: keyof DataStore) => QueryBuilder) => Promise<unknown>) =>
+      callback((tableName) => new QueryBuilder(dataStore, tableName)),
+  }) as unknown as typeof database,
 }));
 void mock.module('../../../../../common/ids/shortId', () => ({
   generateUniqueShortId: () => {
@@ -184,6 +199,41 @@ beforeEach(() => {
 });
 
 describe('trelloCompat card actions', () => {
+  it('keeps comment image metadata through edit, re-add and hard delete for later object cleanup', async () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const image: Row = { id, card_id: 'card-1', uploaded_by: 'user-admin', type: 'FILE',
+      upload_context: 'comment', comment_id: null, status: 'READY', mime_type: 'image/png',
+      upload_confirmed_at: new Date().toISOString(), abandoned_at: null };
+    dataStore.attachments.push(image);
+    const content = `![image.png](attachment:id:${id})`;
+    const created = await trelloCompatRouter(new Request('http://localhost/trello/1/cards/card-1/actions/comments', {
+      method: 'POST', headers: { Authorization: 'Bearer hf_admin_token' }, body: JSON.stringify({ text: content }),
+    }), '/trello/1/cards/card-1/actions/comments');
+    expect(created?.status).toBe(200);
+    const commentId = image.comment_id;
+    if (typeof commentId !== 'string') throw new Error('Expected associated comment');
+    const path = `/trello/1/cards/card-1/actions/${commentId}/comments`;
+    for (const text of ['image removed', content]) {
+      const updated = await trelloCompatRouter(new Request(`http://localhost${path}`, {
+        method: 'PUT', headers: { Authorization: 'Bearer hf_admin_token' }, body: JSON.stringify({ text }),
+      }), path);
+      expect(updated?.status).toBe(200);
+      expect(image.comment_id).toBe(text === content ? commentId : null);
+      expect(image.abandoned_at === null).toBe(text === content);
+    }
+    const listed = await trelloCompatRouter(new Request('http://localhost/trello/1/cards/card-1/attachments', {
+      headers: { Authorization: 'Bearer hf_admin_token' },
+    }), '/trello/1/cards/card-1/attachments');
+    expect(await listed?.json()).toEqual([]);
+    const deleted = await trelloCompatRouter(new Request(`http://localhost${path}`, {
+      method: 'DELETE', headers: { Authorization: 'Bearer hf_admin_token' },
+    }), path);
+    expect(deleted?.status).toBe(200);
+    expect(dataStore.attachments).toContain(image);
+    expect(image.comment_id).toBeNull();
+    expect(typeof image.abandoned_at).toBe('string');
+  });
+
   it('POST /cards/{id}/actions/comments creates commentCard action', async () => {
     const req = new Request('http://localhost/trello/1/cards/card-1/actions/comments', {
       method: 'POST',

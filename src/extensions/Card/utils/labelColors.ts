@@ -2,23 +2,25 @@
 // The theme picks the look via CSS vars (.cd-label in index.css); JS only computes values.
 import type { CSSProperties } from 'react';
 
-const TRELLO_BASE = '#1d2125';
+const TRELLO_BASE = '#1F1F21';
 
 // Legacy Trello label hexes → Trello dark-mode label backgrounds.
 const TRELLO_DARK_TONES: Record<string, string> = {
   '#61BD4F': '#216E4E', // green
   '#F2D600': '#7F5F01', // yellow
-  '#FF9F1A': '#A54800', // orange
+  '#FF9F1A': '#9E4C00', // orange
   '#EB5A46': '#AE2E24', // red
-  '#C377E0': '#5E4DB2', // purple
-  '#0079BF': '#0055CC', // blue
+  '#C377E0': '#803FA5', // purple
+  '#0079BF': '#1558BC', // blue
+  '#5BA4CF': '#669DF1', // legacy light blue
+  '#579DFF': '#669DF1', // previous Trello bold blue
   '#00C2E0': '#206A83', // sky
   '#51E898': '#4C6B1F', // lime
   '#FF78CB': '#943D73', // pink
-  '#344563': '#596773', // black
-  '#B3BAC5': '#454F59', // grey
+  '#344563': '#63666B', // black
+  '#B3BAC5': '#96999E', // grey
 };
-const TRELLO_GREY_TONE = '#454F59';
+const TRELLO_GREY_TONE = '#63666B';
 
 function parseHex(hex: string): [number, number, number] | null {
   const full = hex.trim().replace('#', '').replace(/^(.)(.)(.)$/, '$1$1$2$2$3$3');
@@ -54,15 +56,21 @@ export function trelloLabelTone(hex: string): string {
   if (mapped) return mapped;
   const rgb = parseHex(hex);
   if (!rgb) return TRELLO_GREY_TONE;
-  const [r, g, b] = rgb;
-  const mix = (c: number, base: number) => Math.round(c * 0.6 + base * 0.4).toString(16).padStart(2, '0');
-  return `#${mix(r, 0x1d)}${mix(g, 0x21)}${mix(b, 0x25)}`; // 60% hex + 40% TRELLO_BASE
+  // Current Trello tones and custom colours already encode their intensity.
+  return `#${rgb.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
 }
 
 /** Text colour for a Trello-tone background. */
 export function trelloLabelText(tone: string): string {
   const rgb = parseHex(tone);
-  return rgb ? pickText(rgb, TRELLO_BASE, '#dee4ea') : '#dee4ea';
+  if (!rgb) return '#CECFD2';
+  const text = pickText(rgb, TRELLO_BASE, '#CECFD2');
+  const bgLuminance = luminance(rgb);
+  const textLuminance = luminance(parseHex(text) ?? [255, 255, 255]);
+  const contrast = (Math.max(bgLuminance, textLuminance) + 0.05)
+    / (Math.min(bgLuminance, textLuminance) + 0.05);
+  // Arbitrary custom colours can need pure black/white to reach WCAG AA.
+  return contrast >= 4.5 ? text : pickText(rgb, '#000000', '#ffffff');
 }
 
 /** Inline CSS vars consumed by `.cd-label` (default look) and `.theme-trello .cd-label`. */

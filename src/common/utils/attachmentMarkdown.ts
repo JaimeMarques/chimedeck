@@ -33,6 +33,7 @@ function buildAttachmentNameMap(attachments: Attachment[]): Map<string, Attachme
     if (!attachmentMap.has(attachment.name)) {
       attachmentMap.set(attachment.name, attachment);
     }
+    attachmentMap.set(`id:${attachment.id}`, attachment);
   });
   return attachmentMap;
 }
@@ -63,11 +64,11 @@ function buildAttachmentUrlMap(attachments: Attachment[]): Map<string, string> {
 
   attachments.forEach((attachment) => {
     if (attachment.type !== 'FILE') return;
-    [attachment.url, attachment.thumbnail_url]
+    [attachment.view_url, attachment.thumbnail_url]
       .filter((value): value is string => typeof value === 'string' && value.length > 0)
       .forEach((value) => {
         if (!attachmentMap.has(value)) {
-          attachmentMap.set(value, attachment.name);
+          attachmentMap.set(value, attachment.upload_context === 'comment' ? `id:${attachment.id}` : attachment.name);
         }
       });
   });
@@ -76,6 +77,7 @@ function buildAttachmentUrlMap(attachments: Attachment[]): Map<string, string> {
 }
 
 export function buildAttachmentPlaceholderUrl(name: string): string {
+  if (name.startsWith('id:')) return `${ATTACHMENT_URL_PREFIX}${name}`;
   return `${ATTACHMENT_URL_PREFIX}${encodeURIComponent(name)}`;
 }
 
@@ -149,6 +151,14 @@ export function dehydrateCommentAttachmentMarkdown(markdown: string, attachments
 
   return replaceMarkdownTargets(markdown, ({ label, href }) => {
     if (readAttachmentPlaceholderName(href)) return href;
+    // [why] Deferred upload insertion can precede the next attachment-list
+    // render. Its proxy ID takes precedence over a same-filename card asset.
+    const proxyId = /^\/api\/v1\/attachments\/([a-f0-9-]{36})\/(?:view|thumbnail)(?:\?|$)/i.exec(href)?.[1];
+    if (proxyId) {
+      const attachment = attachments.find((entry) => entry.id === proxyId);
+      if (!attachment) return href;
+      return buildAttachmentPlaceholderUrl(attachment.upload_context !== 'comment' ? attachment.name : `id:${proxyId}`);
+    }
     const attachmentName = attachmentMap.get(href) ?? attachmentNameMap.get(label);
     if (!attachmentName) return null;
     return buildAttachmentPlaceholderUrl(attachmentName);

@@ -28,3 +28,12 @@
 
 6. Call without authorization:
    - **Expected:** `401 Unauthorized`.
+
+7. Call `get_card` with `include_activities`:
+   ```json
+   { "cardId": "$cardId", "include_activities": true }
+   ```
+   - **Expected:** `isError` false. `includes.activities` is non-empty and
+     oldest first; when present, its `card_created` row's `actor_id` is the card's creator (some cards, e.g. duplicated or copied ones, have none).
+   - Repeat with `include_activities` false or omitted: `includes.activities`
+     is `[]`.

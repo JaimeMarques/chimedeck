@@ -94,9 +94,9 @@ const CardModalBottomBar = ({
   const actions = usePopover();
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-bg-surface/50 rounded-b-2xl flex-shrink-0">
+    <div className="flex flex-wrap items-center justify-between gap-y-1 px-4 py-2 border-t border-border bg-bg-surface/50 rounded-b-2xl flex-shrink-0">
       {/* Left side */}
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {/* Power-ups popover */}
         <div className="relative" ref={powerUps.ref}>
           <button

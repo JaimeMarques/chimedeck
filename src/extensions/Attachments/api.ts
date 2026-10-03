@@ -24,12 +24,13 @@ export async function listAttachments({ cardId }: { cardId: string }): Promise<{
 // ---------- Single-file upload ----------
 
 export async function requestUploadUrl({
+  uploadContext,
   cardId,
   filename,
   mimeType,
   sizeBytes,
 }: { cardId: string } & UploadUrlRequest): Promise<{ data: UploadUrlResponse }> {
-  return apiClient.post(`/cards/${cardId}/attachments/upload-url`, { filename, mimeType, sizeBytes });
+  return apiClient.post(`/cards/${cardId}/attachments/upload-url`, { filename, mimeType, sizeBytes, uploadContext });
 }
 
 export async function confirmUpload({
@@ -42,12 +43,13 @@ export async function confirmUpload({
 // ---------- Multipart upload ----------
 
 export async function startMultipart({
+  uploadContext,
   cardId,
   filename,
   mimeType,
   sizeBytes,
 }: { cardId: string } & MultipartStartRequest): Promise<{ data: MultipartStartResponse }> {
-  return apiClient.post(`/cards/${cardId}/attachments/multipart/start`, { filename, mimeType, sizeBytes });
+  return apiClient.post(`/cards/${cardId}/attachments/multipart/start`, { filename, mimeType, sizeBytes, uploadContext });
 }
 
 export async function getPartUrl({

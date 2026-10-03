@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'bun:test';
 import { configureStore } from '@reduxjs/toolkit';
 import type { Board } from '../../Board/api';
-import { fetchBoardDataThunk } from '../../Board/slices/boardSlice';
+import boardReducer, { fetchBoardDataThunk } from '../../Board/slices/boardSlice';
 import { logoutThunk } from '../../Auth/duck/authDuck';
 import reducer, {
   fetchSwitcherBoardsThunk,
@@ -33,10 +33,10 @@ function setup(server: { b1: boolean }) {
     delete: () => { sent.push('unstar'); server.b1 = false; return Promise.resolve(); },
   };
   const store = configureStore({
-    reducer: { boardSwitcher: reducer },
+    reducer: { boardSwitcher: reducer, board: boardReducer },
     middleware: (gDM) => gDM({ thunk: { extraArgument: { api } }, serializableCheck: false }),
   });
-  // [why] The thunks are typed against the app RootState; this store has only the switcher slice.
+  // [why] The thunks are typed against the app RootState; this test store has the two slices they use.
   const dispatch = store.dispatch as unknown as (action: unknown) => Promise<unknown>;
   const header = () => selectSwitcherStarred(store.getState() as never, 'b1');
   /** What BoardPage's header does: toggle to the opposite of what it shows. */

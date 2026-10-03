@@ -114,6 +114,7 @@ export async function handleCreateCard(req: Request, listId: string): Promise<Re
     position,
     archived: false,
     start_date: body.start_date ?? null,
+    created_by: (req as AuthenticatedRequest).currentUser?.id ?? null,
   });
 
   const card = await db<CardRow>('cards').where({ id }).first();

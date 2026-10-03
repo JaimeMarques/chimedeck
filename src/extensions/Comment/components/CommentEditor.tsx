@@ -618,16 +618,18 @@ const CommentEditor = ({
   const pendingAttachmentInsertRef = useRef<Map<string, number>>(new Map());
 
   const replaceCardAttachments = useCallback((attachments: Attachment[]) => {
-    cardAttachmentsRef.current = attachments;
-    setCardAttachments(attachments);
+    const combined = [...attachments, ...cardAttachmentsRef.current.filter(
+      (entry) => entry.upload_context === 'comment' && !attachments.some((item) => item.id === entry.id),
+    )];
+    cardAttachmentsRef.current = combined;
+    setCardAttachments(combined);
   }, []);
 
   const prependCardAttachment = useCallback((attachment: Attachment) => {
-    setCardAttachments((prev) => {
-      const next = [attachment, ...prev.filter((entry) => entry.id !== attachment.id)];
-      cardAttachmentsRef.current = next;
-      return next;
-    });
+    // [why] Flush and offline serialization read this before React commits.
+    const next = [attachment, ...cardAttachmentsRef.current.filter((entry) => entry.id !== attachment.id)];
+    cardAttachmentsRef.current = next;
+    setCardAttachments(next);
   }, []);
 
   useEffect(() => {
@@ -635,13 +637,14 @@ const CommentEditor = ({
   }, [availableAttachments, replaceCardAttachments]);
 
   useEffect(() => {
-    onAttachmentsChange?.(cardAttachments);
+    onAttachmentsChange?.(cardAttachments.filter((attachment) => attachment.upload_context !== 'comment'));
   }, [cardAttachments, onAttachmentsChange]);
 
   // Attachment upload — only active when a cardId is provided.
   // [why] deferred=true keeps uploads queueable, while explicit flushes let us
   // upload immediately from picker/file-input flows when needed.
   const { uploads, upload: uploadFiles, removeEntry, flush: flushUploads } = useAttachmentUpload({
+    uploadContext: 'comment',
     cardId: cardId ?? '',
     deferred: true,
     onSuccess(attachment: Attachment, clientId: string) {
@@ -906,16 +909,20 @@ const CommentEditor = ({
 
   const handleSubmit = useCallback(async () => {
     if (!editor) return;
-    const trimmed = buildCommentMarkdown(editor, cardAttachmentsRef.current).trim();
-    if (!trimmed) {
-      setError(translations['comment.editor.error.empty']);
-      return;
-    }
     setError(null);
 
-    // Offline path: queue POST and show "Will post when back online"
-    const handledOffline = handleSubmitIntent(trimmed);
-    if (handledOffline) return;
+    if (!navigator.onLine) {
+      if (uploads.some((entry) => entry.phase !== 'done' && entry.phase !== 'error')) {
+        setError(translations['comment.editor.error.connectToUpload']);
+        return;
+      }
+      const trimmed = buildCommentMarkdown(editor, cardAttachmentsRef.current).trim();
+      if (!trimmed) {
+        setError(translations['comment.editor.error.empty']);
+        return;
+      }
+      if (handleSubmitIntent(trimmed)) return;
+    }
 
     // Online path: flush any queued (deferred) attachments first, then submit.
     setSubmitting(true);
@@ -924,7 +931,13 @@ const CommentEditor = ({
       // waits for completion so onSuccess inserts the attachment URLs into the editor
       // before we read the final markdown to post.
       await flushUploads();
-      await onSubmit(buildCommentMarkdown(editor, cardAttachmentsRef.current).trim());
+      const trimmed = buildCommentMarkdown(editor, cardAttachmentsRef.current).trim();
+      if (!trimmed) {
+        setError(translations['comment.editor.error.empty']);
+        return;
+      }
+      if (handleSubmitIntent(trimmed)) return;
+      await onSubmit(trimmed);
       editor.commands.clearContent();
       clearDraft();
     } catch {
@@ -932,7 +945,7 @@ const CommentEditor = ({
     } finally {
       setSubmitting(false);
     }
-  }, [editor, onSubmit, handleSubmitIntent, clearDraft, flushUploads]);
+  }, [editor, onSubmit, handleSubmitIntent, clearDraft, flushUploads, uploads]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1583,4 +1596,3 @@ const CommentEditor = ({
 };
 
 export default CommentEditor;
-

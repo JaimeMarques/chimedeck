@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { Board } from '../../Board/api';
-import { clearAuth, loginThunk, logoutThunk } from '../../Auth/duck/authDuck';
+import { clearAuth, loginThunk, logoutThunk, refreshCredentials } from '../../Auth/duck/authDuck';
 import reducer, { fetchSwitcherBoardsThunk, setSwitcherPrefs, toggleSwitcherStarThunk } from '../boardSwitcher.slice';
 
 const boardA = Object.freeze({ id: 'a1', title: 'A private', workspaceId: 'wA', state: 'ACTIVE', isStarred: false }) as Board;
@@ -47,5 +47,22 @@ describe('boardSwitcher slice — session changes', () => {
     expect(state.boards).toEqual([]);
     expect(state.status).toBe('idle');
     expect(state.loadFailed).toBe(false);
+  });
+
+  it('preserves boards, session and in-flight fetch/star mutation during silent token renewal', () => {
+    let state = reducer(undefined, fetchSwitcherBoardsThunk.pending('loaded'));
+    state = reducer(state, fetchSwitcherBoardsThunk.fulfilled({ boards: [boardA], incomplete: false }, 'loaded'));
+    state = reducer(state, fetchSwitcherBoardsThunk.pending('fetching'));
+    state = reducer(state, toggleSwitcherStarThunk.pending('star', { boardId: 'a1', starred: true }));
+    const before = state;
+    state = reducer(state, refreshCredentials({
+      user: { id: 'uA', name: 'A', email: 'a@example.test' }, accessToken: 'fresh-token',
+    }));
+    expect(state).toEqual(before);
+    state = reducer(state, toggleSwitcherStarThunk.fulfilled(undefined, 'star', { boardId: 'a1', starred: true }));
+    state = reducer(state, fetchSwitcherBoardsThunk.fulfilled({ boards: [boardA], incomplete: false }, 'fetching'));
+    expect(state.session).toBe(before.session);
+    expect(state.boards.map((board) => board.id)).toEqual(['a1']);
+    expect(state.status).toBe('idle');
   });
 });

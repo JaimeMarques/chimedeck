@@ -6,6 +6,7 @@ import { getBoard, listCardsByListBatch, type Board, type ListCardHydration } fr
 import type { List } from '../../List/api';
 import type { ListSortBy } from '../../List/types';
 import type { Card } from '../../Card/api';
+import { isRetryableRequestError } from '~/common/api/recoveryErrors';
 
 const INITIAL_CARDS_PER_LIST = 50;
 const DEFAULT_HYDRATION_BATCH_SIZE = 50;
@@ -19,6 +20,11 @@ export interface BoardState {
   cardsByList: Record<string, string[]>; // listId → ordered card IDs
   cards: Record<string, Card>;
   status: 'idle' | 'loading' | 'error';
+  fetchRequestId?: string;
+  revision: number;
+  fetchRevision?: number;
+  appliedSnapshotRequestId?: string;
+  hydrationRequestIds?: Record<string, string>;
   listHydration: Record<string, ListCardHydration & { loading: boolean; error: boolean }>;
   /** Snapshot taken at drag-start; used for rollback on API failure */
   dragSnapshot: {
@@ -34,6 +40,7 @@ const initialState: BoardState = {
   cardsByList: {},
   cards: {},
   status: 'idle',
+  revision: 0,
   listHydration: {},
   dragSnapshot: null,
 };
@@ -46,17 +53,39 @@ export const fetchBoardDataThunk = createAppAsyncThunk(
     {
       boardId,
       initialCardsPerList,
-    }: { boardId: string; initialCardsPerList?: number },
-    { extra },
+      background,
+    }: { boardId: string; initialCardsPerList?: number; background?: boolean },
+    { extra, getState, rejectWithValue },
   ) => {
-    return getBoard({
-      api: (extra as { api: { get: <T>(url: string) => Promise<T> } }).api,
-      boardId,
-      initialCardsPerList:
-        typeof initialCardsPerList === 'number' && initialCardsPerList > 0
-          ? initialCardsPerList
-          : INITIAL_CARDS_PER_LIST,
-    });
+    const revision = (getState() as unknown as { board: BoardState }).board.revision;
+    let response: Awaited<ReturnType<typeof getBoard>>;
+    try {
+      response = await getBoard({
+        api: (extra as { api: { get: <T>(url: string) => Promise<T> } }).api,
+        boardId,
+        ...(background ? {} : {
+          initialCardsPerList:
+            typeof initialCardsPerList === 'number' && initialCardsPerList > 0
+              ? initialCardsPerList
+              : INITIAL_CARDS_PER_LIST,
+        }),
+      });
+    } catch (error) {
+      if (background) return rejectWithValue({ retryable: isRetryableRequestError(error) });
+      throw error;
+    }
+    const current = (getState() as unknown as { board: BoardState }).board;
+    if (background && (current.revision !== revision || current.dragSnapshot)) {
+      return rejectWithValue('snapshot-stale');
+    }
+    return response;
+  },
+  {
+    // [why] Recovery must not supersede the foreground request for a new route.
+    condition: ({ background }, { getState }) => {
+      const board = (getState() as unknown as { board: BoardState }).board;
+      return !background || (board.status !== 'loading' && !board.dragSnapshot);
+    },
   },
 );
 
@@ -226,7 +255,8 @@ const boardSlice = createSlice({
       if (!state.listOrder.includes(list.id)) {
         state.listOrder.push(list.id);
       }
-      state.cardsByList[list.id] = [];
+      // [why] Replayed creation events must preserve already hydrated cards.
+      state.cardsByList[list.id] ??= [];
     },
 
     /** Update a list's fields (e.g. title rename from WS event) */
@@ -365,10 +395,16 @@ const boardSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(fetchBoardDataThunk.pending, (state) => {
-        state.status = 'loading';
+      .addCase(fetchBoardDataThunk.pending, (state, action) => {
+        state.fetchRequestId = action.meta.requestId;
+        state.fetchRevision = state.revision;
+        if (!action.meta.arg.background) state.status = 'loading';
       })
       .addCase(fetchBoardDataThunk.fulfilled, (state, action) => {
+        if (state.fetchRequestId !== action.meta.requestId) return;
+        delete state.fetchRequestId;
+        if (action.meta.arg.background && (state.fetchRevision !== state.revision || state.dragSnapshot)) return;
+        state.appliedSnapshotRequestId = action.meta.requestId;
         state.status = 'idle';
         state.board = action.payload.data;
 
@@ -387,6 +423,7 @@ const boardSlice = createSlice({
         state.cards = Object.fromEntries(rawCards.map((c) => [c.id, c]));
         state.cardsByList = {};
         state.listHydration = {};
+        state.hydrationRequestIds = {};
         for (const list of sortedLists) {
           const cardsInList = rawCards
             .filter((c) => c.list_id === list.id && !c.archived)
@@ -414,11 +451,15 @@ const boardSlice = createSlice({
           };
         }
       })
-      .addCase(fetchBoardDataThunk.rejected, (state) => {
-        state.status = 'error';
+      .addCase(fetchBoardDataThunk.rejected, (state, action) => {
+        if (state.fetchRequestId !== action.meta.requestId) return;
+        delete state.fetchRequestId;
+        if (!action.meta.arg.background) state.status = 'error';
       })
       .addCase(fetchListCardsBatchThunk.pending, (state, action) => {
         const { listId } = action.meta.arg;
+        state.hydrationRequestIds ??= {};
+        state.hydrationRequestIds[listId] = action.meta.requestId;
         const current = state.listHydration[listId];
         state.listHydration[listId] = {
           loaded: current?.loaded ?? 0,
@@ -431,6 +472,8 @@ const boardSlice = createSlice({
       })
       .addCase(fetchListCardsBatchThunk.fulfilled, (state, action) => {
         const { listId, data, metadata } = action.payload;
+        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId) return;
+        state.hydrationRequestIds[listId] = '';
         const currentIds = state.cardsByList[listId] ?? [];
         const mergedIds = [...currentIds];
 
@@ -458,6 +501,8 @@ const boardSlice = createSlice({
       })
       .addCase(fetchListCardsBatchThunk.rejected, (state, action) => {
         const { listId } = action.meta.arg;
+        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId) return;
+        state.hydrationRequestIds[listId] = '';
         const current = state.listHydration[listId];
         if (!current) return;
         state.listHydration[listId] = {
@@ -470,7 +515,32 @@ const boardSlice = createSlice({
 });
 
 export const boardSliceActions = boardSlice.actions;
-export default boardSlice.reducer;
+export function shouldRetryBoardSnapshot({ result, appliedRequestId }: {
+  result: unknown;
+  appliedRequestId: string | undefined;
+}): boolean {
+  const action = result as { type: string; payload?: unknown; meta: { condition?: boolean; requestId: string; aborted?: boolean } };
+  if (action.meta.aborted) return false;
+  return action.payload === 'snapshot-stale' || action.meta.condition === true
+    || (typeof action.payload === 'object' && action.payload !== null
+      && (action.payload as { retryable?: boolean }).retryable === true)
+    || (action.type === fetchBoardDataThunk.fulfilled.type && appliedRequestId !== action.meta.requestId);
+}
+
+export default function boardReducer(
+  state: Parameters<typeof boardSlice.reducer>[0],
+  action: Parameters<typeof boardSlice.reducer>[1],
+): BoardState {
+  const next = boardSlice.reducer(state, action);
+  // [why] Any intervening board mutation makes a background snapshot stale.
+  const changesBoard = action.type.startsWith('board/')
+    && !action.type.startsWith('board/fetchData/')
+    && action.type !== 'board/saveDragSnapshot'
+    && action.type !== 'board/clearDragSnapshot'
+    && !action.type.endsWith('/pending')
+    && !action.type.endsWith('/rejected');
+  return changesBoard && next !== state ? { ...next, revision: (state?.revision ?? 0) + 1 } : next;
+}
 
 // ---------- Selectors ----------
 // Cast to unknown first to avoid circular RootState → reducers → boardSlice dependency

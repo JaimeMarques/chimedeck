@@ -96,6 +96,8 @@ export const cardCopyToBoardAction: ActionHandler = {
       position,
       archived: false,
       due_date: card.due_date ?? null,
+      // The membership check above rejects 'system', so actorId is a users.id.
+      created_by: actorId,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

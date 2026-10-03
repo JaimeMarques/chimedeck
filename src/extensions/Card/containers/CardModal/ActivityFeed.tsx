@@ -186,6 +186,23 @@ const ActivityFeed = ({
   insertMarkdownRef,
 }: Props) => {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [showDetails, setShowDetails] = useState(() => {
+    try {
+      return localStorage.getItem('card-activity-show-details') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleDetails = () => {
+    const next = !showDetails;
+    setShowDetails(next);
+    try {
+      localStorage.setItem('card-activity-show-details', String(next));
+    } catch {
+      // Keep the preference in memory when browser storage is unavailable.
+    }
+  };
   // [why] Local ref that is passed to CommentEditor so it can register its insert function.
   // We forward the caller-supplied insertMarkdownRef (if any) so CardModal can wire
   // AttachmentPanel → CommentEditor without prop-drilling through multiple layers.
@@ -245,13 +262,23 @@ const ActivityFeed = ({
     .map((a) => ({ kind: 'event', ts: a.created_at, activity: a }));
 
   // Merge and sort descending (newest first)
-  const feed: FeedItem[] = [...commentItems, ...eventItems].sort(
+  const feed: FeedItem[] = [...commentItems, ...(showDetails ? eventItems : [])].sort(
     (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
   );
 
   return (
     <div className="flex flex-col gap-3">
-      <h3 className="cd-section-heading text-xs font-semibold uppercase text-muted">Activity</h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="cd-section-heading text-xs font-semibold uppercase text-muted">Comments and activity</h3>
+        <button
+          type="button"
+          aria-pressed={showDetails}
+          onClick={toggleDetails}
+          className="flex-shrink-0 rounded border border-border px-2 py-1 text-sm text-subtle hover:bg-bg-overlay focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          {showDetails ? 'Hide details' : 'Show details'}
+        </button>
+      </div>
 
       {/* Comment input — hidden for VIEWER guests */}
       {canAddComment && (
@@ -269,7 +296,7 @@ const ActivityFeed = ({
 
       <div className="flex flex-col gap-3">
         {feed.length === 0 && (
-          <p className="text-sm text-subtle italic">No activity yet.</p>
+          <p className="text-sm text-subtle italic">{showDetails ? 'No activity yet.' : 'No comments yet.'}</p>
         )}
 
         {feed.map((item) => {

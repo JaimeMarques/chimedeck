@@ -203,6 +203,15 @@ function exactPostgresText(value: unknown, label: string): string {
   return value;
 }
 
+// A card's creator is its resolved historical author, never a staged field: an
+// authorless payload's fields.created_by ('system', another user id) is dropped.
+export function setHistoricalCardCreator(
+  row: Record<string, unknown>,
+  authorUserId: string | null
+): void {
+  row.created_by = authorUserId;
+}
+
 // Historical comments are preserved exactly as staged rather than passed through
 // the normal user-input sanitizer. PostgreSQL TEXT stores every valid Unicode
 // string without a length limit, but it cannot represent U+0000 or unpaired
