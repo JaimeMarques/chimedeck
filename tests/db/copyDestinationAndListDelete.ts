@@ -143,6 +143,9 @@ try {
 
   const copied = await copyTo(memberId, lists.allowed);
   assert.equal(copied.status, 201);
+  const copiedBody = await copied.json() as { data: { id: string } };
+  const copiedRow = await db('cards').where({ id: copiedBody.data.id }).first() as { created_by: string | null } | undefined;
+  assert.equal(copiedRow?.created_by, memberId, 'the authenticated copier must be recorded as creator');
   assert.equal(await cardCount(lists.allowed), 1);
   const sameBoard = await copyTo(guestId, lists.source);
   assert.equal(sameBoard.status, 201);

@@ -315,6 +315,7 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
       cover_attachment_id: null,
       cover_color: fullCard.cover_color ?? null,
       cover_size: fullCard.cover_size ?? 'SMALL',
+      created_by: userId,
     });
 
     if (body.keepMembers) {
