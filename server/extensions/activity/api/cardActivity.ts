@@ -61,7 +61,9 @@ export async function handleCardActivity(req: Request, cardId: string): Promise<
     // [why] Secondary sort by id ensures deterministic ordering when two events share
     //       the same created_at timestamp (e.g. batch-emitted events or test fixtures).
     .orderBy('created_at', 'desc')
-    .orderBy('id', 'desc')) as CardActivityRow[];
+    .orderBy('id', 'desc')
+    // [why] Explicit columns: ip_address / user_agent are audit-only, never sent to clients.
+    .select('id', 'entity_type', 'entity_id', 'board_id', 'action', 'actor_id', 'payload', 'created_at')) as CardActivityRow[];
 
   // Join actor display info so the client never has to resolve IDs separately
   const actorIds = [...new Set(activities.map((a) => a.actor_id))];
