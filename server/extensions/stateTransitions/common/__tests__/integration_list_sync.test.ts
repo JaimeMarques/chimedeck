@@ -26,6 +26,10 @@ class QueryBuilder {
     return this;
   }
 
+  forUpdate(): this {
+    return this;
+  }
+
   orderBy(column: string, direction: 'asc' | 'desc' = 'asc'): this {
     this.orderedBy = column;
     this.orderDirection = direction;
@@ -153,8 +157,11 @@ function resetStore(): DataStore {
   };
 }
 
+const mockDb = (tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName);
 await mock.module('../../../../common/db', () => ({
-  db: ((tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName)) as unknown as typeof import('../../../../common/db').db,
+  db: Object.assign(mockDb, {
+    transaction: async <T>(cb: (trx: typeof mockDb) => Promise<T>) => cb(mockDb),
+  }) as unknown as typeof import('../../../../common/db').db,
 }));
 
 await mock.module('../../../auth/middlewares/authentication', () => ({

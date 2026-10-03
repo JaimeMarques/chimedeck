@@ -90,6 +90,7 @@ export async function duplicateBoard({
             description: card.description,
             position: card.position,
             archived: false,
+            created_by: actorId,
           });
         }
       }

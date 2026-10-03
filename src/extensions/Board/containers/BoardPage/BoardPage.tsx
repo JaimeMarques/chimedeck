@@ -11,8 +11,11 @@ import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppSelector } from '~/hooks/useAppSelector';
 import { useAppDispatch } from '~/hooks/useAppDispatch';
+import { useStore } from 'react-redux';
+import type { RootState } from '~/store';
 import {
   fetchBoardDataThunk,
+  shouldRetryBoardSnapshot,
   boardSliceActions,
   selectBoard,
   selectListOrder,
@@ -36,6 +39,7 @@ import { createCard, getCard, copyCard } from '../../../Card/api';
 import { moveCard, archiveCard } from '../../api/card';
 import { useWebSocket } from '../../../Realtime/hooks/useWebSocket';
 import { useBoardSync } from '../../../Realtime/hooks/useBoardSync';
+import { useBoardSnapshot } from '../../../Realtime/hooks/useBoardSnapshot';
 import { usePollingFallback } from '../../../Realtime/PollingFallback';
 import { selectAuthToken, selectAuthUser } from '../../../Auth/duck/authDuck';
 import { apiClient } from '~/common/api/client';
@@ -74,6 +78,7 @@ import { selectSwitcherStarred, toggleStarAndReconcileThunk } from '~/extensions
 
 const BoardPage = () => {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const { boardId: boardRouteId, cardId: cardRouteId } = useParams<{ boardId?: string; cardId?: string }>();
   const navigate = useNavigate();
   const [resolvedBoardId, setResolvedBoardId] = useState<string | null>(null);
@@ -264,11 +269,25 @@ const BoardPage = () => {
 
   // ── Real-time sync (sprint-20) ────────────────────────────────────────────
   const { handleEvent, lastSequence } = useBoardSync({ boardId: realtimeBoardId });
+  // [why] A full snapshot avoids replaying history against a hydrated board.
+  const refreshBoard = useBoardSnapshot({
+    boardId,
+    fetchSnapshot: () => dispatch(fetchBoardDataThunk({
+      boardId: boardId ?? '', initialCardsPerList, background: true,
+    })),
+    shouldRetry: (result) => shouldRetryBoardSnapshot({
+      result, appliedRequestId: store.getState().board.appliedSnapshotRequestId,
+    }),
+  });
+  const applyPolledEvents = useCallback((events: Parameters<typeof handleEvent>[0][]) => {
+    events.forEach(handleEvent);
+  }, [handleEvent]);
   const { connectionState, pollingActive } = useWebSocket({
     boardId: realtimeBoardId,
     token: accessToken ?? '',
     lastSequence,
     onEvent: handleEvent,
+    onReconnect: refreshBoard,
     onMutationConflict: () => {
       addToast('A mutation conflicted with a remote change and was discarded.', 'conflict');
     },
@@ -283,9 +302,8 @@ const BoardPage = () => {
     boardId: realtimeBoardId,
     active: pollingActive,
     lastSequence,
-    onEvents: (events) => {
-      events.forEach(handleEvent);
-    },
+    onEvents: applyPolledEvents,
+    fetchSnapshot: refreshBoard,
   });
 
   useEffect(() => {
