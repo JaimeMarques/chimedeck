@@ -1,17 +1,24 @@
-// POST /api/v1/cards/:id/copy — copy card to any list with optional checklists & members; min role: MEMBER.
+// POST /api/v1/cards/:id/copy — copy card to a writable list in the same workspace, with optional checklists & members; min role: MEMBER.
 import { randomUUID } from 'node:crypto';
+import type { Knex } from 'knex';
 import { db } from '../../../common/db';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import { dispatchEvent } from '../../../mods/events/dispatch';
 import {
   requireWorkspaceMembership,
   requireMemberOrBoardGuestMember,
+  resolveHighestRole,
+  hasRole,
+  type Role,
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { requireCardWritable, type CardScopedRequest } from '../middlewares/requireCardWritable';
+import { applyBoardVisibility } from '../../../middlewares/boardVisibility';
 import { between, LOW_SENTINEL, HIGH_SENTINEL } from '../../list/mods/fractional';
 import { resolveCoverImageUrl } from '../../../common/cards/cover';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
+import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
+import { lockBoardMemberMutations } from '../../board/api/members/lock';
 
 type CardRow = {
   id: string;
@@ -34,6 +41,8 @@ type ListRow = {
 type BoardRow = {
   id: string;
   workspace_id: string;
+  state: string;
+  visibility: string;
 };
 
 type ChecklistRow = {
@@ -74,23 +83,23 @@ function computePosition(
   return between(previousCard.position, nextCard.position);
 }
 
-async function copyChecklists(sourceCardId: string, newCardId: string): Promise<void> {
-  const checklists = await db<ChecklistRow>('checklists')
+async function copyChecklists(trx: Knex.Transaction, sourceCardId: string, newCardId: string): Promise<void> {
+  const checklists = await trx<ChecklistRow>('checklists')
     .where({ card_id: sourceCardId })
     .orderBy('position', 'asc');
   for (const checklist of checklists) {
     const newChecklistId = randomUUID();
-    await db('checklists').insert({
+    await trx('checklists').insert({
       id: newChecklistId,
       card_id: newCardId,
       title: checklist.title,
       position: checklist.position,
     });
-    const items = await db<ChecklistItemRow>('checklist_items')
+    const items = await trx<ChecklistItemRow>('checklist_items')
       .where({ checklist_id: checklist.id })
       .orderBy('position', 'asc');
     if (items.length > 0) {
-      await db('checklist_items').insert(
+      await trx('checklist_items').insert(
         items.map((item: { title: string; position: string; assigned_member_id?: string | null; due_date?: string | null }) => ({
           id: randomUUID(),
           card_id: newCardId,
@@ -105,6 +114,23 @@ async function copyChecklists(sourceCardId: string, newCardId: string): Promise<
       );
     }
   }
+}
+
+// Authorization must use the role and board access read inside the transaction,
+// after the membership/board locks. Middleware state is a revocable preflight.
+async function authorizeCopyBoard(trx: Knex.Transaction, board: BoardRow, userId: string, role: Role): Promise<Response | null> {
+  const forbidden = (code: string, message: string) => Response.json({ error: { code, message } }, { status: 403 });
+  if (role === 'GUEST') {
+    const grant = await trx<{ user_id: string; board_id: string; guest_type: string }>('board_guest_access').where({ user_id: userId, board_id: board.id }).first();
+    return grant?.guest_type.toUpperCase() === 'MEMBER'
+      ? null : forbidden('insufficient-role', 'Requires at least MEMBER role');
+  }
+  if (!hasRole(role, 'MEMBER')) return forbidden('insufficient-role', 'Requires at least MEMBER role');
+  if (board.visibility === 'PRIVATE' && role !== 'OWNER' && role !== 'ADMIN') {
+    const member = await trx<{ user_id: string; board_id: string }>('board_members').where({ user_id: userId, board_id: board.id }).first();
+    if (!member) return forbidden('board-access-denied', 'You do not have access to this board');
+  }
+  return null;
 }
 
 export async function handleCopyCard(req: Request, cardId: string): Promise<Response> {
@@ -157,19 +183,37 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
     );
   }
 
-  const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
+  // The source checks above do not cover the destination. Mirror Move's cross-board
+  // preflight before any insert; visibility must run before the role check so a
+  // guestType resolved for the source board cannot satisfy the target's guest gate.
+  if (targetList.board_id !== board.id) {
+    const targetBoard = await db<BoardRow>('boards').where({ id: targetList.board_id }).first();
+    if (!targetBoard) {
+      return Response.json({ error: { name: 'target-board-not-found' } }, { status: 404 });
+    }
+    if (targetBoard.workspace_id !== board.workspace_id) {
+      return Response.json(
+        {
+          error: {
+            code: 'cross-workspace-copy-forbidden',
+            message: 'Cards can only be copied between boards in the same workspace',
+          },
+        },
+        { status: 403 },
+      );
+    }
+    const targetVisibilityError = await applyBoardVisibility(req, targetBoard.id);
+    if (targetVisibilityError) return targetVisibilityError;
+    if (targetBoard.state === 'ARCHIVED') {
+      return Response.json(
+        { error: { code: 'board-is-archived', message: 'The target board is archived and cannot be modified' } },
+        { status: 403 },
+      );
+    }
+    const targetRoleError = await requireMemberOrBoardGuestMember(scopedReq, targetBoard.id);
+    if (targetRoleError) return targetRoleError;
+  }
 
-  const targetCards = await db<CardRow>('cards')
-    .where({ list_id: body.targetListId, archived: false })
-    .orderBy('position', 'asc');
-
-  const positionIdx =
-    typeof body.position === 'number'
-      ? Math.max(0, Math.min(body.position - 1, targetCards.length))
-      : targetCards.length;
-
-  const newPosition = computePosition(targetCards, positionIdx);
-  const newId = randomUUID();
   const shortId = await generateUniqueShortId('cards');
   const title =
     typeof body.title === 'string' && body.title.trim() ? body.title.trim() : card.title;
@@ -183,35 +227,113 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
     );
   }
 
-  await db('cards').insert({
-    id: newId,
-    short_id: shortId,
-    list_id: body.targetListId,
-    title,
-    description: card.description,
-    position: newPosition,
-    archived: false,
-    due_date: card.due_date,
-    cover_attachment_id: null,
-    cover_color: fullCard.cover_color ?? null,
-    cover_size: fullCard.cover_size ?? 'SMALL',
-    created_by: (req as AuthenticatedRequest).currentUser?.id ?? null,
-  });
-
-  if (body.keepMembers) {
-    const cardMembers = await db<CardMemberRow>('card_members').where({ card_id: cardId });
-    if (cardMembers.length > 0) {
-      await db('card_members').insert(
-        cardMembers.map((m: { user_id: string }) => ({ card_id: newId, user_id: m.user_id })),
+  // The checks above authorized a snapshot of targetList.board_id. Pin the list to that
+  // board while inserting: FOR SHARE conflicts with the lock an UPDATE of lists.board_id
+  // takes, but not with the KEY SHARE other card inserts take on the list row.
+  const newId = randomUUID();
+  const copy = await db.transaction(async (trx) => {
+    // Serialize every copy with role and board-access mutations, not only copies
+    // carrying members/checklist assignments. Match Move's workspace-before-board order.
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    for (const boardId of [...new Set([board.id, targetList.board_id])].sort()) {
+      await lockBoardMemberMutations(trx, boardId);
+    }
+    // Pin both list locations through the write. Lock in ID order to avoid
+    // inversions with another copy whose source and destination are swapped.
+    const lockedLists = new Map<string, ListRow>();
+    for (const listId of [...new Set([card.list_id, body.targetListId])].sort()) {
+      const row = await trx<ListRow>('lists').where({ id: listId }).forShare().first();
+      if (row) lockedLists.set(listId, row);
+    }
+    const lockedList = lockedLists.get(body.targetListId);
+    if (!lockedList) {
+      return Response.json(
+        { error: { name: 'target-list-not-found', data: { message: 'Target list not found' } } },
+        { status: 404 },
       );
     }
-  }
+    if (lockedList.board_id !== targetList.board_id) {
+      return Response.json(
+        { error: { code: 'target-list-changed', message: 'Target list changed; reload and retry' } },
+        { status: 409 },
+      );
+    }
 
-  if (body.keepChecklists) {
-    await copyChecklists(cardId, newId);
-  }
+    const currentCard = await trx<CardRow>('cards').where({ id: cardId }).forShare().first();
+    if (!currentCard || currentCard.list_id !== card.list_id) {
+      return Response.json({ error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } }, { status: 409 });
+    }
+    if (currentCard.archived) {
+      return Response.json({ error: { code: 'card-archived', message: 'Card is archived and cannot be copied' } }, { status: 403 });
+    }
+    const currentSourceList = lockedLists.get(currentCard.list_id);
+    if (!currentSourceList || currentSourceList.board_id !== board.id) {
+      return Response.json({ error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } }, { status: 409 });
+    }
+    const currentSourceBoard = await trx<BoardRow>('boards').where({ id: board.id }).first();
+    const currentTargetBoard = targetList.board_id === board.id
+      ? currentSourceBoard : await trx<BoardRow>('boards').where({ id: targetList.board_id }).first();
+    if (!currentSourceBoard || !currentTargetBoard) {
+      return Response.json({ error: { code: 'board-not-found', message: 'Board not found' } }, { status: 404 });
+    }
+    if (currentSourceBoard.workspace_id !== board.workspace_id || currentTargetBoard.workspace_id !== board.workspace_id) {
+      return Response.json({ error: { code: 'cross-workspace-copy-forbidden', message: 'Cards can only be copied between boards in the same workspace' } }, { status: 403 });
+    }
+    if (currentSourceBoard.state === 'ARCHIVED' || currentTargetBoard.state === 'ARCHIVED') {
+      return Response.json({ error: { code: 'board-is-archived', message: 'An archived board cannot be modified' } }, { status: 403 });
+    }
+    const userId = (req as AuthenticatedRequest).currentUser?.id;
+    if (!userId) return Response.json({ error: { code: 'unauthorized', message: 'Authentication required' } }, { status: 401 });
+    const memberships = await trx('memberships').where({ user_id: userId, workspace_id: board.workspace_id }).select('role') as Array<{ role: string }>;
+    const role = resolveHighestRole(memberships.map((membership) => membership.role));
+    if (!role) return Response.json({ error: { code: 'insufficient-role', message: 'You are not a member of this workspace' } }, { status: 403 });
+    const sourceAccess = await authorizeCopyBoard(trx, currentSourceBoard, userId, role);
+    if (sourceAccess) return sourceAccess;
+    if (currentTargetBoard.id !== currentSourceBoard.id) {
+      const targetAccess = await authorizeCopyBoard(trx, currentTargetBoard, userId, role);
+      if (targetAccess) return targetAccess;
+    }
 
-  const copy = await db<CardRow>('cards').where({ id: newId }).first();
+    const targetCards = await trx<CardRow>('cards')
+      .where({ list_id: body.targetListId, archived: false })
+      .orderBy('position', 'asc');
+
+    const positionIdx =
+      typeof body.position === 'number'
+        ? Math.max(0, Math.min(body.position - 1, targetCards.length))
+        : targetCards.length;
+
+    await trx('cards').insert({
+      id: newId,
+      short_id: shortId,
+      list_id: body.targetListId,
+      title,
+      description: card.description,
+      position: computePosition(targetCards, positionIdx),
+      archived: false,
+      due_date: card.due_date,
+      cover_attachment_id: null,
+      cover_color: fullCard.cover_color ?? null,
+      cover_size: fullCard.cover_size ?? 'SMALL',
+      created_by: userId,
+    });
+
+    if (body.keepMembers) {
+      const cardMembers = await trx<CardMemberRow>('card_members').where({ card_id: cardId });
+      if (cardMembers.length > 0) {
+        await trx('card_members').insert(
+          cardMembers.map((m: { user_id: string }) => ({ card_id: newId, user_id: m.user_id })),
+        );
+      }
+    }
+
+    if (body.keepChecklists) {
+      await copyChecklists(trx, cardId, newId);
+    }
+
+    return trx<CardRow>('cards').where({ id: newId }).first();
+  });
+  if (copy instanceof Response) return copy;
   if (!copy) {
     return Response.json(
       { error: { name: 'card-not-found', data: { message: 'Copied card not found' } } },
@@ -222,7 +344,7 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
 
   await dispatchEvent({
     type: 'card.copied',
-    boardId: targetBoard?.id ?? board.id,
+    boardId: targetList.board_id,
     entityId: newId,
     actorId: (req as AuthenticatedRequest).currentUser?.id ?? 'system',
     payload: { sourceId: cardId },

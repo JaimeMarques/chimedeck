@@ -63,6 +63,7 @@ jobs:
           tests/db/concurrentBoardMemberRoleMutation.ts
           tests/db/workspaceMembershipSecurity.ts
           tests/db/moveAuthorizationConcurrency.ts
+          tests/db/copyDestinationAndListDelete.ts
           tests/e2e/board-members.spec.ts
           server/mods/events/__tests__/policy.test.ts
           server/mods/events/__tests__/dispatch.test.ts
@@ -83,6 +84,10 @@ jobs:
         env:
           CHIMEDECK_TEST_SANDBOX: '1'
         run: bun run tests/db/moveAuthorizationConcurrency.ts
+      - name: Verify Copy destination authorization and atomic list delete on PostgreSQL
+        env:
+          CHIMEDECK_TEST_SANDBOX: '1'
+        run: bun run tests/db/copyDestinationAndListDelete.ts
       - name: Run board-member HTTP contracts against the real server
         shell: bash
         run: |
