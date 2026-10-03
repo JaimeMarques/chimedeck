@@ -362,7 +362,7 @@ export default function BoardSwitcherBody({ variant, onDone }: Props) {
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="cd-board-switcher flex flex-col gap-3">
       {/* Search + layout toggle + pin/unpin */}
       <div className="flex items-center gap-1.5">
         <label className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-bg-base px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-primary">

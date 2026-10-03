@@ -19,22 +19,47 @@ describe('labelColors', () => {
 
   it('maps legacy Trello hexes case-insensitively', () => {
     expect(trelloLabelTone('#61bd4f')).toBe('#216E4E');
-    expect(trelloLabelTone('#FF9F1A')).toBe('#A54800');
-    expect(trelloLabelTone('#C377E0')).toBe('#5E4DB2');
+    expect(trelloLabelTone('#FF9F1A')).toBe('#9E4C00');
+    expect(trelloLabelTone('#C377E0')).toBe('#803FA5');
+    expect(trelloLabelTone('#0079BF')).toBe('#1558BC');
   });
 
-  it('mixes other hexes 60% with the Trello base', () => {
-    // 0x3e*.6+0x1d*.4 = 48.8 → 0x31; 0x63*.6+0x21*.4 = 72.6 → 0x49; 0xdd*.6+0x25*.4 = 147.4 → 0x93
-    expect(trelloLabelTone('#3e63dd')).toBe('#314993');
-    expect(trelloLabelTone('#ffffff')).toBe('#a5a6a8');
+  it('preserves custom hex colours without muting their saturation', () => {
+    expect(trelloLabelTone('#3e63dd')).toBe('#3e63dd');
+    expect(trelloLabelTone('#ffffff')).toBe('#ffffff');
+    expect(trelloLabelTone(' #F0A ')).toBe('#ff00aa');
+  });
+
+  it('keeps standard and bold Trello tones distinct', () => {
+    expect(trelloLabelTone('#5ba4cf')).toBe('#669DF1');
+    expect(trelloLabelTone('#579DFF')).toBe('#669DF1');
+    for (const tone of ['#669DF1', '#F87168', '#4BCE97', '#DDB30E', '#FCA700', '#C97CF4', '#E774BB', '#6CC3E0', '#94C748']) {
+      expect(trelloLabelTone(tone)).toBe(tone.toLowerCase());
+    }
+    expect(trelloLabelTone('#0079BF')).not.toBe(trelloLabelTone('#5BA4CF'));
   });
 
   it('uses light text on dark tones', () => {
-    expect(trelloLabelText('#7F5F01')).toBe('#dee4ea');
-    expect(trelloLabelText('#a5a6a8')).toBe('#1d2125');
-    // #AE2E24 (red): light 5.10:1 vs dark 2.48:1; mid grey #8f9194: dark 5.13:1 vs light 2.47:1
-    expect(trelloLabelText('#AE2E24')).toBe('#dee4ea');
-    expect(trelloLabelText('#8f9194')).toBe('#1d2125');
+    expect(trelloLabelText('#7F5F01')).toBe('#ffffff');
+    expect(trelloLabelText('#a5a6a8')).toBe('#1F1F21');
+    expect(trelloLabelText('#AE2E24')).toBe('#ffffff');
+    expect(trelloLabelText('#8f9194')).toBe('#1F1F21');
+  });
+
+  it('maintains WCAG AA text contrast for tones and arbitrary custom colours', () => {
+    const luminance = (hex: string) => {
+      const channel = (offset: number) => {
+        const s = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return channel(1) * 0.2126 + channel(3) * 0.7152 + channel(5) * 0.0722;
+    };
+    for (const hex of ['#61BD4F', '#F2D600', '#FF9F1A', '#EB5A46', '#C377E0', '#0079BF', '#00C2E0', '#51E898', '#FF78CB', '#669DF1', '#777777', '#888888', '#3e63dd', '#ff00aa']) {
+      const tone = trelloLabelTone(hex);
+      const a = luminance(tone);
+      const b = luminance(trelloLabelText(tone));
+      expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('exposes both looks as CSS vars', () => {
@@ -42,7 +67,7 @@ describe('labelColors', () => {
       '--label-bg': '#F2D600',
       '--label-fg': '#18181b',
       '--label-bg-trello': '#7F5F01',
-      '--label-fg-trello': '#dee4ea',
+      '--label-fg-trello': '#ffffff',
     } as never);
   });
 });
