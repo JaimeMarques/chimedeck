@@ -46,9 +46,9 @@ function authorized(userId: string, path: string, init: RequestInit): Request {
   return new Request(`http://localhost${path}`, { ...init, headers });
 }
 
-async function copyTo(userId: string, targetListId: string): Promise<Response> {
+async function copyTo(userId: string, targetListId: string, keepMembers = false): Promise<Response> {
   const path = `/api/v1/cards/${sourceCardId}/copy`;
-  const response = await cardRouter(authorized(userId, path, { method: 'POST', body: JSON.stringify({ targetListId }) }), path);
+  const response = await cardRouter(authorized(userId, path, { method: 'POST', body: JSON.stringify({ targetListId, keepMembers }) }), path);
   assert.ok(response, 'card router did not handle copy');
   return response;
 }
@@ -120,6 +120,7 @@ try {
     { id: randomUUID(), list_id: deleteLists.withCard, title: 'Keep me', short_id: shortId(), position: 'a0', archived: false },
     { id: randomUUID(), list_id: deleteLists.relocated, title: 'Keep me too', short_id: shortId(), position: 'a0', archived: false },
   ]);
+  await db('card_members').insert({ card_id: sourceCardId, user_id: memberId });
   await db('api_tokens').insert(Object.entries(tokens).map(([userId, { id, token }]) => ({
     id, user_id: userId, name: 'Disposable copy/delete integration token',
     token_hash: createHash('sha256').update(token).digest('hex'), token_prefix: token.slice(0, 10),
@@ -146,6 +147,62 @@ try {
   const sameBoard = await copyTo(guestId, lists.source);
   assert.equal(sameBoard.status, 201);
   console.info('PASS Copy into an authorized board (and within the source board) still succeeds');
+  const withMembers = await copyTo(memberId, lists.allowed, true);
+  assert.equal(withMembers.status, 201);
+  const withMembersBody = await withMembers.json() as { data: { id: string } };
+  const copiedMembers = await db('card_members').where({ card_id: withMembersBody.data.id }).select('user_id') as Array<{ user_id: string }>;
+  assert.deepEqual(copiedMembers.map((row) => row.user_id), [memberId]);
+  assert.equal(await cardCount(lists.allowed), 2);
+  console.info('PASS Cross-board Copy retains an eligible member through the database trigger');
+
+  // A copy queued behind a membership mutation must not use its preflight role.
+  // Observe the actual advisory-lock wait, then demote the caller before releasing it.
+  for (const keepMembers of [false, true]) {
+    const demoting = await db.transaction();
+    let pendingRevokedCopy: Promise<Response> | undefined;
+    try {
+      await demoting.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`workspace-memberships:${workspaceId}`]);
+      pendingRevokedCopy = copyTo(memberId, lists.allowed, keepMembers);
+      let waiting = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const result = await db.raw('SELECT 1 FROM pg_locks WHERE locktype = ? AND granted = false LIMIT 1', ['advisory']) as { rows: unknown[] };
+        if (result.rows.length > 0) { waiting = true; break; }
+        await Bun.sleep(50);
+      }
+      assert.equal(waiting, true, 'copy must wait on the workspace membership lock');
+      await demoting('memberships').where({ workspace_id: workspaceId, user_id: memberId }).update({ role: 'VIEWER' });
+      await demoting.commit();
+    } catch (error) {
+      await demoting.rollback();
+      if (pendingRevokedCopy) await pendingRevokedCopy.catch(() => {});
+      throw error;
+    }
+    const revokedCopy = await pendingRevokedCopy;
+    assert.equal(revokedCopy.status, 403, 'copy must refuse the demoted member after the lock');
+    assert.equal(await cardCount(lists.allowed), 2, 'revoked copy must not insert a card');
+    await db('memberships').where({ workspace_id: workspaceId, user_id: memberId }).update({ role: 'MEMBER' });
+    console.info(`PASS Copy (keepMembers=${keepMembers}) rechecks authorization after demotion`);
+  }
+
+  // A source-list move must not make an already-authorized copy read from another board.
+  const relocatingSource = await db.transaction();
+  let pendingSourceCopy: Promise<Response> | undefined;
+  try {
+    await relocatingSource('lists').where({ id: lists.source }).update({ board_id: boards.otherWorkspace });
+    pendingSourceCopy = copyTo(memberId, lists.allowed);
+    assert.equal(await isPending(pendingSourceCopy), true, 'copy must wait for the source-list relocation');
+    await relocatingSource.commit();
+  } catch (error) {
+    await relocatingSource.rollback();
+    if (pendingSourceCopy) await pendingSourceCopy.catch(() => {});
+    throw error;
+  }
+  const sourceRacedCopy = await pendingSourceCopy;
+  assert.equal(sourceRacedCopy.status, 409);
+  assert.equal(await errorCode(sourceRacedCopy), 'card-location-changed');
+  assert.equal(await cardCount(lists.allowed), 2, 'source-relocation copy must not insert');
+  await db('lists').where({ id: lists.source }).update({ board_id: boards.source });
+  console.info('PASS Copy waits for a source-list relocation and refuses');
 
   // Race: the authorized destination list is relocated to another workspace's board while
   // the copy is in flight (as PUT /lists/:id/idBoard does). The copy must wait for the

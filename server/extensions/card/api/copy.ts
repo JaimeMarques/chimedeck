@@ -7,6 +7,9 @@ import { dispatchEvent } from '../../../mods/events/dispatch';
 import {
   requireWorkspaceMembership,
   requireMemberOrBoardGuestMember,
+  resolveHighestRole,
+  hasRole,
+  type Role,
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
 import { requireCardWritable, type CardScopedRequest } from '../middlewares/requireCardWritable';
@@ -39,6 +42,7 @@ type BoardRow = {
   id: string;
   workspace_id: string;
   state: string;
+  visibility: string;
 };
 
 type ChecklistRow = {
@@ -110,6 +114,23 @@ async function copyChecklists(trx: Knex.Transaction, sourceCardId: string, newCa
       );
     }
   }
+}
+
+// Authorization must use the role and board access read inside the transaction,
+// after the membership/board locks. Middleware state is a revocable preflight.
+async function authorizeCopyBoard(trx: Knex.Transaction, board: BoardRow, userId: string, role: Role): Promise<Response | null> {
+  const forbidden = (code: string, message: string) => Response.json({ error: { code, message } }, { status: 403 });
+  if (role === 'GUEST') {
+    const grant = await trx<{ user_id: string; board_id: string; guest_type: string }>('board_guest_access').where({ user_id: userId, board_id: board.id }).first();
+    return grant?.guest_type.toUpperCase() === 'MEMBER'
+      ? null : forbidden('insufficient-role', 'Requires at least MEMBER role');
+  }
+  if (!hasRole(role, 'MEMBER')) return forbidden('insufficient-role', 'Requires at least MEMBER role');
+  if (board.visibility === 'PRIVATE' && role !== 'OWNER' && role !== 'ADMIN') {
+    const member = await trx<{ user_id: string; board_id: string }>('board_members').where({ user_id: userId, board_id: board.id }).first();
+    if (!member) return forbidden('board-access-denied', 'You do not have access to this board');
+  }
+  return null;
 }
 
 export async function handleCopyCard(req: Request, cardId: string): Promise<Response> {
@@ -211,13 +232,20 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
   // takes, but not with the KEY SHARE other card inserts take on the list row.
   const newId = randomUUID();
   const copy = await db.transaction(async (trx) => {
-    // Member/checklist-assignment triggers take these advisory locks; take them before the
-    // row lock, in the order board/workspace deletes use before cascading to lists.
-    if (body.keepMembers || body.keepChecklists) {
-      await lockWorkspaceMembershipMutations(trx, board.workspace_id);
-      await lockBoardMemberMutations(trx, targetList.board_id);
+    // Serialize every copy with role and board-access mutations, not only copies
+    // carrying members/checklist assignments. Match Move's workspace-before-board order.
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    for (const boardId of [...new Set([board.id, targetList.board_id])].sort()) {
+      await lockBoardMemberMutations(trx, boardId);
     }
-    const lockedList = await trx<ListRow>('lists').where({ id: body.targetListId }).forShare().first();
+    // Pin both list locations through the write. Lock in ID order to avoid
+    // inversions with another copy whose source and destination are swapped.
+    const lockedLists = new Map<string, ListRow>();
+    for (const listId of [...new Set([card.list_id, body.targetListId])].sort()) {
+      const row = await trx<ListRow>('lists').where({ id: listId }).forShare().first();
+      if (row) lockedLists.set(listId, row);
+    }
+    const lockedList = lockedLists.get(body.targetListId);
     if (!lockedList) {
       return Response.json(
         { error: { name: 'target-list-not-found', data: { message: 'Target list not found' } } },
@@ -229,6 +257,41 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
         { error: { code: 'target-list-changed', message: 'Target list changed; reload and retry' } },
         { status: 409 },
       );
+    }
+
+    const currentCard = await trx<CardRow>('cards').where({ id: cardId }).forShare().first();
+    if (!currentCard || currentCard.list_id !== card.list_id) {
+      return Response.json({ error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } }, { status: 409 });
+    }
+    if (currentCard.archived) {
+      return Response.json({ error: { code: 'card-archived', message: 'Card is archived and cannot be copied' } }, { status: 403 });
+    }
+    const currentSourceList = lockedLists.get(currentCard.list_id);
+    if (!currentSourceList || currentSourceList.board_id !== board.id) {
+      return Response.json({ error: { code: 'card-location-changed', message: 'Card location changed; reload and retry' } }, { status: 409 });
+    }
+    const currentSourceBoard = await trx<BoardRow>('boards').where({ id: board.id }).first();
+    const currentTargetBoard = targetList.board_id === board.id
+      ? currentSourceBoard : await trx<BoardRow>('boards').where({ id: targetList.board_id }).first();
+    if (!currentSourceBoard || !currentTargetBoard) {
+      return Response.json({ error: { code: 'board-not-found', message: 'Board not found' } }, { status: 404 });
+    }
+    if (currentSourceBoard.workspace_id !== board.workspace_id || currentTargetBoard.workspace_id !== board.workspace_id) {
+      return Response.json({ error: { code: 'cross-workspace-copy-forbidden', message: 'Cards can only be copied between boards in the same workspace' } }, { status: 403 });
+    }
+    if (currentSourceBoard.state === 'ARCHIVED' || currentTargetBoard.state === 'ARCHIVED') {
+      return Response.json({ error: { code: 'board-is-archived', message: 'An archived board cannot be modified' } }, { status: 403 });
+    }
+    const userId = (req as AuthenticatedRequest).currentUser?.id;
+    if (!userId) return Response.json({ error: { code: 'unauthorized', message: 'Authentication required' } }, { status: 401 });
+    const memberships = await trx('memberships').where({ user_id: userId, workspace_id: board.workspace_id }).select('role') as Array<{ role: string }>;
+    const role = resolveHighestRole(memberships.map((membership) => membership.role));
+    if (!role) return Response.json({ error: { code: 'insufficient-role', message: 'You are not a member of this workspace' } }, { status: 403 });
+    const sourceAccess = await authorizeCopyBoard(trx, currentSourceBoard, userId, role);
+    if (sourceAccess) return sourceAccess;
+    if (currentTargetBoard.id !== currentSourceBoard.id) {
+      const targetAccess = await authorizeCopyBoard(trx, currentTargetBoard, userId, role);
+      if (targetAccess) return targetAccess;
     }
 
     const targetCards = await trx<CardRow>('cards')
