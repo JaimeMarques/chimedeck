@@ -19,6 +19,9 @@ import { ImageLightbox } from '~/extensions/Attachments/components/AttachmentThu
 import translations from '../translations/en.json';
 import apiClient from '~/common/api/client';
 import { normalizeHttpUrlInput } from '~/common/utils/urlDisplayText';
+import { useGetBoardMembersQuery } from '~/extensions/Board/slices/boardMembersSlice';
+import { useGetBoardGuestsQuery } from '~/extensions/Board/slices/boardGuestsSlice';
+import { buildMentionNames } from '~/extensions/Comment/utils/mentionNames';
 
 const LINK_CLASS_BUTTON = 'cd-link-button';
 const LINK_CLASS_CARD = 'cd-link-card';
@@ -27,6 +30,7 @@ const LINK_MODE_TITLE_PREFIX = 'cd-mode:';
 const LINK_MODE_META_URL = 'cd-link-mode-url';
 const LINK_MODE_META_BUTTON = 'cd-link-mode-button';
 const LINK_MODE_META_CARD = 'cd-link-mode-card';
+const EMPTY_ATTACHMENTS: Attachment[] = [];
 
 type LinkDisplayMode = 'url' | 'button' | 'card';
 
@@ -189,11 +193,19 @@ function mergeConsecutiveDuplicateHrefLinks(root: ParentNode): void {
   });
 }
 
+function parseInertCommentHtml(html: string): HTMLBodyElement {
+  // [why] Capture the body before untrusted names can shadow document properties.
+  // Body fragment context also preserves prose and tables after malformed imported tags.
+  const doc = document.implementation.createHTMLDocument('');
+  const root = doc.body as HTMLBodyElement;
+  root.innerHTML = html;
+  return root;
+}
+
 function normalizeRenderedLinkHtml(html: string): string {
   if (!html || !/<a\b/i.test(html)) return html;
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-  const anchors = Array.from(doc.body.querySelectorAll('a[href]'));
+  const root = parseInertCommentHtml(html);
+  const anchors = Array.from(root.querySelectorAll('a[href]'));
   anchors.forEach((anchor) => {
     const href = anchor.getAttribute('href');
     if (!href) return;
@@ -202,8 +214,8 @@ function normalizeRenderedLinkHtml(html: string): string {
       anchor.setAttribute('href', normalizedHref);
     }
   });
-  mergeConsecutiveDuplicateHrefLinks(doc.body);
-  return doc.body.innerHTML;
+  mergeConsecutiveDuplicateHrefLinks(root);
+  return root.innerHTML;
 }
 
 // Use a local parser instance so global marked extensions configured elsewhere
@@ -339,7 +351,11 @@ function relativeTime(iso: string): string {
  * pass to dangerouslySetInnerHTML, including for comment content imported verbatim from a source
  * system (see utils/sanitizeCommentHtml.ts).
  */
-export function renderCommentContentHtml(text: string, attachments: Attachment[]): string {
+export function renderCommentContentHtml(
+  text: string,
+  attachments: Attachment[],
+  mentionNames?: ReadonlyMap<string, string>,
+): string {
   const hydrated = attachments.length > 0
     ? hydrateCommentAttachmentMarkdown(text, attachments)
     : stripCommentAttachmentPlaceholders(text);
@@ -355,11 +371,39 @@ export function renderCommentContentHtml(text: string, attachments: Attachment[]
     // [why] Prevent intermittent parser extension mismatches from crashing card load.
     html = escapeHtml(normalized).replaceAll('\n', '<br>');
   }
-  // Wrap @mentions in a styled chip
-  const withMentions = html.replaceAll(
-    /(@\w[\w.+-]*)/g,
-    '<span class="rounded bg-blue-100 px-1 py-0.5 text-xs font-medium text-blue-700">$1</span>',
-  );
+  // [why] Resolve only visible prose, after Markdown parsing. Labels must stay literal text,
+  // and mentions in code or link destinations must retain their stored UUIDs.
+  const root = parseInertCommentHtml(html);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    const parent = node.parentElement;
+    if (!parent || !Element.prototype.closest.call(parent, 'a[href], code, pre')) textNodes.push(node as Text);
+    node = walker.nextNode();
+  }
+  for (const textNode of textNodes) {
+    const value = textNode.textContent;
+    const matches = Array.from(value.matchAll(/@[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\w-])|@\w[\w.+-]*/gi));
+    if (matches.length === 0) continue;
+    const fragment = document.createDocumentFragment();
+    let offset = 0;
+    for (const match of matches) {
+      fragment.append(document.createTextNode(value.slice(offset, match.index)));
+      const token = match[0];
+      const isUuid = /^@[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+      const name = isUuid ? mentionNames?.get(token.slice(1).toLowerCase()) : undefined;
+      const chip = document.createElement('span');
+      chip.className = 'rounded bg-blue-100 px-1 py-0.5 text-xs font-medium text-blue-700';
+      chip.textContent = name ? `@${name}` : token;
+      fragment.append(chip);
+      offset = match.index + token.length;
+    }
+    fragment.append(document.createTextNode(value.slice(offset)));
+    const parent = textNode.parentNode;
+    if (parent) Node.prototype.replaceChild.call(parent, fragment, textNode);
+  }
+  const withMentions = root.innerHTML;
   // [why] Ensure all links open in a new tab so the user is never navigated away
   // from the board view.
   // [why] Sanitize last: this is the only string that reaches dangerouslySetInnerHTML, so the
@@ -368,10 +412,15 @@ export function renderCommentContentHtml(text: string, attachments: Attachment[]
   return sanitizeCommentHtml(addLinkTargetBlank(normalizeRenderedLinkHtml(withMentions)));
 }
 
-const EMPTY_ATTACHMENTS: Attachment[] = [];
 const CommentItem = ({ comment, boardId, attachments: cardAttachments = EMPTY_ATTACHMENTS, currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
   const attachments = useMemo(() => [...(comment.images ?? []), ...cardAttachments], [comment.images, cardAttachments]);
-  const renderedHtml = renderCommentContentHtml(comment.content, attachments);
+  const { currentData: boardMembers } = useGetBoardMembersQuery(boardId ?? '', { skip: !boardId?.trim() });
+  const { currentData: boardGuests } = useGetBoardGuestsQuery(boardId ?? '', { skip: !boardId?.trim() });
+  const mentionNames = useMemo(() => buildMentionNames(boardMembers, boardGuests), [boardMembers, boardGuests]);
+  const renderedHtml = useMemo(
+    () => renderCommentContentHtml(comment.content, attachments, mentionNames),
+    [comment.content, attachments, mentionNames],
+  );
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [replyExpanded, setReplyExpanded] = useState(autoExpandReplies);

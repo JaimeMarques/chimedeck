@@ -10,6 +10,7 @@ export interface BoardMember {
   role: BoardMemberRole;
   email: string;
   display_name: string | null;
+  nickname?: string | null;
   avatar_url: string | null;
   created_at: string;
 }
