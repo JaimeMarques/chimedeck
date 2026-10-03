@@ -1,6 +1,7 @@
 // POST /api/v1/cards/:id/attachments
 // Confirms an upload: verifies S3 object exists, enqueues virus scan, publishes WS event.
 import { db } from '../../../common/db';
+import { serializeAttachment, type AttachmentRow } from './serializeAttachment';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import {
   requireWorkspaceMembership,
@@ -36,6 +37,8 @@ interface BoardRow {
 }
 
 interface FileAttachmentRow {
+  upload_context: 'card' | 'comment';
+  uploaded_by: string;
   id: string;
   card_id: string;
   type: 'FILE';
@@ -114,9 +117,17 @@ export async function handleConfirmUpload(req: Request, cardId: string): Promise
 
   const actorId = actor.id;
 
+  if (attachment.upload_context === 'comment' && attachment.uploaded_by !== actorId) {
+    return Response.json({ name: 'attachment-not-owner' }, { status: 403 });
+  }
+
   // Enqueue virus scan (no-op when VIRUS_SCAN_ENABLED=false)
   await enqueueScan({ attachmentId: attachment.id });
+  if (attachment.upload_context === 'comment') {
+    await db('attachments').where({ id: attachment.id }).update({ upload_confirmed_at: new Date().toISOString() });
+  }
 
+  if (attachment.upload_context !== 'comment') {
   await dispatchEvent({
     type: 'attachment_added',
     boardId: board.id,
@@ -141,6 +152,7 @@ export async function handleConfirmUpload(req: Request, cardId: string): Promise
     )
     .catch(() => {});
 
-  const updated = await db<FileAttachmentRow>('attachments').where({ id: attachment.id }).first();
-  return Response.json({ data: updated }, { status: 200 });
+  }
+  const updated = await db<AttachmentRow>('attachments').where({ id: attachment.id }).first();
+  return Response.json({ data: updated ? serializeAttachment(updated, {}) : null }, { status: 200 });
 }

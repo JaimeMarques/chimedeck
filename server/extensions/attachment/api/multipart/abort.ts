@@ -27,6 +27,8 @@ interface BoardRow {
 }
 
 interface PendingAttachmentRow {
+  upload_context: 'card' | 'comment';
+  uploaded_by: string;
   id: string;
   card_id: string;
   s3_key: string;
@@ -85,6 +87,10 @@ export async function handleMultipartAbort(
   }
 
   // Best-effort: abort the S3 multipart upload (may already be expired or completed)
+  if (attachment.upload_context === 'comment' && attachment.uploaded_by !== (req as AuthenticatedRequest).currentUser?.id) {
+    return Response.json({ name: 'attachment-not-owner' }, { status: 403 });
+  }
+
   try {
     await s3ServerClient.send(
       new AbortMultipartUploadCommand({

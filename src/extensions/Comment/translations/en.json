@@ -50,5 +50,8 @@
   "comment.replies.viewMany": "View {{count}} replies",
   "comment.replies.hide": "Hide replies",
   "comment.reply.placeholder": "Write a reply…",
-  "comment.reply.submit": "Reply"
+  "comment.reply.submit": "Reply",
+  "comment.image.processing": "Image is being processed…",
+  "comment.image.unavailable": "Image is unavailable",
+  "comment.editor.error.connectToUpload": "Connect to finish uploading files before posting this comment."
 }

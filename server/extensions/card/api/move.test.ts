@@ -178,7 +178,10 @@ function resetStore(): Store {
       },
     ],
     comments: [{ id: 'comment-1', card_id: 'card-source', content: 'Preserve me', deleted: false }],
-    attachments: [{ id: 'attachment-1', card_id: 'card-source', name: 'proof.txt', status: 'READY', referenced_card_id: null }],
+    attachments: [
+      { id: 'attachment-1', card_id: 'card-source', name: 'proof.txt', status: 'READY', upload_context: 'card', referenced_card_id: null },
+      { id: 'comment-image-1', card_id: 'card-source', name: 'inline.png', status: 'READY', upload_context: 'comment', referenced_card_id: null },
+    ],
     checklists: [{ id: 'checklist-1', card_id: 'card-source', title: 'Checklist' }],
     checklist_items: [{ id: 'item-1', card_id: 'card-source', checklist_id: 'checklist-1', checked: false }],
     card_members: [{ card_id: 'card-source', user_id: 'user-1' }],

@@ -3,6 +3,7 @@ export type AttachmentRow = {
   url: string | null; external_url: string | null; mime_type: string | null; size_bytes: number | null;
   status: string; thumbnail_key: string | null; width: number | null; height: number | null;
   created_at: string; updated_at: string; referenced_card_id: string | null;
+  upload_context?: 'card' | 'comment'; comment_id?: string | null;
 };
 
 export type ReferencedCard = {
@@ -24,6 +25,7 @@ export function serializeAttachment(
 
   return {
     id: attachment.id, card_id: attachment.card_id, name: attachment.name, alias: attachment.alias ?? null,
+    upload_context: attachment.upload_context ?? 'card', comment_id: attachment.comment_id ?? null,
     type: attachment.type, content_type: attachment.mime_type ?? null, size_bytes: attachment.size_bytes ?? null,
     status: attachment.status, view_url, thumbnail_url, external_url: attachment.external_url ?? null,
     width: attachment.width ?? null, height: attachment.height ?? null, created_at: attachment.created_at,

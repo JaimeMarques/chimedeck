@@ -1,6 +1,7 @@
 // POST /api/v1/cards/:id/comments — add a comment; min role: MEMBER.
 import { randomUUID } from 'crypto';
 import { db } from '../../../common/db';
+import { associateCommentImages, InvalidCommentImage, loadCommentImages } from './images';
 import { buildAvatarProxyUrl } from '../../../common/avatar/resolveAvatarUrl';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import {
@@ -201,7 +202,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
         avatarUrl: existing.author_avatar_url,
       });
       return Response.json(
-        { data: { ...existing, author_avatar_url: authorAvatarUrl } },
+        { data: { ...existing, author_avatar_url: authorAvatarUrl, images: (await loadCommentImages([existing])).get(existing.id) ?? [] } },
         { status: 201 }
       );
     }
@@ -213,6 +214,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
   const idempotencyKey = body.idempotency_key?.trim() ?? null;
   let mentionedUserIds: string[] = [];
 
+  try {
   await db.transaction(async (trx) => {
     await trx<CommentRow>('comments').insert({
       id,
@@ -227,6 +229,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+    await associateCommentImages({ trx, content: trimmedContent, cardId: resolvedCardId, userId: actorId, commentId: id, ownOrigin: new URL(req.url).origin });
 
     const { addedUserIds } = await syncMentions({
       trx,
@@ -251,6 +254,12 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
       boardName: board.title,
     });
   });
+  } catch (error) {
+    if (error instanceof InvalidCommentImage) {
+      return Response.json({ name: 'invalid-comment-image', data: { message: error.message } }, { status: 400 });
+    }
+    throw error;
+  }
 
   const comment = (await db<CommentRow>('comments')
     .leftJoin('users', 'comments.user_id', 'users.id')
@@ -282,7 +291,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
     userId: actorId,
     avatarUrl: comment.author_avatar_url,
   });
-  const commentData = { ...comment, author_avatar_url: authorAvatarUrl };
+  const commentData = { ...comment, author_avatar_url: authorAvatarUrl, images: (await loadCommentImages([comment])).get(comment.id) ?? [] };
 
   // commentPreview strips HTML tags and truncates to 120 chars.
   const rawPreview = trimmedContent.replaceAll(/<[^>]+>/g, '');

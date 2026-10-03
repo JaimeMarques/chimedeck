@@ -72,6 +72,7 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .as('cc');
 
     const attachmentCountsQuery = db('attachments')
+      .where({ upload_context: 'card' })
       .select('card_id')
       .select(
         db.raw(`SUM(CASE WHEN status = 'READY' AND referenced_card_id IS NULL THEN 1 ELSE 0 END) as attachment_count`),
