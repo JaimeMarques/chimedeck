@@ -15,6 +15,7 @@ import { writeActivity } from '../../activity/mods/write';
 import { getS3KeysForDeletion } from './deleteKeys';
 
 interface AttachmentRow {
+  upload_context: 'card' | 'comment';
   id: string;
   card_id: string;
   uploaded_by: string;
@@ -94,6 +95,7 @@ export async function handleDeleteAttachment(req: Request, attachmentId: string)
 
   await db('attachments').where({ id: attachmentId }).delete();
 
+  if (attachment.upload_context !== 'comment') {
   await writeEvent({
     type: 'attachment_deleted',
     boardId: board.id,
@@ -118,5 +120,6 @@ export async function handleDeleteAttachment(req: Request, attachmentId: string)
     )
     .catch(() => {});
 
+  }
   return Response.json({ data: { id: attachmentId } });
 }

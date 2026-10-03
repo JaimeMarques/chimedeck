@@ -88,10 +88,13 @@ export async function handleDeleteComment(req: Request, commentId: string): Prom
     );
   }
 
-  await db<CommentRow>('comments').where({ id: commentId }).update({
-    deleted: true,
-    content: '[deleted]',
-    updated_at: new Date().toISOString(),
+  await db.transaction(async (trx) => {
+    await trx<CommentRow>('comments').where({ id: commentId }).update({
+      deleted: true,
+      content: '[deleted]',
+      updated_at: new Date().toISOString(),
+    });
+    await trx('attachments').where({ comment_id: commentId }).update({ comment_id: null, abandoned_at: new Date().toISOString() });
   });
 
   const deleted = await db<CommentRow>('comments').where({ id: commentId }).first();

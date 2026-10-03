@@ -27,5 +27,6 @@ Use `response.data.token` as `$token`.
 | `mcp-08-search-cards.md` | `search_cards` | cards with content |
 | `mcp-09-add-comment.md` | `add_comment` | card exists |
 | `mcp-10-discussion.md` | `get_card_discussion`, `get_comment_replies` | existing threaded card |
+| `mcp-11-board-coverage.md` | 40 board coverage tools (`get_me` … `update_board`) | disposable instance or scratch board |
 
 Run main flows 05–08 before running MCP flows — they provide the board, lists, and cards used here.

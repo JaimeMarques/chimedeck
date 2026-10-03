@@ -63,6 +63,7 @@ jobs:
           tests/db/concurrentBoardMemberRoleMutation.ts
           tests/db/workspaceMembershipSecurity.ts
           tests/db/moveAuthorizationConcurrency.ts
+          tests/db/copyDestinationAndListDelete.ts
           tests/db/activityReadPrivacy.ts
           tests/e2e/board-members.spec.ts
           server/mods/events/__tests__/policy.test.ts
@@ -84,6 +85,10 @@ jobs:
         env:
           CHIMEDECK_TEST_SANDBOX: '1'
         run: bun run tests/db/moveAuthorizationConcurrency.ts
+      - name: Verify Copy destination authorization and atomic list delete on PostgreSQL
+        env:
+          CHIMEDECK_TEST_SANDBOX: '1'
+        run: bun run tests/db/copyDestinationAndListDelete.ts
       - name: Verify activity reads hide ip_address and user_agent on PostgreSQL
         env:
           CHIMEDECK_TEST_SANDBOX: '1'

@@ -73,6 +73,7 @@ export async function handleDuplicateCard(req: Request, cardId: string): Promise
     cover_attachment_id: null,
     cover_color: card.cover_color ?? null,
     cover_size: card.cover_size ?? 'SMALL',
+    created_by: (req as AuthenticatedRequest).currentUser?.id ?? null,
   });
 
   const duplicate = await db<CardRow>('cards').where({ id: newId }).first();

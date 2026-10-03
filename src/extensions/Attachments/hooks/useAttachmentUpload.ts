@@ -19,6 +19,7 @@ const PART_SIZE = 5 * 1024 * 1024;           // 5 MB per part
 const MAX_CONCURRENT_PARTS = 3;
 
 interface UseAttachmentUploadOptions {
+  uploadContext?: 'card' | 'comment';
   cardId: string;
   /**
    * When true, `upload()` queues files locally (phase: 'pending') without starting
@@ -105,6 +106,7 @@ async function runConcurrent<T>(
 }
 
 export function useAttachmentUpload({
+  uploadContext = 'card',
   cardId,
   deferred = false,
   onSuccess,
@@ -225,13 +227,17 @@ export function useAttachmentUpload({
     updateEntry(clientId, { phase: 'requesting-url' });
 
     const { data: urlData } = await requestUploadUrl({
+      uploadContext: file.type.startsWith('image/') ? uploadContext : 'card',
       cardId,
       filename: file.name,
       mimeType: file.type || 'application/octet-stream',
       sizeBytes: file.size,
     });
 
-    if (signal.aborted) return;
+    if (signal.aborted) {
+      await deleteAttachment({ cardId, attachmentId: urlData.attachmentId }).catch(() => {});
+      return;
+    }
 
     updateEntry(clientId, { phase: 'uploading', progress: 0 });
 
@@ -245,7 +251,12 @@ export function useAttachmentUpload({
       throw error;
     }
 
-    if (signal.aborted) return;
+    // [why] Cancellation can occur during the preceding upload await.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if (signal.aborted) {
+      await deleteAttachment({ cardId, attachmentId: urlData.attachmentId }).catch(() => {});
+      return;
+    }
 
     updateEntry(clientId, { phase: 'confirming', progress: 100 });
 
@@ -255,6 +266,12 @@ export function useAttachmentUpload({
     });
 
     updateEntry(clientId, { phase: 'done', attachmentId: attachment.id });
+    // [why] Cancellation can occur while the confirmation request awaits.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if (signal.aborted) {
+      await deleteAttachment({ cardId, attachmentId: attachment.id }).catch(() => {});
+      return;
+    }
     onSuccessRef.current?.(attachment, clientId);
   }
 
@@ -266,13 +283,17 @@ export function useAttachmentUpload({
     updateEntry(clientId, { phase: 'requesting-url' });
 
     const { data: mpData } = await startMultipart({
+      uploadContext: file.type.startsWith('image/') ? uploadContext : 'card',
       cardId,
       filename: file.name,
       mimeType: file.type || 'application/octet-stream',
       sizeBytes: file.size,
     });
 
-    if (signal.aborted) return;
+    if (signal.aborted) {
+      await abortMultipart({ cardId, uploadId: mpData.uploadId, key: mpData.key }).catch(() => {});
+      return;
+    }
 
     const totalParts = Math.ceil(file.size / PART_SIZE);
     let completedCount = 0;
@@ -311,6 +332,8 @@ export function useAttachmentUpload({
       throw err;
     }
 
+    // [why] The signal can change while the multipart requests await.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (signal.aborted) {
       await abortMultipart({ cardId, uploadId: mpData.uploadId, key: mpData.key }).catch(() => {});
       return;
@@ -339,6 +362,7 @@ export function useAttachmentUpload({
   }
 
   const removeEntry = useCallback((clientId: string) => {
+    deferredEntriesRef.current = deferredEntriesRef.current.filter((entry) => entry.clientId !== clientId);
     abortRefs.current[clientId]?.abort();
     setUploads((prev) => prev.filter((e) => e.clientId !== clientId));
   }, []);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   exactHistoricalCommentContent,
+  setHistoricalCardCreator,
   validateStagedSourceReferences,
   type StagedPayload,
 } from '../../../../../server/extensions/historicalImport/core/payload';
@@ -8,6 +9,20 @@ import {
   canonicalJson,
   sha256Hex,
 } from '../../../../../server/extensions/historicalImport/core/fingerprint';
+
+describe('setHistoricalCardCreator', () => {
+  it('drops a staged created_by when the payload has no historical author', () => {
+    const row: Record<string, unknown> = { id: 'card-1', created_by: 'system' };
+    setHistoricalCardCreator(row, null);
+    expect(row.created_by).toBeNull();
+  });
+
+  it('records the resolved historical author over a staged created_by', () => {
+    const row: Record<string, unknown> = { id: 'card-1', created_by: 'user-other' };
+    setHistoricalCardCreator(row, 'user-author');
+    expect(row.created_by).toBe('user-author');
+  });
+});
 
 describe('exactHistoricalCommentContent', () => {
   it('returns a representable historical string unchanged', () => {

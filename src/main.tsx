@@ -2,8 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { store } from './store';
-import { setTokenGetter, setClearAuthCallback } from './common/api/client';
-import { clearAuth } from './extensions/Auth/duck/authDuck';
+import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, setAuthRecoveryCallbacks, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
+import { clearAuth, refreshCredentials, setCredentials } from './extensions/Auth/duck/authDuck';
 import { socket } from './extensions/Realtime/client/socket';
 import { initSentry } from './common/monitoring/sentryClient';
 import { ErrorBoundary } from './common/monitoring/ErrorBoundary';
@@ -64,10 +64,54 @@ setTokenGetter(
   () => (store.getState() as { auth: { accessToken: string | null } }).auth.accessToken
 );
 setClearAuthCallback(() => store.dispatch(clearAuth()));
+setAuthRecoveryCallbacks({
+  onSuspend: () => { socket.suspendAuthRecovery(); },
+  canResume: () => store.getState().auth.status === 'authenticated',
+  onResume: () => { socket.resumeAuthRecovery(); },
+});
+setCredentialsCallback((credentials) => {
+  const user = store.getState().auth.user;
+  if (user && user.id !== credentials.user.id) throw new Error('Session user changed during renewal');
+  store.dispatch(user ? refreshCredentials(credentials) : setCredentials(credentials));
+});
+let currentToken = store.getState().auth.accessToken;
+let currentAuthStatus = store.getState().auth.status;
+store.subscribe(() => {
+  const nextToken = store.getState().auth.accessToken;
+  const nextStatus = store.getState().auth.status;
+  if (nextStatus !== currentAuthStatus) {
+    currentAuthStatus = nextStatus;
+    if (nextStatus === 'unauthenticated') cancelAuthRecovery();
+    if (nextStatus === 'authenticated') {
+      allowAuthRecovery();
+      socket.resumeAuthRecovery();
+    }
+  }
+  if (nextToken !== currentToken) {
+    currentToken = nextToken;
+    if (nextToken) {
+      allowAuthRecovery();
+      socket.resumeAuthRecovery();
+    }
+    else {
+      cancelAuthRecovery();
+      socket.resetRenewalThrottle();
+    }
+  }
+});
+socket.setExpiredTokenCallback(async () => {
+  try {
+    return await renewAccessToken();
+  } catch (error) {
+    if (error instanceof AuthRecoveryCancelledError) return null;
+    throw error;
+  }
+});
 
 // WS close code 4001 = server revoked this session.
 // Clear Redux auth state and redirect to login so the user is informed.
 socket.setForcedLogoutCallback(() => {
+  cancelAuthRecovery();
   store.dispatch(clearAuth());
   window.location.href = '/login?reason=session_expired';
 });

@@ -1,5 +1,6 @@
 // PATCH /api/v1/comments/:id — edit own comment (increments version); min role: MEMBER (own).
 import { db } from '../../../common/db';
+import { associateCommentImages, InvalidCommentImage, loadCommentImages } from './images';
 import { authenticate, type AuthenticatedRequest } from '../../auth/middlewares/authentication';
 import {
   requireWorkspaceMembership,
@@ -26,6 +27,7 @@ type CommentRow = {
 };
 
 type CommentWithAuthorRow = CommentRow & {
+  images?: Awaited<ReturnType<typeof loadCommentImages>> extends Map<string, infer Images> ? Images : never;
   author_name: string | null;
   author_email: string | null;
   author_avatar_url: string | null;
@@ -62,7 +64,7 @@ async function loadCommentWithAuthor(commentId: string): Promise<CommentWithAuth
     avatarUrl: row.author_avatar_url,
   });
 
-  return { ...row, author_avatar_url: avatarUrl };
+  return { ...row, author_avatar_url: avatarUrl, images: (await loadCommentImages([row])).get(row.id) ?? [] };
 }
 
 export async function handleUpdateComment(req: Request, commentId: string): Promise<Response> {
@@ -142,7 +144,9 @@ export async function handleUpdateComment(req: Request, commentId: string): Prom
 
   const newVersion = comment.version + 1;
 
+  try {
   await db.transaction(async (trx) => {
+    await associateCommentImages({ trx, content: trimmedContent, cardId: comment.card_id, userId: actorId, commentId: commentId, ownOrigin: new URL(req.url).origin, previousContent: comment.content });
     await trx<CommentRow>('comments').where({ id: commentId }).update({
       content: trimmedContent,
       version: newVersion,
@@ -171,6 +175,12 @@ export async function handleUpdateComment(req: Request, commentId: string): Prom
       boardName: board.title,
     });
   });
+  } catch (error) {
+    if (error instanceof InvalidCommentImage) {
+      return Response.json({ name: 'invalid-comment-image', data: { message: error.message } }, { status: 400 });
+    }
+    throw error;
+  }
 
   const updated = await loadCommentWithAuthor(commentId);
 

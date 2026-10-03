@@ -1,5 +1,5 @@
 // Single comment with inline edit/delete controls
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import emojiData from '@emoji-mart/data';
 import type { Attachment } from '~/extensions/Attachments/types';
@@ -255,6 +255,7 @@ export interface ReactionSummary {
 }
 
 export interface Comment {
+  images?: Attachment[];
   id: string;
   card_id: string;
   user_id: string;
@@ -367,7 +368,10 @@ export function renderCommentContentHtml(text: string, attachments: Attachment[]
   return sanitizeCommentHtml(addLinkTargetBlank(normalizeRenderedLinkHtml(withMentions)));
 }
 
-const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
+const EMPTY_ATTACHMENTS: Attachment[] = [];
+const CommentItem = ({ comment, boardId, attachments: cardAttachments = EMPTY_ATTACHMENTS, currentUserId, isAdmin = false, isNotificationTarget = false, autoExpandReplies = false, onEdit, onDelete, onAddReaction, onRemoveReaction, onAddReply, onEditReply, onDeleteReply, cardId }: Props) => {
+  const attachments = useMemo(() => [...(comment.images ?? []), ...cardAttachments], [comment.images, cardAttachments]);
+  const renderedHtml = renderCommentContentHtml(comment.content, attachments);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [replyExpanded, setReplyExpanded] = useState(autoExpandReplies);
@@ -406,9 +410,25 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
 
     let cancelled = false;
     const objectUrls: string[] = [];
+    const originalSources = new Map<HTMLImageElement, string>();
+    const retryTimers = new Set<ReturnType<typeof setTimeout>>();
+    const imageStatuses = new Map<HTMLImageElement, HTMLSpanElement>();
 
-    const hydrateImage = async (img: HTMLImageElement): Promise<void> => {
-      const rawSrc = img.getAttribute('src');
+    const showImageStatus = (img: HTMLImageElement, text: string) => {
+      img.hidden = true;
+      let status = imageStatuses.get(img);
+      if (!status) {
+        status = document.createElement('span');
+        status.setAttribute('role', 'status');
+        img.after(status);
+        imageStatuses.set(img, status);
+      }
+      status.textContent = text;
+    };
+
+    const hydrateImage = async (img: HTMLImageElement, attempt = 0): Promise<void> => {
+      if (cancelled) return;
+      const rawSrc = img.getAttribute('data-comment-image-source') ?? img.getAttribute('src');
       if (!rawSrc) return;
 
       const placeholderName = readAttachmentPlaceholderName(rawSrc);
@@ -431,14 +451,47 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
       }
 
       if (!/^\/api\/v1\/attachments\/[^/]+\/(?:view|thumbnail)$/.test(url.pathname)) return;
+      if (url.origin !== globalThis.location.origin) return;
+      // [why] StrictMode or retained DOM can outlive a blob's effect. Preserve
+      // the authorized source without triggering a fresh native image fetch.
+      img.setAttribute('data-comment-image-source', effectiveSrc);
 
       try {
-        const blob = await apiClient.get<Blob>(`${url.pathname}${url.search}`, { responseType: 'blob' });
+        const blob = await apiClient.get<Blob, Blob>(`${url.pathname}${url.search}`, { responseType: 'blob' });
+        // [why] Effect cleanup can cancel hydration while this request awaits.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         if (cancelled) return;
+        // [why] Pending scans can take minutes. Retry only the actual pending
+        // response while mounted, with a capped delay; never render JSON bytes.
+        if (!blob.type.startsWith('image/')) {
+          if (blob.type.includes('json')) {
+            const pendingResponse = JSON.parse(await blob.text()) as { name?: string };
+            // [why] Cleanup can run while the blob text is being read.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+            if (cancelled) return;
+            if (pendingResponse.name === 'attachment-pending') {
+              showImageStatus(img, translations['comment.image.processing']);
+              const delay = Math.min((attempt + 1) * 1000, 10000);
+              const timer = setTimeout(() => {
+                retryTimers.delete(timer);
+                void hydrateImage(img, attempt + 1);
+              }, delay);
+              retryTimers.add(timer);
+            } else {
+              showImageStatus(img, translations['comment.image.unavailable']);
+            }
+          }
+          return;
+        }
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.push(objectUrl);
+        originalSources.set(img, effectiveSrc);
         img.src = objectUrl;
+        img.hidden = false;
+        imageStatuses.get(img)?.remove();
+        imageStatuses.delete(img);
       } catch {
+        if (imageStatuses.has(img)) showImageStatus(img, translations['comment.image.unavailable']);
         // Keep original src so browser fallback/error UI remains visible.
       }
     };
@@ -452,9 +505,16 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
 
     return () => {
       cancelled = true;
+      retryTimers.forEach(clearTimeout);
+      // [why] Remove expired blob sources before revoking. The data attribute
+      // lets retained DOM hydrate again without a proxy request on teardown.
+      originalSources.forEach((_src, img) => { img.removeAttribute('src'); });
+      imageStatuses.forEach((status, img) => { status.remove(); img.hidden = false; });
       objectUrls.forEach((value) => { URL.revokeObjectURL(value); });
     };
-  }, [comment.content, attachments, editing]);
+  // [why] Identical rendered sources do not need refetching or a scan restart
+  // just because a parent supplied a fresh array of the same attachment data.
+  }, [renderedHtml, editing]);
 
   if (comment.deleted) {
     return <CommentDeletedItem commentId={comment.id} createdAt={comment.created_at} />;
@@ -560,7 +620,7 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
               // Historical imports may also store raw source HTML verbatim, so the string is
               // sanitized (allow-list) in renderCommentContentHtml before it reaches the DOM.
               dangerouslySetInnerHTML={{
-                __html: renderCommentContentHtml(comment.content, attachments),
+                __html: renderedHtml,
               }}
             />
           </div>
@@ -648,4 +708,3 @@ const CommentItem = ({ comment, boardId, attachments = [], currentUserId, isAdmi
 };
 
 export default CommentItem;
-

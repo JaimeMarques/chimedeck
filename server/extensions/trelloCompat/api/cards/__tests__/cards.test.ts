@@ -35,6 +35,18 @@ class QueryBuilder {
     return this;
   }
 
+  whereNotIn(key: string, values: unknown[]): this {
+    this.filters.push((row) => !values.includes(row[key]));
+    return this;
+  }
+
+  whereIn(key: string, values: unknown[]): this {
+    this.filters.push((row) => values.includes(row[key]));
+    return this;
+  }
+
+  forUpdate(): this { return this; }
+
   orderBy(field: string, direction: 'asc' | 'desc' = 'asc'): this {
     this.orderByField = field;
     this.orderByDirection = direction;
@@ -161,7 +173,10 @@ function createStore(): DataStore {
     checklists: [{ id: 'checklist-1', card_id: 'card-1', title: 'Checklist', position: 'a' }],
     checklist_items: [{ id: 'item-1', card_id: 'card-1', checklist_id: 'checklist-1', title: 'Item 1', checked: true, position: 'a' }],
     comments: [{ id: 'comment-1', card_id: 'card-1', user_id: 'user-admin', content: 'Hello', deleted: false, created_at: new Date().toISOString() }],
-    attachments: [{ id: 'att-1', card_id: 'card-1', uploaded_by: 'user-admin', name: 'file.txt', type: 'URL', created_at: new Date().toISOString() }],
+    attachments: [
+      { id: 'att-1', card_id: 'card-1', uploaded_by: 'user-admin', name: 'file.txt', type: 'URL', upload_context: 'card', created_at: new Date().toISOString() },
+      { id: 'comment-image', card_id: 'card-1', uploaded_by: 'user-admin', name: 'image.png', type: 'FILE', upload_context: 'comment', created_at: new Date().toISOString() },
+    ],
     activities: [],
     custom_fields: [
       {
@@ -197,7 +212,10 @@ void mock.module('../../../../auth/middlewares/authentication', () => ({
 }));
 
 void mock.module('../../../../../common/db', () => ({
-  db: ((tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName)) as unknown as typeof database,
+  db: Object.assign((tableName: keyof DataStore) => new QueryBuilder(dataStore, tableName), {
+    transaction: (callback: (trx: (tableName: keyof DataStore) => QueryBuilder) => Promise<unknown>) =>
+      callback((tableName) => new QueryBuilder(dataStore, tableName)),
+  }) as unknown as typeof database,
 }));
 
 void mock.module('../../../../../common/ids/shortId', () => ({
@@ -300,6 +318,24 @@ describe('trelloCompat cards', () => {
     const deleted: unknown = await readJson<unknown>(deleteRes, 200);
     expect(deleted).toEqual({});
     expect(dataStore.cards.find((row) => row.id === 'card-1')).toBeUndefined();
+  });
+
+  it('does not expose or delete comment images through Trello card attachment endpoints', async () => {
+    const request = (method: 'GET' | 'DELETE', id: string) => {
+      const path = `/trello/1/cards/card-1/attachments/${id}`;
+      return trelloCompatRouter(new Request(`http://localhost${path}`, {
+        method, headers: { Authorization: 'Bearer hf_admin_token' },
+      }), path);
+    };
+    const listedPath = '/trello/1/cards/card-1/attachments';
+    const listed = await trelloCompatRouter(new Request(`http://localhost${listedPath}`, {
+      headers: { Authorization: 'Bearer hf_admin_token' },
+    }), listedPath);
+    expect((await readJson<Array<{ id: string }>>(listed, 200)).map((row) => row.id)).toEqual(['att-1']);
+    expect((await readJson<{ id: string }>(await request('GET', 'att-1'), 200)).id).toBe('att-1');
+    expect((await request('GET', 'comment-image'))?.status).toBe(404);
+    expect((await request('DELETE', 'comment-image'))?.status).toBe(404);
+    expect(dataStore.attachments.some((row) => row.id === 'comment-image')).toBe(true);
   });
 
   it('GET /cards/{id}/board, /list, /checklists returns includes', async () => {

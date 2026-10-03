@@ -36,6 +36,8 @@ interface BoardRow {
 }
 
 interface PendingAttachmentRow {
+  upload_context: 'card' | 'comment';
+  uploaded_by: string;
   id: string;
   card_id: string;
   s3_key: string;
@@ -98,6 +100,10 @@ export async function handleMultipartPartUrl(req: Request, cardId: string): Prom
       { name: 'attachment-not-found', data: { message: 'No pending attachment matches the provided key' } },
       { status: 404 },
     );
+  }
+
+  if (attachment.upload_context === 'comment' && attachment.uploaded_by !== (req as AuthenticatedRequest).currentUser?.id) {
+    return Response.json({ name: 'attachment-not-owner' }, { status: 403 });
   }
 
   const command = new UploadPartCommand({

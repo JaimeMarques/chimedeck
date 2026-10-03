@@ -83,6 +83,7 @@ export async function handleListCards(req: Request, listId: string): Promise<Res
       'c.cover_color',
       'c.cover_size',
       'c.created_at',
+      'c.created_by',
       'c.updated_at',
       db.raw(`
         COALESCE(

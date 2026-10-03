@@ -1,6 +1,6 @@
 // Typed API wrappers for auth endpoints.
 // All calls go through the shared apiClient which attaches Bearer tokens.
-import { apiClient } from '~/common/api/client';
+import { apiClient, logoutCurrentSession } from '~/common/api/client';
 import type { AuthUser } from '../duck/authDuck';
 
 export interface LoginPayload {
@@ -36,7 +36,7 @@ export const authApi = {
     return apiClient.post<{ data: AuthResponse }>('/auth/refresh');
   },
   logout() {
-    return apiClient.delete('/auth/session');
+    return logoutCurrentSession();
   },
   verifyEmail({ token }: { token: string }) {
     return apiClient.get<{ data: AuthResponse }>(`/auth/verify-email?token=${encodeURIComponent(token)}`);
