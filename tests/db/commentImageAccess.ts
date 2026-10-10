@@ -77,7 +77,7 @@ try {
   const { readAttachments: readCardAttachments } = await import('../../server/extensions/cardChat/mods/assist/readAttachments');
   const toolCall = { id: 'comment-image-scope', type: 'function' as const, function: { name: 'read_attachments', arguments: JSON.stringify({ card_id: ids.card }) } };
   for (const result of [
-    await readBoardAttachments({ boardId: ids.board, toolCall, model: 'test' }),
+    await readBoardAttachments({ boardId: ids.board, actorId: ids.member, toolCall, model: 'test' }),
     await readCardAttachments({ cardId: ids.card, toolCall, model: 'test' }),
   ]) {
     assert.equal(result.status, 200);

@@ -53,5 +53,6 @@ jobs:
           server/extensions/mcp/tools/listBoardAdmin.test.ts
           server/extensions/mcp/registerTools.ts
           server/extensions/mcp/registerTools.test.ts
+          server/extensions/mcp/http
       - name: Build client including MCP developer documentation
         run: bun run build:client
