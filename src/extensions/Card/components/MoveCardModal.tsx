@@ -10,6 +10,7 @@ import type { Board } from '../../Board/api';
 import type { List } from '../../List/api';
 import type { Card } from '../api';
 import { isApiError } from '../../../common/utils/apiError';
+import translations from '../translations/en.json';
 
 interface CardRow {
   id: string;
@@ -48,7 +49,9 @@ const MoveCardModal = ({
   const [selectedListId, setSelectedListId] = useState(currentListId);
   const [loadedBoardId, setLoadedBoardId] = useState<string | null>(null);
   const [loadingDestination, setLoadingDestination] = useState(true);
-  const [destinationError, setDestinationError] = useState<'board' | 'list' | null>(null);
+  const [destinationError, setDestinationError] = useState<
+    'board' | 'list' | null
+  >(null);
   const requestId = useRef(0);
 
   // cards in the selected list (excluding the card being moved)
@@ -63,7 +66,9 @@ const MoveCardModal = ({
     api
       .get<{ data: Board[] }>(`/workspaces/${workspaceId}/boards`)
       .then(({ data }) => {
-        const active = data.filter((b) => b.state === 'ACTIVE' || !('state' in b));
+        const active = data.filter(
+          (b) => b.state === 'ACTIVE' || !('state' in b),
+        );
         setBoards(active);
       })
       .catch(() => {});
@@ -91,12 +96,16 @@ const MoveCardModal = ({
         // Default to current list when staying on the same board, else first list
         const defaultList =
           boardId === currentBoardId
-            ? nonArchivedLists.find((l) => l.id === currentListId) ?? nonArchivedLists[0]
+            ? (nonArchivedLists.find((l) => l.id === currentListId) ??
+              nonArchivedLists[0])
             : nonArchivedLists[0];
 
         if (defaultList) {
           setSelectedListId(defaultList.id);
-          const cards = allCards.filter((c) => c.list_id === defaultList.id && !c.archived && c.id !== cardId);
+          const cards = allCards.filter(
+            (c) =>
+              c.list_id === defaultList.id && !c.archived && c.id !== cardId,
+          );
           setListCards(cards);
           // Default to bottom (after all existing cards)
           setSelectedPosition(cards.length + 1);
@@ -153,7 +162,9 @@ const MoveCardModal = ({
         );
         if (id !== requestId.current) return;
         const allCards: CardRow[] = boardRes.includes.cards;
-        const cards = allCards.filter((c) => c.list_id === listId && !c.archived && c.id !== cardId);
+        const cards = allCards.filter(
+          (c) => c.list_id === listId && !c.archived && c.id !== cardId,
+        );
         setListCards(cards);
         setSelectedPosition(cards.length + 1);
         setLoadingDestination(false);
@@ -170,7 +181,13 @@ const MoveCardModal = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loadingDestination || destinationError || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)) return;
+    if (
+      loadingDestination ||
+      destinationError ||
+      loadedBoardId !== selectedBoardId ||
+      !lists.some((list) => list.id === selectedListId)
+    )
+      return;
     setSubmitting(true);
     setError(null);
     try {
@@ -178,33 +195,55 @@ const MoveCardModal = ({
       //   position 1  → afterCardId: null  (prepend before first card)
       //   position k  → afterCardId: listCards[k-2].id
       const afterCardId =
-        selectedPosition <= 1 ? null : (listCards[selectedPosition - 2]?.id ?? null);
+        selectedPosition <= 1
+          ? null
+          : (listCards[selectedPosition - 2]?.id ?? null);
 
-      const result = await api.patch<{ data: Card }>(`/cards/${cardId}/move`, { targetListId: selectedListId, afterCardId });
+      const result = await api.patch<{ data: Card }>(`/cards/${cardId}/move`, {
+        targetListId: selectedListId,
+        afterCardId,
+      });
       onSuccess(result.data);
     } catch (err) {
       const response = isApiError(err)
         ? (err.response as { status?: number; data?: unknown } | null)
         : undefined;
       const data = response?.data;
-      const envelope = typeof data === 'object' && data !== null ? data : undefined;
-      const code = envelope && 'error' in envelope
-        && typeof envelope.error === 'object' && envelope.error !== null
-        && 'code' in envelope.error ? envelope.error.code : undefined;
-      const legacyTransitionForbidden = response?.status === 422
-        && envelope !== undefined
-        && 'name' in envelope
-        && envelope.name === 'state-transition-forbidden';
+      const envelope =
+        typeof data === 'object' && data !== null ? data : undefined;
+      const code =
+        envelope &&
+        'error' in envelope &&
+        typeof envelope.error === 'object' &&
+        envelope.error !== null &&
+        'code' in envelope.error
+          ? envelope.error.code
+          : undefined;
+      const legacyTransitionForbidden =
+        response?.status === 422 &&
+        envelope !== undefined &&
+        'name' in envelope &&
+        envelope.name === 'state-transition-forbidden';
       if (legacyTransitionForbidden) {
-        setError('This move is blocked by the board’s transition rules. Choose an allowed destination list.');
+        setError(
+          'This move is blocked by the board’s transition rules. Choose an allowed destination list.',
+        );
       } else if (code === 'label-target-ineligible') {
-        setError('Remove or replace labels that do not belong to the destination board before moving this card.');
+        setError(
+          'Remove or replace labels that do not belong to the destination board before moving this card.',
+        );
       } else if (code === 'assignment-target-ineligible') {
-        setError('Remove assigned members who cannot access the destination board before moving this card.');
+        setError(
+          'Remove assigned members who cannot access the destination board before moving this card.',
+        );
       } else if (code === 'cross-board-transition-unsupported') {
-        setError('Cross-board moves are unavailable while either board has transition rules enabled. Disable the rules before moving this card.');
+        setError(
+          'Cross-board moves are unavailable while either board has transition rules enabled. Disable the rules before moving this card.',
+        );
       } else if (code === 'card-location-changed') {
-        setError('This card changed location. Close the dialog, reload the card and retry.');
+        setError(
+          'This card changed location. Close the dialog, reload the card and retry.',
+        );
       } else {
         setError('Failed to move card. Please try again.');
       }
@@ -216,14 +255,22 @@ const MoveCardModal = ({
   const maxPosition = listCards.length + 1;
 
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/50" />
         <Dialog.Content
           className="fixed inset-0 z-[70] flex items-center justify-center pointer-events-none"
-          onInteractOutside={(e) => { e.preventDefault(); onClose(); }}
+          onInteractOutside={(e) => {
+            e.preventDefault();
+            onClose();
+          }}
           onEscapeKeyDown={onClose}
-          aria-label="Move card"
+          aria-label={translations['card.moveModal.closeAria']}
           aria-describedby={undefined}
         >
           <Dialog.Title className="sr-only">Move card</Dialog.Title>
@@ -244,20 +291,32 @@ const MoveCardModal = ({
               </Dialog.Close>
             </div>
 
-            <form onSubmit={(e) => { void handleSubmit(e); }} className="p-4 space-y-4">
+            <form
+              onSubmit={(e) => {
+                void handleSubmit(e);
+              }}
+              className="p-4 space-y-4"
+            >
               {/* Select destination */}
               <div>
-                <p className="text-xs font-medium text-muted mb-2">Select destination</p>
+                <p className="text-xs font-medium text-muted mb-2">
+                  Select destination
+                </p>
                 <div className="space-y-2">
                   {/* Board */}
                   <div>
-                    <label htmlFor="move-card-board" className="block text-xs font-medium text-muted mb-1">
+                    <label
+                      htmlFor="move-card-board"
+                      className="block text-xs font-medium text-muted mb-1"
+                    >
                       Board
                     </label>
                     <select
                       id="move-card-board"
                       value={selectedBoardId}
-                      onChange={(e) => { handleBoardChange(e.target.value); }}
+                      onChange={(e) => {
+                        handleBoardChange(e.target.value);
+                      }}
                       className="w-full rounded-lg border border-border bg-bg-overlay px-2 py-1.5 text-sm text-base focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       {boards.map((b) => (
@@ -271,13 +330,18 @@ const MoveCardModal = ({
                   {/* List + Position */}
                   <div className="flex gap-2">
                     <div className="flex-1 min-w-0">
-                      <label htmlFor="move-card-list" className="block text-xs font-medium text-muted mb-1">
+                      <label
+                        htmlFor="move-card-list"
+                        className="block text-xs font-medium text-muted mb-1"
+                      >
                         List
                       </label>
                       <select
                         id="move-card-list"
                         value={selectedListId}
-                        onChange={(e) => { void handleListChange(e.target.value); }}
+                        onChange={(e) => {
+                          void handleListChange(e.target.value);
+                        }}
                         disabled={loadedBoardId !== selectedBoardId}
                         className="w-full rounded-lg border border-border bg-bg-overlay px-2 py-1.5 text-sm text-base focus:outline-none focus:ring-2 focus:ring-primary"
                       >
@@ -290,17 +354,25 @@ const MoveCardModal = ({
                     </div>
 
                     <div className="w-20 flex-shrink-0">
-                      <label htmlFor="move-card-position" className="block text-xs font-medium text-muted mb-1">
+                      <label
+                        htmlFor="move-card-position"
+                        className="block text-xs font-medium text-muted mb-1"
+                      >
                         Position
                       </label>
                       <select
                         id="move-card-position"
                         value={selectedPosition}
-                        onChange={(e) => { setSelectedPosition(Number(e.target.value)); }}
+                        onChange={(e) => {
+                          setSelectedPosition(Number(e.target.value));
+                        }}
                         disabled={loadingDestination}
                         className="w-full rounded-lg border border-border bg-bg-overlay px-2 py-1.5 text-sm text-base focus:outline-none focus:ring-2 focus:ring-primary"
                       >
-                        {Array.from({ length: maxPosition }, (_, i) => i + 1).map((pos) => (
+                        {Array.from(
+                          { length: maxPosition },
+                          (_, i) => i + 1,
+                        ).map((pos) => (
                           <option key={pos} value={pos}>
                             {pos}
                           </option>
@@ -313,13 +385,17 @@ const MoveCardModal = ({
 
               {destinationError && (
                 <div className="space-y-1">
-                  <p role="alert" className="text-xs text-danger">Could not load destination. Retry to refresh the available cards and positions.</p>
+                  <p role="alert" className="text-xs text-danger">
+                    Could not load destination. Retry to refresh the available
+                    cards and positions.
+                  </p>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      if (destinationError === 'board') void fetchBoardData(selectedBoardId);
+                      if (destinationError === 'board')
+                        void fetchBoardData(selectedBoardId);
                       else void handleListChange(selectedListId);
                     }}
                   >
@@ -327,14 +403,24 @@ const MoveCardModal = ({
                   </Button>
                 </div>
               )}
-              {error && <p role="alert" className="text-xs text-danger">{error}</p>}
+              {error && (
+                <p role="alert" className="text-xs text-danger">
+                  {error}
+                </p>
+              )}
 
               <Button
                 type="submit"
                 variant="primary"
                 size="sm"
                 className="w-full"
-                disabled={submitting || loadingDestination || !!destinationError || loadedBoardId !== selectedBoardId || !lists.some((list) => list.id === selectedListId)}
+                disabled={
+                  submitting ||
+                  loadingDestination ||
+                  !!destinationError ||
+                  loadedBoardId !== selectedBoardId ||
+                  !lists.some((list) => list.id === selectedListId)
+                }
               >
                 <ArrowRightIcon className="w-4 h-4 mr-1" />
                 {submitting ? 'Moving…' : 'Move'}

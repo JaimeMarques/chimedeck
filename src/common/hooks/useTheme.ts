@@ -1,9 +1,64 @@
 import { useState, useEffect } from 'react';
 
-export type Theme = 'light' | 'dark' | 'elegant' | 'elegant-dark' | 'paper' | 'nordic' | 'archive' | 'macintosh' | 'obsidian' | 'next' | 'bauhaus' | 'moss' | 'vapor' | 'cyberpunk' | 'the-seven' | 'hc-light' | 'hc-dark' | 'trello';
+export type Theme =
+  | 'light'
+  | 'dark'
+  | 'elegant'
+  | 'elegant-dark'
+  | 'paper'
+  | 'nordic'
+  | 'archive'
+  | 'macintosh'
+  | 'obsidian'
+  | 'next'
+  | 'bauhaus'
+  | 'moss'
+  | 'vapor'
+  | 'cyberpunk'
+  | 'the-seven'
+  | 'hc-light'
+  | 'hc-dark'
+  | 'trello';
 
-const THEME_CYCLE: Theme[] = ['light', 'dark', 'elegant', 'elegant-dark', 'paper', 'nordic', 'archive', 'macintosh', 'obsidian', 'next', 'bauhaus', 'moss', 'vapor', 'cyberpunk', 'the-seven', 'hc-light', 'hc-dark', 'trello'];
-const ALL_THEME_CLASSES = ['dark', 'elegant', 'elegant-dark', 'theme-paper', 'theme-nordic', 'theme-archive', 'theme-macintosh', 'theme-obsidian', 'theme-next', 'theme-bauhaus', 'theme-moss', 'theme-vapor', 'theme-cyberpunk', 'theme-the-seven', 'theme-hc-light', 'theme-hc-dark', 'theme-trello'];
+const THEME_CYCLE: Theme[] = [
+  'light',
+  'dark',
+  'elegant',
+  'elegant-dark',
+  'paper',
+  'nordic',
+  'archive',
+  'macintosh',
+  'obsidian',
+  'next',
+  'bauhaus',
+  'moss',
+  'vapor',
+  'cyberpunk',
+  'the-seven',
+  'hc-light',
+  'hc-dark',
+  'trello',
+];
+const ALL_THEME_CLASSES = [
+  'dark',
+  'elegant',
+  'elegant-dark',
+  'theme-paper',
+  'theme-nordic',
+  'theme-archive',
+  'theme-macintosh',
+  'theme-obsidian',
+  'theme-next',
+  'theme-bauhaus',
+  'theme-moss',
+  'theme-vapor',
+  'theme-cyberpunk',
+  'theme-the-seven',
+  'theme-hc-light',
+  'theme-hc-dark',
+  'theme-trello',
+];
 
 function applyTheme(theme: Theme) {
   const html = document.documentElement;
@@ -51,7 +106,11 @@ function applyTheme(theme: Theme) {
   // 'light' = no extra class (bare :root)
 }
 
-export function useTheme(): { theme: Theme; setTheme: (t: Theme) => void; cycle: () => void } {
+export function useTheme(): {
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+  cycle: () => void;
+} {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme') as Theme | null;
     return THEME_CYCLE.includes(saved as Theme) ? (saved as Theme) : 'dark';

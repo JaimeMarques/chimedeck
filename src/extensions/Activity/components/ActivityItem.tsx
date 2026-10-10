@@ -39,7 +39,11 @@ function formatDueDateParts(value: unknown): { dueDate: string; dueTime: string 
 
   return {
     dueDate: parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    dueTime: parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+    dueTime: parsed.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }),
   };
 }
 
@@ -55,7 +59,9 @@ function describeAction(
     textValue(payload.fromList) ||
     translations['activity.fromList.unknown'];
   const toList =
-    textValue(payload.toListName) || textValue(payload.toList) || translations['activity.toList.unknown'];
+    textValue(payload.toListName) ||
+    textValue(payload.toList) ||
+    translations['activity.toList.unknown'];
   const checklistTitle = textValue(payload.checklistTitle);
   const itemTitle = textValue(payload.itemTitle);
   const commentPreview = textValue(payload.commentPreview);
@@ -68,6 +74,15 @@ function describeAction(
   const linkUrl = textValue(payload.linkUrl);
   const linkTarget = referencedCardTitle || name || linkUrl || 'a link';
   const { dueDate, dueTime } = formatDueDateParts(payload.dueDate);
+  let next = textValue(payload.next);
+  const previous = textValue(payload.previous);
+  // [why] Clearing the GitHub branch override persists `next: null` (PATCH
+  // /settings/integrations) — textValue(null) is '' which rendered
+  // "changed the GitHub branch scope to " with an empty label. Surface an
+  // explicit default-branch label for this valid reset case instead.
+  if (action === 'board_github_branch_updated' && payload.next == null) {
+    next = translations['activity.action.board_github_branch_updated.defaultNext'];
+  }
 
   const key = `activity.action.${action}` as keyof typeof translations;
   const template = translations[key] ?? translations['activity.action.unknown'];
@@ -92,6 +107,8 @@ function describeAction(
     emoji,
     dueDate,
     dueTime,
+    next,
+    previous,
   });
 }
 

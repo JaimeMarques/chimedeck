@@ -102,14 +102,14 @@ async function parseMoveBody(req: Request): Promise<MoveBody | Response> {
     if (!body.targetListId) {
       return Response.json(
         { error: { code: 'bad-request', message: 'targetListId is required' } },
-        { status: 400 },
+        { status: 400 }
       );
     }
     return body;
   } catch {
     return Response.json(
       { error: { code: 'bad-request', message: 'Invalid JSON body' } },
-      { status: 400 },
+      { status: 400 }
     );
   }
 }
@@ -125,7 +125,7 @@ async function validateMoveLists({
   if (!targetList) {
     return Response.json(
       { error: { code: 'target-list-not-found', message: 'Target list not found' } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
@@ -133,7 +133,7 @@ async function validateMoveLists({
   if (!sourceList) {
     return Response.json(
       { error: { code: 'source-list-not-found', message: 'Source list not found' } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
@@ -153,7 +153,13 @@ function resolveInsertIndex({
   return afterIndex === -1 ? null : afterIndex + 1;
 }
 
-function computeStrictPositionBetween({ left, right }: { left: string; right: string }): string | null {
+function computeStrictPositionBetween({
+  left,
+  right,
+}: {
+  left: string;
+  right: string;
+}): string | null {
   try {
     const candidate = between(left, right);
     const leftOk = left === '' ? true : left < candidate;

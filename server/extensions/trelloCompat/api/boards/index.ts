@@ -161,9 +161,7 @@ async function hasBoardAdminRole(
 }
 
 async function hasGuestAccess(userId: string, boardId: string): Promise<boolean> {
-  const row = (await db('board_guest_access')
-    .where({ user_id: userId, board_id: boardId })
-    .first()) as GuestAccessRow | undefined;
+  const row = await db('board_guest_access').where({ user_id: userId, board_id: boardId }).first();
   return !!row;
 }
 
@@ -235,11 +233,11 @@ async function listBoardMemberships(boardId: string): Promise<TrelloBoardMembers
 }
 
 async function resolveBoardCreatorId(boardId: string): Promise<string> {
-  const admin = (await db('board_members')
+  const admin = await db('board_members')
     .where({ board_id: boardId })
     .orderBy('created_at', 'asc')
-    .first()) as BoardMemberRow | undefined;
-  return admin?.user_id ?? '';
+    .first();
+  return (admin?.user_id as string | undefined) ?? '';
 }
 
 function serializeCard(card: {
@@ -455,7 +453,7 @@ export async function boardsRouter(
       payload: { workspaceId: idOrganization },
     });
 
-    const board = (await db('boards').where({ id: boardId }).first()) as BoardRow | undefined;
+    const board = await db('boards').where({ id: boardId }).first();
     const memberships = await listBoardMemberships(boardId);
     return Response.json(
       serializeBoard({
@@ -642,10 +640,20 @@ export async function boardsRouter(
       archived: false,
     });
 
-    const created = (await db('lists').where({ id: listId }).first()) as ListRow | undefined;
-    return Response.json(serializeList({ ...(created as ListRow), _rank: existing.length }), {
-      status: 200,
-    });
+    const created = await db('lists').where({ id: listId }).first();
+    return Response.json(
+      serializeList({
+        ...(created as {
+          id: string;
+          board_id: string;
+          title: string;
+          archived: boolean;
+          color?: string | null;
+        }),
+        _rank: existing.length,
+      }),
+      { status: 200 }
+    );
   }
 
   const cardsPathMatch = subPath.match(/^cards(?:\/(open|closed|all))?$/);
@@ -676,14 +684,14 @@ export async function boardsRouter(
 
     const result = [];
     for (const [memberId, memberType] of membersById.entries()) {
-      const dbUser = (await db('users').where({ id: memberId }).first()) as UserRow | undefined;
+      const dbUser = await db('users').where({ id: memberId }).first();
       if (!dbUser) continue;
       result.push(
         serializeMember({
-          id: dbUser.id,
-          email: dbUser.email ?? '',
-          name: (dbUser.name ?? dbUser.email) as string,
-          avatar_url: dbUser.avatar_url ?? null,
+          id: dbUser.id as string,
+          email: (dbUser.email as string) ?? '',
+          name: (dbUser.name as string) ?? (dbUser.email as string),
+          avatar_url: (dbUser.avatar_url as string | null | undefined) ?? null,
           memberType,
         })
       );
@@ -760,8 +768,8 @@ export async function boardsRouter(
       payload: { memberId: idMember, userId: idMember, role: boardRole },
     });
     return Response.json({
-      id: saved?.id ?? randomUUID(),
-      idMember,
+      id: (saved?.id as string) ?? randomUUID(),
+      idMember: idMember,
       memberType: boardRole === 'ADMIN' ? 'admin' : 'normal',
       unconfirmed: false,
       deactivated: false,

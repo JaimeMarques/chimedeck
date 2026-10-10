@@ -39,7 +39,10 @@ import { useSelector } from 'react-redux';
 import OneLineToolbar from '~/extensions/Card/components/OneLineToolbar';
 import LinkInsertPopover from '~/extensions/Card/components/LinkInsertPopover';
 import { useAttachmentUpload } from '~/extensions/Attachments/hooks/useAttachmentUpload';
-import { fetchLinkPreview, listAttachments } from '~/extensions/Attachments/api';
+import {
+  fetchLinkPreview,
+  listAttachments,
+} from '~/extensions/Attachments/api';
 import { InlineUploadPreview } from '~/extensions/Attachments/components/InlineUploadPreview';
 import {
   useOfflineCommentDraft,
@@ -48,7 +51,11 @@ import {
 import { selectCurrentUser, selectAccessToken } from '~/slices/authSlice';
 import { selectActiveWorkspaceId } from '~/extensions/Workspace/duck/workspaceDuck';
 import Button from '~/common/components/Button';
-import { getInlineTitleFromUrl, normalizeHttpUrlInput } from '~/common/utils/urlDisplayText';
+import {
+  getInlineTitleFromUrl,
+  normalizeHttpUrlInput,
+} from '~/common/utils/urlDisplayText';
+import { escapeScriptTags } from '~/common/utils/escapeScriptTags';
 import translations from '../translations/en.json';
 
 const LINK_CLASS_BUTTON = 'cd-link-button';
@@ -74,8 +81,15 @@ function getVisualClassForMode(mode: LinkDisplayMode): string {
   return LINK_CLASS_BUTTON;
 }
 
-function buildLinkClassName(mode: LinkDisplayMode, extraTokens: string[] = []): string {
-  const tokens = [getVisualClassForMode(mode), getModeMetaToken(mode), ...extraTokens]
+function buildLinkClassName(
+  mode: LinkDisplayMode,
+  extraTokens: string[] = [],
+): string {
+  const tokens = [
+    getVisualClassForMode(mode),
+    getModeMetaToken(mode),
+    ...extraTokens,
+  ]
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
   return Array.from(new Set(tokens)).join(' ');
@@ -94,7 +108,9 @@ function getModeFromTitle(value: unknown): LinkDisplayMode | null {
   return null;
 }
 
-function getModeFromClassName(className: string | null | undefined): LinkDisplayMode | null {
+function getModeFromClassName(
+  className: string | null | undefined,
+): LinkDisplayMode | null {
   if (!className) return null;
   const tokens = new Set(className.split(/\s+/).filter(Boolean));
   if (tokens.has(LINK_MODE_META_URL)) return 'url';
@@ -138,12 +154,18 @@ function detectLinkDisplayMode(
   if (modeFromTitle) return modeFromTitle;
 
   if (className?.includes(LINK_CLASS_URL)) return 'url';
-  if (className?.includes(LINK_CLASS_CARD) || hasVisualLineBreak || text.includes('\n')) return 'card';
+  if (
+    className?.includes(LINK_CLASS_CARD) ||
+    hasVisualLineBreak ||
+    text.includes('\n')
+  )
+    return 'card';
   if (className?.includes(LINK_CLASS_BUTTON)) return 'button';
 
   const normalizedHref = normalizeComparableUrl(href);
   const normalizedText = normalizeComparableUrl(text);
-  if (normalizedHref.length > 0 && normalizedHref === normalizedText) return 'url';
+  if (normalizedHref.length > 0 && normalizedHref === normalizedText)
+    return 'url';
 
   return 'button';
 }
@@ -169,7 +191,10 @@ interface LinkRangeTarget {
   attrs: Record<string, unknown>;
 }
 
-function findLinkRangeByClassToken(editor: Editor, classToken: string): LinkRangeTarget | null {
+function findLinkRangeByClassToken(
+  editor: Editor,
+  classToken: string,
+): LinkRangeTarget | null {
   const linkType = editor.state.schema.marks.link;
   if (!linkType) return null;
 
@@ -181,12 +206,16 @@ function findLinkRangeByClassToken(editor: Editor, classToken: string): LinkRang
 
     const linkMark = node.marks.find((mark) => {
       if (mark.type !== linkType) return false;
-      const classValue = typeof mark.attrs.class === 'string' ? mark.attrs.class : '';
+      const classValue =
+        typeof mark.attrs.class === 'string' ? mark.attrs.class : '';
       return classValue.split(/\s+/).filter(Boolean).includes(classToken);
     });
     if (!linkMark) return;
 
-    const resolvePos = Math.max(1, Math.min(pos + 1, editor.state.doc.content.size));
+    const resolvePos = Math.max(
+      1,
+      Math.min(pos + 1, editor.state.doc.content.size),
+    );
     const range = getMarkRange(editor.state.doc.resolve(resolvePos), linkType);
     if (!range) return;
 
@@ -211,7 +240,8 @@ function replaceLinkRangeText(
   const linkType = editor.state.schema.marks.link;
   if (!linkType) return;
 
-  const href = typeof target.attrs.href === 'string' ? target.attrs.href.trim() : '';
+  const href =
+    typeof target.attrs.href === 'string' ? target.attrs.href.trim() : '';
   if (!href) return;
 
   const mark = linkType.create({
@@ -239,7 +269,10 @@ function hydrateEditorLinkMarkClasses(editor: Editor): void {
     const hasLinkMark = node.marks.some((mark) => mark.type === linkType);
     if (!hasLinkMark) return;
 
-    const resolvePos = Math.max(1, Math.min(pos + 1, editor.state.doc.content.size));
+    const resolvePos = Math.max(
+      1,
+      Math.min(pos + 1, editor.state.doc.content.size),
+    );
     const range = getMarkRange(editor.state.doc.resolve(resolvePos), linkType);
     if (!range) return;
 
@@ -250,12 +283,15 @@ function hydrateEditorLinkMarkClasses(editor: Editor): void {
     const linkAttrs = editor.state.doc
       .resolve(range.from)
       .marks()
-      .find((mark) => mark.type === linkType)?.attrs as Record<string, unknown> | undefined;
+      .find((mark) => mark.type === linkType)?.attrs as
+      Record<string, unknown> | undefined;
 
-    const href = typeof linkAttrs?.href === 'string' ? linkAttrs.href.trim() : '';
+    const href =
+      typeof linkAttrs?.href === 'string' ? linkAttrs.href.trim() : '';
     if (!href) return;
 
-    const currentClass = typeof linkAttrs?.class === 'string' ? linkAttrs.class : '';
+    const currentClass =
+      typeof linkAttrs?.class === 'string' ? linkAttrs.class : '';
     const text = editor.state.doc.textBetween(range.from, range.to, '\n');
 
     let hasHardBreak = false;
@@ -268,19 +304,29 @@ function hydrateEditorLinkMarkClasses(editor: Editor): void {
     });
 
     const title = typeof linkAttrs?.title === 'string' ? linkAttrs.title : null;
-    const inferredMode = detectLinkDisplayMode(currentClass, text, href, title, hasHardBreak || text.includes('\n'));
+    const inferredMode = detectLinkDisplayMode(
+      currentClass,
+      text,
+      href,
+      title,
+      hasHardBreak || text.includes('\n'),
+    );
     const nextClass = buildLinkClassName(inferredMode);
 
     if (currentClass === nextClass) return;
 
     tr.removeMark(range.from, range.to, linkType);
-    tr.addMark(range.from, range.to, linkType.create({
-      ...linkAttrs,
-      class: nextClass,
-      title: buildLinkModeTitle(inferredMode),
-      target: '_blank',
-      rel: 'noopener noreferrer',
-    }));
+    tr.addMark(
+      range.from,
+      range.to,
+      linkType.create({
+        ...linkAttrs,
+        class: nextClass,
+        title: buildLinkModeTitle(inferredMode),
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      }),
+    );
   });
 
   if (tr.steps.length > 0) {
@@ -288,7 +334,10 @@ function hydrateEditorLinkMarkClasses(editor: Editor): void {
   }
 }
 
-function findActiveLinkFromAnchor(editor: Editor, anchorEl: HTMLAnchorElement): ActiveEditorLink | null {
+function findActiveLinkFromAnchor(
+  editor: Editor,
+  anchorEl: HTMLAnchorElement,
+): ActiveEditorLink | null {
   const href = anchorEl.getAttribute('href')?.trim() ?? '';
   if (!href) return null;
 
@@ -300,7 +349,10 @@ function findActiveLinkFromAnchor(editor: Editor, anchorEl: HTMLAnchorElement): 
   for (const offset of candidateOffsets) {
     try {
       const basePos = editor.view.posAtDOM(anchorEl, 0);
-      const safePos = Math.max(1, Math.min(basePos + offset, editor.state.doc.content.size));
+      const safePos = Math.max(
+        1,
+        Math.min(basePos + offset, editor.state.doc.content.size),
+      );
       range = getMarkRange(editor.state.doc.resolve(safePos), linkType);
       if (range) break;
     } catch {
@@ -353,18 +405,30 @@ function findActiveLinkFromSelection(editor: Editor): ActiveEditorLink | null {
   const top = Math.min(fromCoords.top, toCoords.top);
   const right = Math.max(fromCoords.right, toCoords.right);
   const bottom = Math.max(fromCoords.bottom, toCoords.bottom);
-  const rect = new DOMRect(left, top, Math.max(1, right - left), Math.max(1, bottom - top));
+  const rect = new DOMRect(
+    left,
+    top,
+    Math.max(1, right - left),
+    Math.max(1, bottom - top),
+  );
 
   let anchorEl: HTMLAnchorElement | null = null;
   try {
     const domAt = editor.view.domAtPos(range.from);
-    const node = domAt.node instanceof Element ? domAt.node : domAt.node.parentElement;
+    const node =
+      domAt.node instanceof Element ? domAt.node : domAt.node.parentElement;
     anchorEl = node?.closest('a') as HTMLAnchorElement | null;
   } catch {
     anchorEl = null;
   }
 
-  const mode = detectLinkDisplayMode(className, text, href, title, Boolean(anchorEl?.querySelector('br')));
+  const mode = detectLinkDisplayMode(
+    className,
+    text,
+    href,
+    title,
+    Boolean(anchorEl?.querySelector('br')),
+  );
 
   return {
     anchorEl,
@@ -399,26 +463,44 @@ interface Props {
 // Map draft status to a human-readable footer label — mirrors description editor.
 function draftStatusLabel(status: DraftStatus): string | null {
   switch (status) {
-    case 'saving_local': return translations['comment.draft.saving'];
-    case 'saved_local':  return translations['comment.draft.savedLocal'];
-    case 'syncing':      return translations['comment.draft.syncing'];
-    case 'synced':       return translations['comment.draft.synced'];
-    case 'will_sync_when_online': return translations['comment.draft.willSync'];
-    case 'sync_failed':  return translations['comment.draft.syncFailed'];
-    default:             return null;
+    case 'saving_local':
+      return translations['comment.draft.saving'];
+    case 'saved_local':
+      return translations['comment.draft.savedLocal'];
+    case 'syncing':
+      return translations['comment.draft.syncing'];
+    case 'synced':
+      return translations['comment.draft.synced'];
+    case 'will_sync_when_online':
+      return translations['comment.draft.willSync'];
+    case 'sync_failed':
+      return translations['comment.draft.syncFailed'];
+    default:
+      return null;
   }
 }
 
 // @tiptap/markdown may omit custom image nodes in some serialization paths.
 // Ensure images in the current doc are present in the final markdown payload.
-function buildCommentMarkdown(editor: Editor, attachments: Attachment[]): string {
+function buildCommentMarkdown(
+  editor: Editor,
+  attachments: Attachment[],
+): string {
   let markdown = editor.getMarkdown() || '';
   const imageSnippets: string[] = [];
+  const scriptLiterals = Array.from(
+    new Set(
+      (
+        editor.state.doc.textContent.match(/<script\b[\s\S]*?<\/script>/gi) ??
+        []
+      ).map((value) => value.trim()),
+    ),
+  );
 
   editor.state.doc.descendants((node) => {
     if (node.type.name !== 'image') return;
     const src = typeof node.attrs?.src === 'string' ? node.attrs.src : '';
-    if (!src) return;
+    if (!src || isNonPersistableUrl(src)) return;
     const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : '';
     imageSnippets.push(`![${alt}](${src})`);
   });
@@ -428,12 +510,46 @@ function buildCommentMarkdown(editor: Editor, attachments: Attachment[]): string
     const urlMatch = /\((.*)\)$/.exec(snippet);
     const url = urlMatch?.[1] ?? '';
     if (url && markdown.includes(url)) return;
-    markdown = markdown.trim().length > 0
-      ? `${markdown.trim()}\n\n${snippet}`
-      : snippet;
+    markdown =
+      markdown.trim().length > 0 ? `${markdown.trim()}\n\n${snippet}` : snippet;
   });
 
-  return dehydrateCommentAttachmentMarkdown(normalizeMarkdownLinkUrls(markdown), attachments);
+  scriptLiterals.forEach((snippet) => {
+    if (!snippet || markdown.includes(snippet)) return;
+    const escapedSnippet = escapeScriptTags(snippet);
+    markdown =
+      markdown.trim().length > 0
+        ? `${markdown.trim()}\n\n${escapedSnippet}`
+        : escapedSnippet;
+  });
+
+  const sanitized = stripNonPersistableMarkdownTargets(markdown);
+  return dehydrateCommentAttachmentMarkdown(
+    escapeScriptTags(normalizeMarkdownLinkUrls(sanitized)),
+    attachments,
+  );
+}
+
+function isNonPersistableUrl(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized.startsWith('blob:') ||
+    normalized.startsWith('data:') ||
+    normalized.startsWith('file:')
+  );
+}
+
+function stripNonPersistableMarkdownTargets(markdown: string): string {
+  if (!markdown) return markdown;
+
+  return markdown.replaceAll(
+    /(!?)\[([^\]]*)\]\((<[^>]+>|[^)\s]+)(\s+["'][^"']*["'])?\)/g,
+    (fullMatch, bang: string, label: string, rawDestination: string) => {
+      const destination = rawDestination.replace(/^<([^>]+)>$/, '$1').trim();
+      if (!isNonPersistableUrl(destination)) return fullMatch;
+      return bang === '!' ? label : `[${label || destination}]`;
+    },
+  );
 }
 
 function normalizeMarkdownLinkUrls(markdown: string): string {
@@ -449,7 +565,9 @@ function normalizeMarkdownLinkUrls(markdown: string): string {
         }
       })();
 
-      const markdownWrapped = /^\[[^\]]+\]\((.+)\)$/.exec(decodedDestination)?.[1]?.trim();
+      const markdownWrapped = /^\[[^\]]+\]\((.+)\)$/
+        .exec(decodedDestination)?.[1]
+        ?.trim();
       const destinationCandidate = markdownWrapped ?? decodedDestination;
 
       const normalized = normalizeHttpUrlInput(destinationCandidate);
@@ -460,16 +578,20 @@ function normalizeMarkdownLinkUrls(markdown: string): string {
 }
 
 function escapeMdLabel(value: string): string {
-  return value
-    .replaceAll('[', String.raw`\[`)
-    .replaceAll(']', String.raw`\]`);
+  return value.replaceAll('[', String.raw`\[`).replaceAll(']', String.raw`\]`);
 }
 
-function buildAttachmentSnippet({ name, url, isImage }: { name: string; url: string; isImage: boolean }): string {
+function buildAttachmentSnippet({
+  name,
+  url,
+  isImage,
+}: {
+  name: string;
+  url: string;
+  isImage: boolean;
+}): string {
   const safeName = escapeMdLabel(name || 'attachment');
-  return isImage
-    ? `![${safeName}](${url}) `
-    : `[${safeName}](${url}) `;
+  return isImage ? `![${safeName}](${url}) ` : `[${safeName}](${url}) `;
 }
 
 function insertSnippetAt(editor: Editor, pos: number, snippet: string): void {
@@ -481,12 +603,15 @@ function insertSnippetAt(editor: Editor, pos: number, snippet: string): void {
     .run();
 }
 
-function buildBoardProps(boardId?: string): { boardId: string } | Record<string, never> {
+function buildBoardProps(
+  boardId?: string,
+): { boardId: string } | Record<string, never> {
   return boardId ? { boardId } : {};
 }
 
 function getDraftStatusClass(status: DraftStatus): string {
-  if (status === 'will_sync_when_online') return 'text-amber-500 dark:text-amber-400';
+  if (status === 'will_sync_when_online')
+    return 'text-amber-500 dark:text-amber-400';
   if (status === 'synced') return 'text-success';
   return 'text-muted';
 }
@@ -496,16 +621,23 @@ function normalizeEscapedBlockquoteMarkers(markdown: string): string {
     .replaceAll(/^(\s*)&amp;gt;(?=\s|$)/gm, '$1>');
 }
 
-function resolvePendingHydratedContent(pendingContent: string | null, attachments: Attachment[]): string | null {
+function resolvePendingHydratedContent(
+  pendingContent: string | null,
+  attachments: Attachment[],
+): string | null {
   if (!pendingContent) return null;
   const normalized = normalizeEscapedBlockquoteMarkers(pendingContent);
-  if (hasAttachmentPlaceholder(normalized) && attachments.length === 0) return null;
+  if (hasAttachmentPlaceholder(normalized) && attachments.length === 0)
+    return null;
   const hydrated = hydrateCommentAttachmentMarkdown(normalized, attachments);
   // [why] Rewrite any legacy raw S3 URLs to the authenticated proxy path.
   return rewriteS3UrlsToProxy(hydrated, attachments);
 }
 
-function getInitialEditorContent(initialValue: string, attachments: Attachment[]): string {
+function getInitialEditorContent(
+  initialValue: string,
+  attachments: Attachment[],
+): string {
   const normalized = normalizeEscapedBlockquoteMarkers(initialValue);
   if (hasAttachmentPlaceholder(normalized) && attachments.length === 0) {
     return stripCommentAttachmentPlaceholders(normalized);
@@ -515,7 +647,69 @@ function getInitialEditorContent(initialValue: string, attachments: Attachment[]
   return rewriteS3UrlsToProxy(hydrated, attachments);
 }
 
-function insertAttachmentAt(editor: Editor, attachment: Attachment, pos: number): boolean {
+function hasRenderableEditorContent(editor: Editor): boolean {
+  if (editor.state.doc.textContent.trim().length > 0) return true;
+  let hasImage = false;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'image') {
+      hasImage = true;
+      return false;
+    }
+    return undefined;
+  });
+  return hasImage;
+}
+
+function buildImageNodeFallbackDoc(
+  markdown: string,
+): Record<string, unknown> | null {
+  if (!markdown.trim()) return null;
+
+  const IMAGE_MARKDOWN_RE = /!\[([^\]]*)\]\((\S+?)(?:\s+"([^"]*)")?\)/g;
+  const paragraphNodes: Array<Record<string, unknown>> = [];
+  let cursor = 0;
+  let match = IMAGE_MARKDOWN_RE.exec(markdown);
+
+  while (match) {
+    const full = match[0] ?? '';
+    const alt = match[1] ?? '';
+    const src = match[2] ?? '';
+    const index = match.index;
+
+    const before = markdown.slice(cursor, index);
+    if (before.length > 0) {
+      paragraphNodes.push({ type: 'text', text: before });
+    }
+
+    if (src.trim().length > 0) {
+      paragraphNodes.push({
+        type: 'image',
+        attrs: { src: src.trim(), alt: alt || null },
+      });
+    }
+
+    cursor = index + full.length;
+    match = IMAGE_MARKDOWN_RE.exec(markdown);
+  }
+
+  const tail = markdown.slice(cursor);
+  if (tail.length > 0) {
+    paragraphNodes.push({ type: 'text', text: tail });
+  }
+
+  if (!paragraphNodes.some((node) => node.type === 'image')) return null;
+
+  return {
+    type: 'doc',
+    content: [{ type: 'paragraph', content: paragraphNodes }],
+  };
+}
+
+function insertAttachmentAt(
+  editor: Editor,
+  attachment: Attachment,
+  pos: number,
+): boolean {
   const isImage = attachment.content_type?.startsWith('image/') ?? false;
   const url = resolveAttachmentMarkdownUrl(attachment, isImage);
   if (!url) return false;
@@ -552,7 +746,18 @@ function insertAttachmentAt(editor: Editor, attachment: Attachment, pos: number)
       {
         type: 'text',
         text: displayName,
-        marks: [{ type: 'link', attrs: { href: url, target: '_blank', rel: 'noopener noreferrer', class: buildLinkClassName('button'), title: buildLinkModeTitle('button') } }],
+        marks: [
+          {
+            type: 'link',
+            attrs: {
+              href: url,
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              class: buildLinkClassName('button'),
+              title: buildLinkModeTitle('button'),
+            },
+          },
+        ],
       },
       { type: 'text', text: ' ' },
     ])
@@ -586,11 +791,15 @@ const CommentEditor = ({
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
   const [linkConfigOpen, setLinkConfigOpen] = useState(false);
   const [linkEditOpen, setLinkEditOpen] = useState(false);
-  const [activeEditorLink, setActiveEditorLink] = useState<ActiveEditorLink | null>(null);
+  const [activeEditorLink, setActiveEditorLink] =
+    useState<ActiveEditorLink | null>(null);
   const [hoveredLink, setHoveredLink] = useState<ActiveEditorLink | null>(null);
   const [linkEditUrl, setLinkEditUrl] = useState('');
   const [linkEditText, setLinkEditText] = useState('');
-  const [cardAttachments, setCardAttachments] = useState<Attachment[]>(availableAttachments);
+  const [cardAttachments, setCardAttachments] =
+    useState<Attachment[]>(availableAttachments);
+  const shouldRestoreDraft =
+    initialValue.trim().length === 0 && !hasAttachmentPlaceholder(initialValue);
 
   // Auth + workspace context needed by the offline draft hook
   const currentUser = useSelector(selectCurrentUser);
@@ -618,16 +827,26 @@ const CommentEditor = ({
   const pendingAttachmentInsertRef = useRef<Map<string, number>>(new Map());
 
   const replaceCardAttachments = useCallback((attachments: Attachment[]) => {
-    const combined = [...attachments, ...cardAttachmentsRef.current.filter(
-      (entry) => entry.upload_context === 'comment' && !attachments.some((item) => item.id === entry.id),
-    )];
+    const combined = [
+      ...attachments,
+      ...cardAttachmentsRef.current.filter(
+        (entry) =>
+          entry.upload_context === 'comment' &&
+          !attachments.some((item) => item.id === entry.id),
+      ),
+    ];
     cardAttachmentsRef.current = combined;
     setCardAttachments(combined);
   }, []);
 
   const prependCardAttachment = useCallback((attachment: Attachment) => {
     // [why] Flush and offline serialization read this before React commits.
-    const next = [attachment, ...cardAttachmentsRef.current.filter((entry) => entry.id !== attachment.id)];
+    const next = [
+      attachment,
+      ...cardAttachmentsRef.current.filter(
+        (entry) => entry.id !== attachment.id,
+      ),
+    ];
     cardAttachmentsRef.current = next;
     setCardAttachments(next);
   }, []);
@@ -637,13 +856,22 @@ const CommentEditor = ({
   }, [availableAttachments, replaceCardAttachments]);
 
   useEffect(() => {
-    onAttachmentsChange?.(cardAttachments.filter((attachment) => attachment.upload_context !== 'comment'));
+    onAttachmentsChange?.(
+      cardAttachments.filter(
+        (attachment) => attachment.upload_context !== 'comment',
+      ),
+    );
   }, [cardAttachments, onAttachmentsChange]);
 
   // Attachment upload — only active when a cardId is provided.
   // [why] deferred=true keeps uploads queueable, while explicit flushes let us
   // upload immediately from picker/file-input flows when needed.
-  const { uploads, upload: uploadFiles, removeEntry, flush: flushUploads } = useAttachmentUpload({
+  const {
+    uploads,
+    upload: uploadFiles,
+    removeEntry,
+    flush: flushUploads,
+  } = useAttachmentUpload({
     uploadContext: 'comment',
     cardId: cardId ?? '',
     deferred: true,
@@ -656,7 +884,10 @@ const CommentEditor = ({
       insertPosMap.current.delete(clientId);
       const docSize = ed.state.doc.content.size;
       // Clamp to valid range in case the document shrank while uploading
-      const insertAt = savedPos === undefined ? ed.state.selection.anchor : Math.min(savedPos, docSize);
+      const insertAt =
+        savedPos === undefined
+          ? ed.state.selection.anchor
+          : Math.min(savedPos, docSize);
       if (insertAttachmentAt(ed, attachment, insertAt)) return;
       // [why] Fresh upload responses can temporarily miss usable URLs for images.
       // Retry once the next attachment list fetch hydrates those URLs.
@@ -672,7 +903,8 @@ const CommentEditor = ({
     try {
       const res = await listAttachments({ cardId });
       const sorted = [...res.data].sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
       replaceCardAttachments(sorted);
     } catch {
@@ -712,7 +944,11 @@ const CommentEditor = ({
     extensions: [
       StarterKit,
       Markdown,
-      Link.configure({ openOnClick: false, enableClickSelection: true, autolink: true }),
+      Link.configure({
+        openOnClick: false,
+        enableClickSelection: true,
+        autolink: true,
+      }),
       // [why] InlineImage now includes markdown parse/render support.
       InlineImage,
       // [why] CardReference converts pasted card URLs into interactive chip nodes.
@@ -720,11 +956,16 @@ const CommentEditor = ({
       // [why] Mention extension auto-loads for boards; skip if no boardId (edge case).
       ...(boardId ? [buildMentionExtension(boardId)] : []),
     ],
-    content: getInitialEditorContent(initialValue || '', cardAttachmentsRef.current),
+    content: getInitialEditorContent(
+      initialValue || '',
+      cardAttachmentsRef.current,
+    ),
     contentType: 'markdown',
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
-      notifyDraftChange(buildCommentMarkdown(editor, cardAttachmentsRef.current));
+      notifyDraftChange(
+        buildCommentMarkdown(editor, cardAttachmentsRef.current),
+      );
     },
     editorProps: {
       // [why] Apply prose classes directly on ProseMirror so Tailwind Typography
@@ -732,7 +973,8 @@ const CommentEditor = ({
       // Using [&_.ProseMirror]:prose variant only applies the root .prose properties,
       // not the child-element selectors that list/blockquote/heading styling depends on.
       attributes: {
-        class: 'prose prose-sm dark:prose-invert max-w-none outline-none text-base',
+        class:
+          'prose prose-sm dark:prose-invert max-w-none outline-none text-base',
       },
       // [why] Intercept file drops directly onto the editor so images dropped
       // anywhere in the text area are uploaded and inserted at the drop position.
@@ -741,7 +983,10 @@ const CommentEditor = ({
         const files = Array.from(event.dataTransfer.files);
         if (files.length === 0) return false;
         event.preventDefault();
-        const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        const coords = view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        });
         const pos = coords?.pos ?? view.state.doc.content.size;
         // [why] Read from ref so this closure always calls the current uploadFiles
         // even though handleDrop was created before uploadFiles was first assigned.
@@ -766,7 +1011,22 @@ const CommentEditor = ({
           return true;
         }
 
-        const clipboardText = event.clipboardData?.getData('text/plain')?.trim() ?? '';
+        const clipboardText =
+          event.clipboardData?.getData('text/plain')?.trim() ?? '';
+
+        if (/<script\b[^>]*>|<\/script>/i.test(clipboardText)) {
+          event.preventDefault();
+          const pos = view.state.selection.from;
+          const escapedText = escapeScriptTags(clipboardText);
+          editorRef.current
+            ?.chain()
+            .focus()
+            .insertContentAt(pos, [{ type: 'text', text: escapedText }])
+            .setTextSelection(pos + escapedText.length)
+            .run();
+          return true;
+        }
+
         const href = normalizeHttpUrlInput(clipboardText);
         if (!href) return false;
 
@@ -774,7 +1034,10 @@ const CommentEditor = ({
         const pos = view.state.selection.from;
 
         const loadingToken = `link-loading-${String(Date.now())}-${Math.random().toString(36).slice(2, 8)}`;
-        const loadingClass = buildLinkClassName('url', [LINK_CLASS_LOADING, loadingToken]);
+        const loadingClass = buildLinkClassName('url', [
+          LINK_CLASS_LOADING,
+          loadingToken,
+        ]);
 
         editorRef.current
           ?.chain()
@@ -783,7 +1046,18 @@ const CommentEditor = ({
             {
               type: 'text',
               text: href,
-              marks: [{ type: 'link', attrs: { href, target: '_blank', rel: 'noopener noreferrer', class: loadingClass, title: buildLinkModeTitle('url') } }],
+              marks: [
+                {
+                  type: 'link',
+                  attrs: {
+                    href,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    class: loadingClass,
+                    title: buildLinkModeTitle('url'),
+                  },
+                },
+              ],
             },
             { type: 'text', text: ' ' },
           ])
@@ -807,7 +1081,12 @@ const CommentEditor = ({
           const loadingRange = findLinkRangeByClassToken(ed, loadingToken);
           if (!loadingRange) return;
 
-          replaceLinkRangeText(ed, loadingRange, inlineTitle || href, buildLinkClassName('button'));
+          replaceLinkRangeText(
+            ed,
+            loadingRange,
+            inlineTitle || href,
+            buildLinkClassName('button'),
+          );
         })();
         return true;
       },
@@ -823,9 +1102,16 @@ const CommentEditor = ({
 
           const from = view.posAtDOM(anchor, 0);
           const linkTextLength = Math.max(anchor.textContent?.length ?? 0, 1);
-          const to = Math.min(from + linkTextLength, view.state.doc.content.size);
+          const to = Math.min(
+            from + linkTextLength,
+            view.state.doc.content.size,
+          );
 
-          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)));
+          view.dispatch(
+            view.state.tr.setSelection(
+              TextSelection.create(view.state.doc, from, to),
+            ),
+          );
           view.focus();
           return true;
         },
@@ -854,7 +1140,18 @@ const CommentEditor = ({
             {
               type: 'text',
               text,
-              marks: [{ type: 'link', attrs: { href, target: '_blank', rel: 'noopener noreferrer', class: buildLinkClassName('button'), title: buildLinkModeTitle('button') } }],
+              marks: [
+                {
+                  type: 'link',
+                  attrs: {
+                    href,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    class: buildLinkClassName('button'),
+                    title: buildLinkModeTitle('button'),
+                  },
+                },
+              ],
             },
             { type: 'text', text: ' ' },
           ])
@@ -868,7 +1165,8 @@ const CommentEditor = ({
       // Clear on unmount so stale refs don't leak
       if (insertMarkdownRef.current) insertMarkdownRef.current = null;
     };
-  // [why] insertMarkdownRef identity is stable (ref object), so this runs once on mount/unmount.
+    // [why] insertMarkdownRef identity is stable (ref object), so this runs once on mount/unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [insertMarkdownRef]);
 
   useEffect(() => {
@@ -878,45 +1176,94 @@ const CommentEditor = ({
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
+    const pendingContent = pendingHydratedContentRef.current;
     const hydratedContent = resolvePendingHydratedContent(
-      pendingHydratedContentRef.current,
+      pendingContent,
       cardAttachmentsRef.current,
     );
     if (!hydratedContent) return;
     editor.commands.setContent(hydratedContent, { contentType: 'markdown' });
+    if (
+      !hasRenderableEditorContent(editor) &&
+      pendingContent &&
+      pendingContent.trim().length > 0
+    ) {
+      const imageFallbackDoc = buildImageNodeFallbackDoc(hydratedContent);
+      if (imageFallbackDoc) {
+        editor.commands.setContent(imageFallbackDoc);
+      }
+    }
+    if (
+      !hasRenderableEditorContent(editor) &&
+      pendingContent &&
+      pendingContent.trim().length > 0
+    ) {
+      const fallbackText = stripCommentAttachmentPlaceholders(
+        normalizeEscapedBlockquoteMarkers(pendingContent),
+      ).trim();
+      if (fallbackText.length > 0) {
+        editor.commands.setContent({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: fallbackText }],
+            },
+          ],
+        });
+      }
+    }
     hydrateEditorLinkMarkClasses(editor);
     pendingHydratedContentRef.current = null;
   }, [editor, cardAttachments, restoredDraft]);
 
   useEffect(() => {
     const ed = editorRef.current;
-    if (!ed || ed.isDestroyed || pendingAttachmentInsertRef.current.size === 0) return;
+    if (!ed || ed.isDestroyed || pendingAttachmentInsertRef.current.size === 0)
+      return;
 
     pendingAttachmentInsertRef.current.forEach((pos, attachmentId) => {
-      const attachment = cardAttachmentsRef.current.find((entry) => entry.id === attachmentId);
+      const attachment = cardAttachmentsRef.current.find(
+        (entry) => entry.id === attachmentId,
+      );
       if (!attachment) return;
-      if (!insertAttachmentAt(ed, attachment, Math.min(pos, ed.state.doc.content.size))) return;
+      if (
+        !insertAttachmentAt(
+          ed,
+          attachment,
+          Math.min(pos, ed.state.doc.content.size),
+        )
+      )
+        return;
       pendingAttachmentInsertRef.current.delete(attachmentId);
     });
   }, [cardAttachments]);
 
   // Restore offline draft into editor once it's loaded (async, after initial render)
   useEffect(() => {
-    if (!restoredDraft) return;
+    if (!shouldRestoreDraft || !restoredDraft) return;
     pendingHydratedContentRef.current = restoredDraft;
-  // [why] Only restore when the draft first becomes available — not on every render
-  }, [restoredDraft]);
+    // [why] Only restore when the draft first becomes available — not on every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoredDraft, shouldRestoreDraft]);
 
   const handleSubmit = useCallback(async () => {
     if (!editor) return;
     setError(null);
 
     if (!navigator.onLine) {
-      if (uploads.some((entry) => entry.phase !== 'done' && entry.phase !== 'error')) {
+      if (
+        uploads.some(
+          (entry) => entry.phase !== 'done' && entry.phase !== 'error',
+        )
+      ) {
         setError(translations['comment.editor.error.connectToUpload']);
         return;
       }
-      const trimmed = buildCommentMarkdown(editor, cardAttachmentsRef.current).trim();
+      const trimmed = buildCommentMarkdown(
+        editor,
+        cardAttachmentsRef.current,
+      ).trim();
       if (!trimmed) {
         setError(translations['comment.editor.error.empty']);
         return;
@@ -931,7 +1278,10 @@ const CommentEditor = ({
       // waits for completion so onSuccess inserts the attachment URLs into the editor
       // before we read the final markdown to post.
       await flushUploads();
-      const trimmed = buildCommentMarkdown(editor, cardAttachmentsRef.current).trim();
+      const trimmed = buildCommentMarkdown(
+        editor,
+        cardAttachmentsRef.current,
+      ).trim();
       if (!trimmed) {
         setError(translations['comment.editor.error.empty']);
         return;
@@ -977,22 +1327,18 @@ const CommentEditor = ({
   }, [cardId, editor]);
 
   // Insert an existing card attachment at the current cursor position
-  const handleInsertExisting = useCallback(
-    (attachment: Attachment) => {
-      const ed = editorRef.current;
-      if (!ed || ed.isDestroyed) return;
-      insertAttachmentAt(ed, attachment, ed.state.selection.anchor);
-    },
-    [],
-  );
+  const handleInsertExisting = useCallback((attachment: Attachment) => {
+    const ed = editorRef.current;
+    if (!ed || ed.isDestroyed) return;
+    insertAttachmentAt(ed, attachment, ed.state.selection.anchor);
+  }, []);
 
   const handleFileInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files ?? []);
       if (files.length > 0) {
-        const pos = editor && !editor.isDestroyed
-          ? editor.state.selection.anchor
-          : 0;
+        const pos =
+          editor && !editor.isDestroyed ? editor.state.selection.anchor : 0;
         const ids = uploadFiles(files);
         ids.forEach((id) => insertPosMap.current.set(id, pos));
 
@@ -1000,40 +1346,55 @@ const CommentEditor = ({
         // the insert-attachment picker without waiting for comment submit.
         void flushUploads()
           .then(() => loadCardAttachments())
-          .catch(() => { setError(translations['comment.editor.error.uploadFailed']); });
+          .catch(() => {
+            setError(translations['comment.editor.error.uploadFailed']);
+          });
       }
       e.target.value = '';
     },
     [editor, uploadFiles, flushUploads, loadCardAttachments],
   );
 
-  const getEditorLinkFromTarget = useCallback((target: EventTarget | null): ActiveEditorLink | null => {
-    if (!editor) return null;
-    const element = target as HTMLElement | null;
-    if (!element) return null;
-    const anchor = element.closest('a');
-    if (!(anchor instanceof HTMLAnchorElement)) return null;
-    if (!anchor.closest('.ProseMirror')) return null;
-    return findActiveLinkFromAnchor(editor, anchor);
-  }, [editor]);
+  const getEditorLinkFromTarget = useCallback(
+    (target: EventTarget | null): ActiveEditorLink | null => {
+      if (!editor) return null;
+      const element = target as HTMLElement | null;
+      if (!element) return null;
+      const anchor = element.closest('a');
+      if (!(anchor instanceof HTMLAnchorElement)) return null;
+      if (!anchor.closest('.ProseMirror')) return null;
+      return findActiveLinkFromAnchor(editor, anchor);
+    },
+    [editor],
+  );
 
-  const updateStoredLinkRect = useCallback((link: ActiveEditorLink | null): ActiveEditorLink | null => {
-    if (!link) return null;
-    if (link.anchorEl?.isConnected) {
-      return { ...link, rect: link.anchorEl.getBoundingClientRect() };
-    }
-    const fromCoords = editor?.view.coordsAtPos(link.from);
-    const toCoords = editor?.view.coordsAtPos(Math.max(link.from + 1, link.to));
-    if (!fromCoords || !toCoords) return link;
-    const left = Math.min(fromCoords.left, toCoords.left);
-    const top = Math.min(fromCoords.top, toCoords.top);
-    const right = Math.max(fromCoords.right, toCoords.right);
-    const bottom = Math.max(fromCoords.bottom, toCoords.bottom);
-    return {
-      ...link,
-      rect: new DOMRect(left, top, Math.max(1, right - left), Math.max(1, bottom - top)),
-    };
-  }, [editor]);
+  const updateStoredLinkRect = useCallback(
+    (link: ActiveEditorLink | null): ActiveEditorLink | null => {
+      if (!link) return null;
+      if (link.anchorEl?.isConnected) {
+        return { ...link, rect: link.anchorEl.getBoundingClientRect() };
+      }
+      const fromCoords = editor?.view.coordsAtPos(link.from);
+      const toCoords = editor?.view.coordsAtPos(
+        Math.max(link.from + 1, link.to),
+      );
+      if (!fromCoords || !toCoords) return link;
+      const left = Math.min(fromCoords.left, toCoords.left);
+      const top = Math.min(fromCoords.top, toCoords.top);
+      const right = Math.max(fromCoords.right, toCoords.right);
+      const bottom = Math.max(fromCoords.bottom, toCoords.bottom);
+      return {
+        ...link,
+        rect: new DOMRect(
+          left,
+          top,
+          Math.max(1, right - left),
+          Math.max(1, bottom - top),
+        ),
+      };
+    },
+    [editor],
+  );
 
   const closeLinkConfigUi = useCallback(() => {
     setLinkConfigOpen(false);
@@ -1042,74 +1403,82 @@ const CommentEditor = ({
     setHoveredLink(null);
   }, []);
 
-  const applyLinkChange = useCallback((payload: {
-    href: string;
-    displayMode: LinkDisplayMode;
-    baseLabel?: string;
-    openEdit?: boolean;
-  }) => {
-    if (!editor || !activeEditorLink) return;
+  const applyLinkChange = useCallback(
+    (payload: {
+      href: string;
+      displayMode: LinkDisplayMode;
+      baseLabel?: string;
+      openEdit?: boolean;
+    }) => {
+      if (!editor || !activeEditorLink) return;
 
-    const normalizedHref = normalizeHttpUrlInput(payload.href) ?? payload.href.trim();
-    if (!normalizedHref) return;
+      const normalizedHref =
+        normalizeHttpUrlInput(payload.href) ?? payload.href.trim();
+      if (!normalizedHref) return;
 
-    let text = payload.baseLabel?.trim() || getLinkLabelText(activeEditorLink.text);
-    if (!text) {
-      text = getInlineTitleFromUrl(normalizedHref);
-    }
+      let text =
+        payload.baseLabel?.trim() || getLinkLabelText(activeEditorLink.text);
+      if (!text) {
+        text = getInlineTitleFromUrl(normalizedHref);
+      }
 
-    if (payload.displayMode === 'card') {
-      text = buildCardLinkText(text, normalizedHref);
-    } else if (payload.displayMode === 'url' && !payload.baseLabel?.trim()) {
-      // [why] URL mode should accept custom display text when provided.
-      text = normalizedHref;
-    }
+      if (payload.displayMode === 'card') {
+        text = buildCardLinkText(text, normalizedHref);
+      } else if (payload.displayMode === 'url' && !payload.baseLabel?.trim()) {
+        // [why] URL mode should accept custom display text when provided.
+        text = normalizedHref;
+      }
 
-    const linkClass = buildLinkClassName(payload.displayMode);
+      const linkClass = buildLinkClassName(payload.displayMode);
 
-    const attrs = {
-      href: normalizedHref,
-      target: '_blank',
-      rel: 'noopener noreferrer',
-      class: linkClass,
-      title: buildLinkModeTitle(payload.displayMode),
-    };
+      const attrs = {
+        href: normalizedHref,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        class: linkClass,
+        title: buildLinkModeTitle(payload.displayMode),
+      };
 
-    editor
-      .chain()
-      .focus()
-      .insertContentAt(
-        { from: activeEditorLink.from, to: activeEditorLink.to },
-        {
-          type: 'text',
-          text,
-          marks: [{ type: 'link', attrs }],
-        },
-      )
-      .setTextSelection(activeEditorLink.from + text.length)
-      .run();
+      editor
+        .chain()
+        .focus()
+        .insertContentAt(
+          { from: activeEditorLink.from, to: activeEditorLink.to },
+          {
+            type: 'text',
+            text,
+            marks: [{ type: 'link', attrs }],
+          },
+        )
+        .setTextSelection(activeEditorLink.from + text.length)
+        .run();
 
-    const updatedLink = findActiveLinkFromSelection(editor)
-      ?? (activeEditorLink.anchorEl ? findActiveLinkFromAnchor(editor, activeEditorLink.anchorEl) : null);
-    if (updatedLink) {
-      setActiveEditorLink(updatedLink);
-      setHoveredLink(updatedLink);
-    } else {
-      setActiveEditorLink((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          href: normalizedHref,
-          text,
-          mode: payload.displayMode,
-        };
-      });
-    }
+      const updatedLink =
+        findActiveLinkFromSelection(editor) ??
+        (activeEditorLink.anchorEl
+          ? findActiveLinkFromAnchor(editor, activeEditorLink.anchorEl)
+          : null);
+      if (updatedLink) {
+        setActiveEditorLink(updatedLink);
+        setHoveredLink(updatedLink);
+      } else {
+        setActiveEditorLink((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            href: normalizedHref,
+            text,
+            mode: payload.displayMode,
+          };
+        });
+      }
 
-    if (!payload.openEdit) {
-      setLinkEditOpen(false);
-    }
-  }, [editor, activeEditorLink]);
+      if (!payload.openEdit) {
+        setLinkEditOpen(false);
+      }
+    },
+    [editor, activeEditorLink],
+  );
 
   const commitLinkEdit = useCallback(() => {
     if (!activeEditorLink) return;
@@ -1124,19 +1493,25 @@ const CommentEditor = ({
     setLinkEditOpen(false);
   }, [activeEditorLink, applyLinkChange, linkEditUrl, linkEditText]);
 
-  const linkOverlayTarget = (linkConfigOpen ? activeEditorLink : hoveredLink) ?? null;
+  const linkOverlayTarget =
+    (linkConfigOpen ? activeEditorLink : hoveredLink) ?? null;
   const linkOverlayPosition = (() => {
     if (!linkOverlayTarget) return null;
     const container = editorScrollRef.current;
     if (!container) return null;
     const containerRect = container.getBoundingClientRect();
-    const left = Math.max(8, Math.min(
-      linkOverlayTarget.rect.right - containerRect.left - 12,
-      containerRect.width - 32,
-    ));
+    const left = Math.max(
+      8,
+      Math.min(
+        linkOverlayTarget.rect.right - containerRect.left - 12,
+        containerRect.width - 32,
+      ),
+    );
     const iconSize = 24;
-    const centeredTop = linkOverlayTarget.rect.top - containerRect.top
-      + ((linkOverlayTarget.rect.height - iconSize) / 2);
+    const centeredTop =
+      linkOverlayTarget.rect.top -
+      containerRect.top +
+      (linkOverlayTarget.rect.height - iconSize) / 2;
     const top = Math.max(6, centeredTop);
     return { left, top };
   })();
@@ -1148,17 +1523,21 @@ const CommentEditor = ({
     const containerRect = container.getBoundingClientRect();
     const toolbarHeight = 40;
     const gap = 10;
-    const left = Math.max(8, Math.min(
-      activeEditorLink.rect.left - containerRect.left,
-      containerRect.width - 296,
-    ));
+    const left = Math.max(
+      8,
+      Math.min(
+        activeEditorLink.rect.left - containerRect.left,
+        containerRect.width - 296,
+      ),
+    );
 
     const linkTop = activeEditorLink.rect.top - containerRect.top;
     const linkBottom = activeEditorLink.rect.bottom - containerRect.top;
     const belowTop = linkBottom + gap;
     const aboveTop = linkTop - toolbarHeight - gap;
 
-    const canPlaceBelow = belowTop + toolbarHeight <= container.clientHeight - 8;
+    const canPlaceBelow =
+      belowTop + toolbarHeight <= container.clientHeight - 8;
     const canPlaceAbove = aboveTop >= 8;
 
     let top = belowTop;
@@ -1170,7 +1549,10 @@ const CommentEditor = ({
       top = spaceAbove > spaceBelow ? aboveTop : belowTop;
     }
 
-    top = Math.max(8, Math.min(top, container.clientHeight - toolbarHeight - 8));
+    top = Math.max(
+      8,
+      Math.min(top, container.clientHeight - toolbarHeight - 8),
+    );
     return { left, top };
   })();
 
@@ -1180,7 +1562,10 @@ const CommentEditor = ({
       const target = event.target as Node | null;
       if (!target) return;
 
-      if (linkConfigRef.current?.contains(target) || linkEditRef.current?.contains(target)) {
+      if (
+        linkConfigRef.current?.contains(target) ||
+        linkEditRef.current?.contains(target)
+      ) {
         return;
       }
 
@@ -1205,10 +1590,15 @@ const CommentEditor = ({
     };
   }, [updateStoredLinkRect]);
 
-  const currentMarkdown = editor ? buildCommentMarkdown(editor, cardAttachmentsRef.current) : '';
+  const currentMarkdown = editor
+    ? buildCommentMarkdown(editor, cardAttachmentsRef.current)
+    : '';
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2" data-upload-drop-exclude="true">
+    <div
+      className="flex w-full min-w-0 flex-col gap-2"
+      data-upload-drop-exclude="true"
+    >
       {/* Hidden file input for attachment upload */}
       <input
         ref={fileInputRef}
@@ -1221,7 +1611,7 @@ const CommentEditor = ({
       />
 
       {/* Draft recovery banner — shown when a draft was restored from local/server storage */}
-      {restoredDraft && draftStatus !== 'idle' && (
+      {shouldRestoreDraft && restoredDraft && draftStatus !== 'idle' && (
         <div
           data-testid="comment-draft-recovery-banner"
           className="flex items-center justify-between rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300"
@@ -1252,7 +1642,9 @@ const CommentEditor = ({
           <OneLineToolbar
             editor={editor}
             overflowOpen={overflowOpen}
-            onToggleOverflow={() => { setOverflowOpen((o) => !o); }}
+            onToggleOverflow={() => {
+              setOverflowOpen((o) => !o);
+            }}
             linkPopoverOpen={linkPopoverOpen}
             onToggleLinkPopover={() => {
               setAssetPickerOpen(false);
@@ -1264,7 +1656,9 @@ const CommentEditor = ({
           {linkPopoverOpen && (
             <LinkInsertPopover
               editor={editor}
-              onClose={() => { setLinkPopoverOpen(false); }}
+              onClose={() => {
+                setLinkPopoverOpen(false);
+              }}
             />
           )}
           {assetPickerOpen && cardId && (
@@ -1272,7 +1666,9 @@ const CommentEditor = ({
               attachments={cardAttachments}
               onUploadNew={() => fileInputRef.current?.click()}
               onInsert={handleInsertExisting}
-              onClose={() => { setAssetPickerOpen(false); }}
+              onClose={() => {
+                setAssetPickerOpen(false);
+              }}
             />
           )}
         </div>
@@ -1328,10 +1724,13 @@ const CommentEditor = ({
           {linkOverlayPosition && linkOverlayTarget && !linkEditOpen && (
             <button
               type="button"
-              aria-label="Configure link"
-              title="Configure link"
+              aria-label={translations['comment.link.displayFullUrlAria']}
+              title={translations['comment.link.displayFullUrlTitle']}
               className="absolute z-30 inline-flex h-6 w-6 items-center justify-center rounded-md border border-border bg-bg-base text-muted shadow-sm hover:text-base"
-              style={{ left: linkOverlayPosition.left, top: linkOverlayPosition.top }}
+              style={{
+                left: linkOverlayPosition.left,
+                top: linkOverlayPosition.top,
+              }}
               onMouseDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1347,7 +1746,10 @@ const CommentEditor = ({
                 setLinkEditOpen(false);
               }}
             >
-              <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              <AdjustmentsHorizontalIcon
+                className="h-3.5 w-3.5"
+                aria-hidden="true"
+              />
             </button>
           )}
 
@@ -1355,7 +1757,10 @@ const CommentEditor = ({
             <div
               ref={linkConfigRef}
               className="absolute z-40 flex h-10 items-center gap-1 rounded-lg border border-border bg-bg-base px-1.5 shadow-2xl"
-              style={{ left: linkConfigPosition.left, top: linkConfigPosition.top }}
+              style={{
+                left: linkConfigPosition.left,
+                top: linkConfigPosition.top,
+              }}
               onMouseDown={(event) => {
                 event.stopPropagation();
               }}
@@ -1367,7 +1772,10 @@ const CommentEditor = ({
                   aria-label="Display full URL"
                   className={`inline-flex h-7 w-7 items-center justify-center rounded-md ${activeEditorLink.mode === 'url' ? 'bg-indigo-600 text-inverse' : 'text-muted hover:bg-bg-base hover:text-base'}`}
                   onClick={() => {
-                    applyLinkChange({ href: activeEditorLink.href, displayMode: 'url' });
+                    applyLinkChange({
+                      href: activeEditorLink.href,
+                      displayMode: 'url',
+                    });
                   }}
                 >
                   <MinusIcon className="h-4 w-4" aria-hidden="true" />
@@ -1375,7 +1783,7 @@ const CommentEditor = ({
                 <button
                   type="button"
                   title="Display as button"
-                  aria-label="Display as button"
+                  aria-label={translations['comment.link.displayAsButtonAria']}
                   className={`inline-flex h-7 w-7 items-center justify-center rounded-md ${activeEditorLink.mode === 'button' ? 'bg-indigo-600 text-inverse' : 'text-muted hover:bg-bg-base hover:text-base'}`}
                   onClick={() => {
                     applyLinkChange({
@@ -1390,13 +1798,15 @@ const CommentEditor = ({
                 <button
                   type="button"
                   title="Display as card"
-                  aria-label="Display as card"
+                  aria-label={translations['comment.link.displayAsCardAria']}
                   className={`inline-flex h-7 w-7 items-center justify-center rounded-md ${activeEditorLink.mode === 'card' ? 'bg-indigo-600 text-inverse' : 'text-muted hover:bg-bg-base hover:text-base'}`}
                   onClick={() => {
                     applyLinkChange({
                       href: activeEditorLink.href,
                       displayMode: 'card',
-                      baseLabel: getLinkLabelText(activeEditorLink.text) || getInlineTitleFromUrl(activeEditorLink.href),
+                      baseLabel:
+                        getLinkLabelText(activeEditorLink.text) ||
+                        getInlineTitleFromUrl(activeEditorLink.href),
                     });
                   }}
                 >
@@ -1422,20 +1832,25 @@ const CommentEditor = ({
               <button
                 type="button"
                 title="Open Link In New Tab"
-                aria-label="Open Link In New Tab"
+                aria-label={translations['comment.link.openInNewTabAria']}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-bg-overlay hover:text-base"
                 onClick={() => {
-                  const normalized = normalizeHttpUrlInput(activeEditorLink.href) ?? activeEditorLink.href;
+                  const normalized =
+                    normalizeHttpUrlInput(activeEditorLink.href) ??
+                    activeEditorLink.href;
                   window.open(normalized, '_blank', 'noopener,noreferrer');
                 }}
               >
-                <ArrowTopRightOnSquareIcon className="h-4 w-4" aria-hidden="true" />
+                <ArrowTopRightOnSquareIcon
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                />
               </button>
 
               <button
                 type="button"
                 title="Copy link"
-                aria-label="Copy link"
+                aria-label={translations['comment.link.copyAria']}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-bg-overlay hover:text-base"
                 onClick={() => {
                   void navigator.clipboard.writeText(activeEditorLink.href);
@@ -1447,14 +1862,17 @@ const CommentEditor = ({
               <button
                 type="button"
                 title="Delete link"
-                aria-label="Delete link"
+                aria-label={translations['comment.link.deleteTitle']}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md text-danger hover:bg-bg-overlay"
                 onClick={() => {
                   if (!editor) return;
                   editor
                     .chain()
                     .focus()
-                    .setTextSelection({ from: activeEditorLink.from, to: activeEditorLink.to })
+                    .setTextSelection({
+                      from: activeEditorLink.from,
+                      to: activeEditorLink.to,
+                    })
                     .unsetLink()
                     .run();
                   closeLinkConfigUi();
@@ -1467,49 +1885,60 @@ const CommentEditor = ({
             </div>
           )}
 
-          {linkConfigOpen && linkEditOpen && activeEditorLink && linkConfigPosition && (
-            <div
-              ref={linkEditRef}
-              className="absolute z-50 w-80 rounded-xl border border-border bg-bg-base p-3 shadow-2xl"
-              style={{
-                left: Math.min(linkConfigPosition.left + 12, Math.max(8, (editorScrollRef.current?.clientWidth ?? 380) - 328)),
-                top: linkConfigPosition.top + 44,
-              }}
-            >
-              <div className="space-y-2">
-                <input
-                  ref={linkEditUrlInputRef}
-                  type="url"
-                  value={linkEditUrl}
-                  onChange={(event) => {
-                    setLinkEditUrl(event.target.value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') return;
-                    event.preventDefault();
-                    commitLinkEdit();
-                  }}
-                  placeholder="Paste or search for link"
-                  className="w-full rounded-md border border-border bg-bg-overlay px-2.5 py-2 text-sm text-base outline-none focus:ring-2 focus:ring-primary"
-                />
-                <input
-                  ref={linkEditTextInputRef}
-                  type="text"
-                  value={linkEditText}
-                  onChange={(event) => {
-                    setLinkEditText(event.target.value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') return;
-                    event.preventDefault();
-                    commitLinkEdit();
-                  }}
-                  placeholder="Display text (optional)"
-                  className="w-full rounded-md border border-border bg-bg-overlay px-2.5 py-2 text-sm text-base outline-none focus:ring-2 focus:ring-primary"
-                />
+          {linkConfigOpen &&
+            linkEditOpen &&
+            activeEditorLink &&
+            linkConfigPosition && (
+              <div
+                ref={linkEditRef}
+                className="absolute z-50 w-80 rounded-xl border border-border bg-bg-base p-3 shadow-2xl"
+                style={{
+                  left: Math.min(
+                    linkConfigPosition.left + 12,
+                    Math.max(
+                      8,
+                      (editorScrollRef.current?.clientWidth ?? 380) - 328,
+                    ),
+                  ),
+                  top: linkConfigPosition.top + 44,
+                }}
+              >
+                <div className="space-y-2">
+                  <input
+                    ref={linkEditUrlInputRef}
+                    type="url"
+                    value={linkEditUrl}
+                    onChange={(event) => {
+                      setLinkEditUrl(event.target.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      commitLinkEdit();
+                    }}
+                    placeholder={
+                      translations['comment.link.displayTextPlaceholder']
+                    }
+                    className="w-full rounded-md border border-border bg-bg-overlay px-2.5 py-2 text-sm text-base outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <input
+                    ref={linkEditTextInputRef}
+                    type="text"
+                    value={linkEditText}
+                    onChange={(event) => {
+                      setLinkEditText(event.target.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      commitLinkEdit();
+                    }}
+                    placeholder="Display text (optional)"
+                    className="w-full rounded-md border border-border bg-bg-overlay px-2.5 py-2 text-sm text-base outline-none focus:ring-2 focus:ring-primary"
+                  />
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </div>
         {editor && <CardReferenceBubbleMenu editor={editor} />}
 
@@ -1541,16 +1970,22 @@ const CommentEditor = ({
           {draftStatus === 'sync_failed' ? (
             <>
               <span className="text-danger">
-                {isSubmitPending ? translations['comment.draft.postFailed'] : translations['comment.draft.syncFailed']}
+                {isSubmitPending
+                  ? translations['comment.draft.postFailed']
+                  : translations['comment.draft.syncFailed']}
               </span>
               <button
                 type="button"
                 className="text-indigo-400 hover:text-indigo-300 underline transition-colors"
-                onClick={() => { retrySync(currentMarkdown); }}
+                onClick={() => {
+                  retrySync(currentMarkdown);
+                }}
                 data-testid="comment-draft-retry-sync"
               >
                 {/* [why] "Retry Post" clarifies the user's pending action vs a background sync retry */}
-                {isSubmitPending ? translations['comment.draft.retryPost'] : translations['comment.draft.retry']}
+                {isSubmitPending
+                  ? translations['comment.draft.retryPost']
+                  : translations['comment.draft.retry']}
               </button>
               <button
                 type="button"
@@ -1575,7 +2010,7 @@ const CommentEditor = ({
         <Button
           variant="primary"
           size="sm"
-          onClick={() => { void handleSubmit(); }}
+          onClick={handleSubmit}
           disabled={submitting}
         >
           {submitting ? translations['comment.editor.submitting'] : submitLabel}

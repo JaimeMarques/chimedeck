@@ -4,7 +4,9 @@
 // Respects notification preferences — skips insertion and WS publish when
 // in_app_enabled is false for the recipient (opt-out model).
 // Also dispatches mention email notifications (fire-and-forget) after in-app creation.
+import { randomUUID } from 'crypto';
 import { db } from '../../../common/db';
+import { buildMentionWebhookPayload, type MentionWebhookPayload } from './mentionWebhookContext';
 import { publishToUser } from '../../realtime/userChannel';
 import { buildAvatarProxyUrl } from '../../../common/avatar/resolveAvatarUrl';
 import { preferenceGuard } from './preferenceGuard';
@@ -14,33 +16,8 @@ import { dispatchNotificationEmail } from './emailDispatch';
 import { env } from '../../../config/env';
 import { getActiveWebhooksForEvent } from '../../webhooks/mods/registry';
 import { dispatchWebhook } from '../../webhooks/mods/dispatch';
-import { buildMentionWebhookPayload, type MentionWebhookPayload } from './mentionWebhookContext';
 import type { Knex } from 'knex';
 import { canUserReceiveBoardWebhook, type BoardAccessRow } from '../../board/access';
-
-// [why] narrow shape of the `notifications` row actually consumed here (db/migrations/0017_notifications.ts),
-// avoiding an implicit `any` from the untyped Knex insert result.
-interface NotificationRow {
-  id: string;
-  user_id: string;
-  type: string;
-  source_type: string;
-  source_id: string;
-  card_id: string | null;
-  board_id: string | null;
-  actor_id: string;
-  read: boolean;
-  created_at: string;
-}
-
-// [why] narrow shape of the `users` row actually selected here (db/migrations/0002_auth.ts,
-// 0015_user_profile.ts) — id/nickname/name/avatar_url are the only fields projected.
-interface ActorRow {
-  id: string;
-  nickname: string | null;
-  name: string | null;
-  avatar_url: string | null;
-}
 
 // [why] extracted to keep createNotificationsForMentions within the cognitive complexity limit.
 async function fireMentionWebhooks({ payload }: { payload: MentionWebhookPayload }): Promise<void> {
@@ -126,19 +103,32 @@ async function notifyMentionedUser({
   }
   if (!inAppEnabled) return;
 
-  const [inserted] = await trx<NotificationRow>('notifications')
-    .insert({
-      user_id: userId,
-      type: 'mention',
-      source_type: sourceType,
-      source_id: sourceId,
-      card_id: cardId,
-      board_id: boardId,
-      actor_id: actorId,
-      read: false,
-      created_at: now,
-    })
-    .returning<NotificationRow[]>('*');
+  // [why] 20260616_notifications_unique_constraint guards (user_id, type, source_type,
+  // source_id). Duplicates can arrive via concurrent same-source edits (two saves of the
+  // same description touching the same mention). In PostgreSQL, catching a 23505 in JS
+  // would NOT save the caller's transaction — the error aborts the PG transaction itself.
+  // ON CONFLICT DO NOTHING avoids raising the error at all: a losing concurrent insert
+  // simply returns no rows, and we treat that as already-notified (no publish, no email).
+  const insertedRows = await trx('notifications')
+    .insert(
+      {
+        user_id: userId,
+        type: 'mention',
+        source_type: sourceType,
+        source_id: sourceId,
+        card_id: cardId,
+        board_id: boardId,
+        actor_id: actorId,
+        read: false,
+        created_at: now,
+      },
+      ['*']
+    )
+    .onConflict(['user_id', 'type', 'source_type', 'source_id'])
+    .ignore();
+
+  const [inserted] = insertedRows;
+  if (!inserted) return;
 
   await publishToUser(userId, {
     type: 'notification_created',
@@ -190,8 +180,8 @@ export async function createNotificationsForMentions({
   // Fetch actor details once for the WS payload (read-only, outside transaction is fine)
   const actor = await db('users')
     .where({ id: actorId })
-    .select('id', 'nickname', db.raw("COALESCE(name, email) as name"), 'avatar_url')
-    .first<ActorRow | undefined>();
+    .select('id', 'nickname', db.raw('COALESCE(name, email) as name'), 'avatar_url')
+    .first();
 
   const actorPayload = actor
     ? {
@@ -222,24 +212,15 @@ export async function createNotificationsForMentions({
   // Fire-and-forget mention webhook — dispatched once per mention event (not per recipient).
   // [why] webhook subscribers receive the full mention context rather than a per-user notification.
   if (env.WEBHOOKS_ENABLED) {
-    // [why] enrich the mention webhook with stable, backward-compatible context
-    //       built from data already fetched above — no extra DB round-trips.
+    // Mint once per logical emission; webhook transport retries retain this ID.
     const payload = buildMentionWebhookPayload({
-      boardId,
-      cardId,
-      sourceType,
-      sourceId,
-      actorId,
-      recipients,
-      cardTitle,
-      boardName,
-      sourceText,
-      actor: actorPayload as Record<string, unknown>,
+      boardId, cardId, sourceType, sourceId, actorId, recipients, cardTitle,
+      boardName, sourceText, actor: actorPayload, eventId: randomUUID(),
     });
-    fireMentionWebhooks({
-      payload,
-    }).catch(() => {
-      // Webhook errors must never propagate to the caller.
-    });
+    fireMentionWebhooks({ payload }).catch(
+      () => {
+        // Webhook errors must never propagate to the caller.
+      }
+    );
   }
 }

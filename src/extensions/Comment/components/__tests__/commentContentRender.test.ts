@@ -182,6 +182,7 @@ const imageAttachment = {
   name: 'screenshot.png',
   alias: null,
   type: 'FILE',
+  position: null,
   status: 'READY',
   key: 'uploads/screenshot.png',
   thumbnail_key: 'uploads/thumbs/screenshot.png',

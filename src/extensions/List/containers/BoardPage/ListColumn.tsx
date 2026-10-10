@@ -107,30 +107,40 @@ const SortableListColumn = ({
   showLockedTransitionIndicator = false,
 }: Props) => {
   const [addingCard, setAddingCard] = useState(false);
-  const storeHydration = useAppSelector((state) => state.board.listHydration[list.id]);
+  const storeHydration = useAppSelector(
+    (state) => state.board.listHydration[list.id],
+  );
   const effectiveHydration = hydration ?? storeHydration;
   // WHY: stable noop so CardItem (memo'd) doesn't re-render when onToggleLabels
   // is not provided. An inline `() => {}` creates a new reference every render.
   const noopRef = useRef(() => {});
-  const stableToggleLabels = useCallback(
-    onToggleLabels ?? noopRef.current,
-    [onToggleLabels],
+  const stableToggleLabels = useCallback(onToggleLabels ?? noopRef.current, [
+    onToggleLabels,
+  ]);
+  const handleRename = useCallback(
+    (title: string) => {
+      onRename(list.id, title);
+    },
+    [list.id, onRename],
   );
-  const handleRename = useCallback((title: string) => {
-    onRename(list.id, title);
-  }, [list.id, onRename]);
   const handleOpenAddCard = useCallback(() => {
     setAddingCard(true);
   }, []);
   const handleCopyList = useCallback(() => {
     onCopyList(list.id);
   }, [list.id, onCopyList]);
-  const handleMoveList = useCallback((targetIndex: number) => {
-    onMoveList(list.id, targetIndex);
-  }, [list.id, onMoveList]);
-  const handleMoveAllCards = useCallback((targetListId: string) => {
-    onMoveAllCards(list.id, targetListId);
-  }, [list.id, onMoveAllCards]);
+  const handleMoveList = useCallback(
+    (targetIndex: number) => {
+      onMoveList(list.id, targetIndex);
+    },
+    [list.id, onMoveList],
+  );
+  const handleMoveAllCards = useCallback(
+    (targetListId: string) => {
+      onMoveAllCards(list.id, targetListId);
+    },
+    [list.id, onMoveAllCards],
+  );
   const handleArchive = useCallback(() => {
     onArchive(list.id);
   }, [list.id, onArchive]);
@@ -140,12 +150,18 @@ const SortableListColumn = ({
   const handleDelete = useCallback(() => {
     onDelete(list.id);
   }, [list.id, onDelete]);
-  const handleChangeListColor = useCallback((color: string | null) => {
-    onChangeListColor(list.id, color);
-  }, [list.id, onChangeListColor]);
-  const handleSortBy = useCallback((sortBy: ListSortBy) => {
-    onSortBy(list.id, sortBy);
-  }, [list.id, onSortBy]);
+  const handleChangeListColor = useCallback(
+    (color: string | null) => {
+      onChangeListColor(list.id, color);
+    },
+    [list.id, onChangeListColor],
+  );
+  const handleSortBy = useCallback(
+    (sortBy: ListSortBy) => {
+      onSortBy(list.id, sortBy);
+    },
+    [list.id, onSortBy],
+  );
   const handleToggleCollapsed = useCallback(() => {
     if (!onToggleCollapsed) return;
     onToggleCollapsed(list.id);
@@ -159,7 +175,9 @@ const SortableListColumn = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: list.id });
+  } = useSortable({
+    id: list.id,
+  });
 
   const listTextTone = useMemo(() => getListTextTone(listColor), [listColor]);
   const listTextColor = listTextTone === 'light' ? '#FFFFFF' : '#111111';
@@ -168,12 +186,22 @@ const SortableListColumn = ({
       transform: CSS.Transform.toString(transform),
       transition,
       opacity: isDragging ? 0.5 : 1,
-      contentVisibility: 'auto',
-      contain: 'layout paint style',
-      containIntrinsicSize: 'auto 1px auto 640px',
-      ...(listColor ? { backgroundColor: listColor, color: listTextColor } : {}),
+      // Keep style containment only so header flyout menus can stack above sibling columns.
+      contain: 'style',
+      ...(listColor
+        ? { backgroundColor: listColor, color: listTextColor }
+        : {}),
     }),
-    [transform?.x, transform?.y, transform?.scaleX, transform?.scaleY, transition, isDragging, listColor, listTextColor],
+    [
+      transform?.x,
+      transform?.y,
+      transform?.scaleX,
+      transform?.scaleY,
+      transition,
+      isDragging,
+      listColor,
+      listTextColor,
+    ],
   );
   const columnSurfaceClass = (() => {
     if (listColor) return '';
@@ -195,7 +223,8 @@ const SortableListColumn = ({
   // so dnd-kit can animate sibling displacement (clear push/drop indicator).
   // In placeholder mode we remove it to avoid rendering a double gap.
   const usePlaceholderMode =
-    typeof dragPlaceholderIndex === 'number' && Number.isFinite(dragPlaceholderIndex);
+    typeof dragPlaceholderIndex === 'number' &&
+    Number.isFinite(dragPlaceholderIndex);
   const columnBorderClass = getKanbanColumnBorderClass({
     isForbiddenDropTarget,
     usesDragPlaceholder: usePlaceholderMode,
@@ -207,18 +236,25 @@ const SortableListColumn = ({
     return filtered.length === cardIds.length ? cardIds : filtered;
   }, [activeDragCardId, cardIds, usePlaceholderMode]);
   const listCardObjects = useMemo(
-    () => visibleCardIds
-      .map((id) => cards[id])
-      .filter((c): c is Card => c !== undefined),
+    () =>
+      visibleCardIds
+        .map((id) => cards[id])
+        .filter((c): c is Card => c !== undefined),
     [visibleCardIds, cards],
   );
   const resolvedPlaceholderHeight =
-    typeof dragPlaceholderHeight === 'number' && Number.isFinite(dragPlaceholderHeight) && dragPlaceholderHeight >= 24
+    typeof dragPlaceholderHeight === 'number' &&
+    Number.isFinite(dragPlaceholderHeight) &&
+    dragPlaceholderHeight >= 24
       ? dragPlaceholderHeight
       : 72;
   const normalizedPlaceholderIndex =
-    typeof dragPlaceholderIndex === 'number' && Number.isFinite(dragPlaceholderIndex)
-      ? Math.max(0, Math.min(Math.floor(dragPlaceholderIndex), listCardObjects.length))
+    typeof dragPlaceholderIndex === 'number' &&
+    Number.isFinite(dragPlaceholderIndex)
+      ? Math.max(
+          0,
+          Math.min(Math.floor(dragPlaceholderIndex), listCardObjects.length),
+        )
       : null;
 
   const placeholderNode = (
@@ -234,12 +270,16 @@ const SortableListColumn = ({
       ref={setNodeRef}
       id={`board-list-${list.id}`}
       style={style}
-      className={`${isCollapsed ? 'w-14 self-start' : 'w-72 max-h-full'} shrink-0 border rounded-xl flex flex-col ${columnBorderClass} ${columnSurfaceClass}`}
+      className={`${isCollapsed ? 'w-14 self-start' : 'w-72 max-h-full'} relative z-0 shrink-0 border rounded-xl flex flex-col hover:z-40 focus-within:z-40 ${columnBorderClass} ${columnSurfaceClass}`}
       role="listitem"
       aria-label={`List: ${list.title}`}
     >
       {/* Drag handle is the list header */}
-      <div {...attributes} {...listeners} className="relative z-20 shrink-0 cursor-grab active:cursor-grabbing">
+      <div
+        {...attributes}
+        {...listeners}
+        className="relative z-20 shrink-0 cursor-grab active:cursor-grabbing"
+      >
         <ListHeader
           list={list}
           listColor={listColor}
@@ -269,7 +309,11 @@ const SortableListColumn = ({
           <div
             data-dnd-list-scroll-container="true"
             className="scrollbar-contrast relative z-0 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-2"
-            style={{ contentVisibility: 'auto', contain: 'layout paint style', containIntrinsicSize: 'auto 1px auto 900px' }}
+            style={{
+              contentVisibility: 'auto',
+              contain: 'layout paint style',
+              containIntrinsicSize: 'auto 1px auto 900px',
+            }}
           >
             {listCardObjects.map((card, idx) => (
               <Fragment key={card.id}>
@@ -283,38 +327,53 @@ const SortableListColumn = ({
                   labelsExpanded={labelsExpanded ?? false}
                   onToggleLabels={stableToggleLabels}
                   {...(onCardClick ? { onClick: onCardClick } : {})}
-                  unreadNotificationCount={unreadNotificationCountByCardId?.[card.id] ?? 0}
-                  {...(customFieldValuesMap !== null && customFieldValuesMap !== undefined ? { customFieldValues: customFieldValuesMap[card.id] ?? EMPTY_CUSTOM_FIELD_VALUES } : {})}
+                  unreadNotificationCount={
+                    unreadNotificationCountByCardId?.[card.id] ?? 0
+                  }
+                  {...(customFieldValuesMap !== null &&
+                  customFieldValuesMap !== undefined
+                    ? {
+                        customFieldValues:
+                          customFieldValuesMap[card.id] ??
+                          EMPTY_CUSTOM_FIELD_VALUES,
+                      }
+                    : {})}
                 />
               </Fragment>
             ))}
-            {normalizedPlaceholderIndex === listCardObjects.length && placeholderNode}
+            {normalizedPlaceholderIndex === listCardObjects.length &&
+              placeholderNode}
           </div>
 
           {/* Add card footer — hidden for VIEWER guests */}
           <div className="shrink-0 px-1 pb-2">
             {effectiveHydration?.loading && (
-              <p className={`mb-2 px-2 text-xs ${loadingTextClass}`}>Loading more cards...</p>
+              <p className={`mb-2 px-2 text-xs ${loadingTextClass}`}>
+                Loading more cards...
+              </p>
             )}
-            {!isViewerGuest && (addingCard ? (
-              <AddCardForm
-                listId={list.id}
-                onSubmit={async (listId, title) => {
-                  await onAddCard(listId, title);
-                  setAddingCard(false);
-                }}
-                onCancel={() => { setAddingCard(false); }}
-              />
-            ) : (
-              <Button
-                variant="ghost"
-                className={`w-full justify-start rounded-lg px-2 py-1.5 text-sm ${addCardButtonToneClass}`}
-                onClick={handleOpenAddCard}
-                aria-label={`Add a card to ${list.title}`}
-              >
-                + Add a card
-              </Button>
-            ))}
+            {!isViewerGuest &&
+              (addingCard ? (
+                <AddCardForm
+                  listId={list.id}
+                  onSubmit={async (listId, title) => {
+                    await onAddCard(listId, title);
+                    setAddingCard(false);
+                  }}
+                  onCancel={() => {
+                    setAddingCard(false);
+                  }}
+                />
+              ) : (
+                <Button
+                  variant="ghost"
+                  className={`w-full justify-start rounded-lg px-2 py-1.5 text-sm ${addCardButtonToneClass}`}
+                  onClick={handleOpenAddCard}
+                  aria-label={`Add a card to ${list.title}`}
+                >
+                  + Add a card
+                </Button>
+              ))}
           </div>
         </>
       )}
@@ -328,51 +387,55 @@ function areEqual(prev: Props, next: Props): boolean {
   if (prev.list !== next.list) return false;
 
   const prevUsesPlaceholderMode =
-    typeof prev.dragPlaceholderIndex === 'number' && Number.isFinite(prev.dragPlaceholderIndex);
+    typeof prev.dragPlaceholderIndex === 'number' &&
+    Number.isFinite(prev.dragPlaceholderIndex);
   const nextUsesPlaceholderMode =
-    typeof next.dragPlaceholderIndex === 'number' && Number.isFinite(next.dragPlaceholderIndex);
-  const shouldCompareActiveDragCardId = prevUsesPlaceholderMode || nextUsesPlaceholderMode;
+    typeof next.dragPlaceholderIndex === 'number' &&
+    Number.isFinite(next.dragPlaceholderIndex);
+  const shouldCompareActiveDragCardId =
+    prevUsesPlaceholderMode || nextUsesPlaceholderMode;
 
   const hasSameNonCardProps =
-    prev.dragPlaceholderIndex === next.dragPlaceholderIndex
-    && prev.dragPlaceholderHeight === next.dragPlaceholderHeight
-    && (!shouldCompareActiveDragCardId || prev.activeDragCardId === next.activeDragCardId)
-    && prev.hydration?.loading === next.hydration?.loading
-    && prev.hydration?.error === next.hydration?.error
-    && prev.boardId === next.boardId
-    && prev.boardTitle === next.boardTitle
-    && prev.currentUserId === next.currentUserId
-    && prev.onRename === next.onRename
-    && prev.onCopyList === next.onCopyList
-    && prev.onMoveList === next.onMoveList
-    && prev.onMoveAllCards === next.onMoveAllCards
-    && prev.onArchive === next.onArchive
-    && prev.onArchiveAllCards === next.onArchiveAllCards
-    && prev.onDelete === next.onDelete
-    && prev.onChangeListColor === next.onChangeListColor
-    && prev.onSortBy === next.onSortBy
-    && prev.onAddCard === next.onAddCard
-    && prev.isCollapsed === next.isCollapsed
-    && prev.onToggleCollapsed === next.onToggleCollapsed
-    && prev.onCardClick === next.onCardClick
-    && prev.labelsExpanded === next.labelsExpanded
-    && prev.onToggleLabels === next.onToggleLabels
-    && prev.customFieldValuesMap === next.customFieldValuesMap
-    && prev.unreadNotificationCountByCardId === next.unreadNotificationCountByCardId
-    && prev.listColor === next.listColor
-    && prev.availableLists === next.availableLists
-    && prev.isViewerGuest === next.isViewerGuest
-    && prev.hasBackground === next.hasBackground
-    && prev.isForbiddenDropTarget === next.isForbiddenDropTarget
-    && prev.showLockedTransitionIndicator === next.showLockedTransitionIndicator;
+    prev.dragPlaceholderIndex === next.dragPlaceholderIndex &&
+    prev.dragPlaceholderHeight === next.dragPlaceholderHeight &&
+    (!shouldCompareActiveDragCardId ||
+      prev.activeDragCardId === next.activeDragCardId) &&
+    prev.hydration?.loading === next.hydration?.loading &&
+    prev.hydration?.error === next.hydration?.error &&
+    prev.boardId === next.boardId &&
+    prev.boardTitle === next.boardTitle &&
+    prev.currentUserId === next.currentUserId &&
+    prev.onRename === next.onRename &&
+    prev.onCopyList === next.onCopyList &&
+    prev.onMoveList === next.onMoveList &&
+    prev.onMoveAllCards === next.onMoveAllCards &&
+    prev.onArchive === next.onArchive &&
+    prev.onArchiveAllCards === next.onArchiveAllCards &&
+    prev.onDelete === next.onDelete &&
+    prev.onChangeListColor === next.onChangeListColor &&
+    prev.onSortBy === next.onSortBy &&
+    prev.onAddCard === next.onAddCard &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.onToggleCollapsed === next.onToggleCollapsed &&
+    prev.onCardClick === next.onCardClick &&
+    prev.labelsExpanded === next.labelsExpanded &&
+    prev.onToggleLabels === next.onToggleLabels &&
+    prev.customFieldValuesMap === next.customFieldValuesMap &&
+    prev.unreadNotificationCountByCardId ===
+      next.unreadNotificationCountByCardId &&
+    prev.listColor === next.listColor &&
+    prev.availableLists === next.availableLists &&
+    prev.isViewerGuest === next.isViewerGuest &&
+    prev.hasBackground === next.hasBackground &&
+    prev.isForbiddenDropTarget === next.isForbiddenDropTarget &&
+    prev.showLockedTransitionIndicator === next.showLockedTransitionIndicator;
 
   if (!hasSameNonCardProps) return false;
 
   if (prev.cardIds.length !== next.cardIds.length) return false;
 
   const hasSameCardsForList =
-    (prev.cardIds === next.cardIds && prev.cards === next.cards)
-    ||
+    (prev.cardIds === next.cardIds && prev.cards === next.cards) ||
     prev.cardIds.every((cardId, index) => {
       if (next.cardIds[index] !== cardId) return false;
       return prev.cards[cardId] === next.cards[cardId];

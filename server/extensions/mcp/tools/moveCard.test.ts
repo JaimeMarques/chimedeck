@@ -23,6 +23,12 @@ let toolDescription = '';
 let handler: ToolHandler | undefined;
 
 const server = {
+  tool: (name: string, description: string, inputSchema: unknown, registeredHandler: ToolHandler) => {
+    toolName = name;
+    toolDescription = description;
+    handler = registeredHandler;
+    void inputSchema;
+  },
   registerTool: (
     name: string,
     config: { description: string; inputSchema: unknown },

@@ -19,43 +19,12 @@ import { dispatchDirectCardNotification } from '../../notifications/mods/boardAc
 import { resolveCardId } from '../../../common/ids/resolveEntityId';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
 
-type CardRow = {
-  id: string;
-  list_id: string;
-  title: string;
-};
-
-type ListRow = {
-  id: string;
-  board_id: string;
-};
-
-type BoardRow = {
-  id: string;
-  workspace_id: string;
-  state: string;
-  title: string;
-};
-
-type CommentRow = {
-  id: string;
-  short_id: string;
-  card_id: string;
-  user_id: string;
-  content: string;
-  idempotency_key: string | null;
-  version: number;
-  deleted: boolean;
-  parent_id: string | null;
-  created_at: string | Date;
-  updated_at: string | Date;
-};
-
-type CommentWithAuthorRow = CommentRow & {
-  author_name: string | null;
-  author_email: string | null;
-  author_avatar_url: string | null;
-};
+function hasNonPersistableMediaUrl(content: string): boolean {
+  return (
+    /\]\((?:<)?(?:blob:|data:|file:)/i.test(content) ||
+    /<img[^>]+src\s*=\s*["'](?:blob:|data:|file:)/i.test(content)
+  );
+}
 
 export async function handleCreateComment(req: Request, cardId: string): Promise<Response> {
   const authError = await authenticate(req as AuthenticatedRequest);
@@ -69,7 +38,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
     );
   }
 
-  const card = await db<CardRow>('cards').where({ id: resolvedCardId }).first();
+  const card = await db('cards').where({ id: resolvedCardId }).first();
   if (!card) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found' } },
@@ -77,8 +46,8 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
     );
   }
 
-  const list = await db<ListRow>('lists').where({ id: card.list_id }).first();
-  const board = list ? await db<BoardRow>('boards').where({ id: list.board_id }).first() : null;
+  const list = await db('lists').where({ id: card.list_id }).first();
+  const board = list ? await db('boards').where({ id: list.board_id }).first() : null;
   if (!board) {
     return Response.json(
       { error: { code: 'board-not-found', message: 'Board not found' } },
@@ -105,7 +74,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
   const roleError = await requireMemberOrBoardGuestMember(scopedReq, board.id);
   if (roleError) return roleError;
 
-  const actorId = (req as AuthenticatedRequest & { currentUser: { id: string } }).currentUser.id;
+  const actorId = (req as AuthenticatedRequest).currentUser!.id;
 
   let body: { content?: string; idempotency_key?: string; parent_id?: string; parentId?: string };
   try {
@@ -143,7 +112,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
       );
     }
     const normalizedParentId = rawParentId.trim();
-    const parentComment = await db<CommentRow>('comments').where({ id: normalizedParentId }).first();
+    const parentComment = await db('comments').where({ id: normalizedParentId }).first();
     if (!parentComment) {
       return Response.json(
         { error: { code: 'comment-not-found', message: 'Parent comment not found' } },
@@ -156,14 +125,14 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
         { status: 400 }
       );
     }
-    if (parentComment.parent_id !== null) {
+    if (parentComment.parent_id !== null && parentComment.parent_id !== undefined) {
       return Response.json(
         { error: { name: 'reply-depth-exceeded', message: 'Replies to replies are not allowed' } },
         { status: 422 }
       );
     }
     parentId = normalizedParentId;
-    replyToUserId = parentComment.user_id;
+    replyToUserId = (parentComment.user_id as string | undefined) ?? null;
   }
 
   // [why] If the client provided an idempotency_key (e.g. during offline replay), check
@@ -177,7 +146,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
       );
     }
 
-    const existing = (await db<CommentRow>('comments')
+    const existing = await db('comments')
       .leftJoin('users', 'comments.user_id', 'users.id')
       .where('comments.user_id', actorId)
       .where('comments.idempotency_key', body.idempotency_key.trim())
@@ -194,12 +163,13 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
         'users.email as author_email',
         'users.avatar_url as author_avatar_url'
       )
-      .first()) as CommentWithAuthorRow | undefined;
+      .first();
 
     if (existing) {
       const authorAvatarUrl = buildAvatarProxyUrl({
         userId: actorId,
-        avatarUrl: existing.author_avatar_url,
+        avatarUrl:
+          ((existing as Record<string, unknown>).author_avatar_url as string | null) ?? null,
       });
       return Response.json(
         { data: { ...existing, author_avatar_url: authorAvatarUrl, images: (await loadCommentImages([existing])).get(existing.id) ?? [] } },
@@ -211,12 +181,24 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
   const id = randomUUID();
   const shortId = await generateUniqueShortId('comments');
   const trimmedContent = sanitizeRichText(body.content.trim());
+  if (hasNonPersistableMediaUrl(trimmedContent)) {
+    return Response.json(
+      {
+        error: {
+          code: 'bad-request',
+          message:
+            'Comment contains a temporary local media URL. Please re-upload the image before saving.',
+        },
+      },
+      { status: 400 }
+    );
+  }
   const idempotencyKey = body.idempotency_key?.trim() ?? null;
   let mentionedUserIds: string[] = [];
 
   try {
   await db.transaction(async (trx) => {
-    await trx<CommentRow>('comments').insert({
+    await trx('comments').insert({
       id,
       short_id: shortId,
       card_id: resolvedCardId,
@@ -261,7 +243,7 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
     throw error;
   }
 
-  const comment = (await db<CommentRow>('comments')
+  const comment = await db('comments')
     .leftJoin('users', 'comments.user_id', 'users.id')
     .where('comments.id', id)
     .select(
@@ -278,18 +260,11 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
       'users.email as author_email',
       'users.avatar_url as author_avatar_url'
     )
-    .first()) as CommentWithAuthorRow | undefined;
-
-  if (!comment) {
-    return Response.json(
-      { error: { code: 'comment-not-found', message: 'Created comment not found' } },
-      { status: 404 }
-    );
-  }
+    .first();
 
   const authorAvatarUrl = buildAvatarProxyUrl({
     userId: actorId,
-    avatarUrl: comment.author_avatar_url,
+    avatarUrl: ((comment as Record<string, unknown>).author_avatar_url as string | null) ?? null,
   });
   const commentData = { ...comment, author_avatar_url: authorAvatarUrl, images: (await loadCommentImages([comment])).get(comment.id) ?? [] };
 
@@ -323,12 +298,15 @@ export async function handleCreateComment(req: Request, cardId: string): Promise
         JSON.stringify({
           type: 'comment_reply_added',
           payload: { card_id: resolvedCardId, parent_comment_id: parentId, reply: commentData },
-        }),
+        })
       )
       .catch(() => {});
   } else {
     publisher
-      .publish(board.id, JSON.stringify({ type: 'comment_added', payload: { comment: commentData } }))
+      .publish(
+        board.id,
+        JSON.stringify({ type: 'comment_added', payload: { comment: commentData } })
+      )
       .catch(() => {});
   }
 

@@ -2,8 +2,21 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { store } from './store';
-import { setTokenGetter, setClearAuthCallback, setCredentialsCallback, setAuthRecoveryCallbacks, renewAccessToken, cancelAuthRecovery, allowAuthRecovery, AuthRecoveryCancelledError } from './common/api/client';
-import { clearAuth, refreshCredentials, setCredentials } from './extensions/Auth/duck/authDuck';
+import {
+  setTokenGetter,
+  setClearAuthCallback,
+  setCredentialsCallback,
+  setAuthRecoveryCallbacks,
+  renewAccessToken,
+  cancelAuthRecovery,
+  allowAuthRecovery,
+  AuthRecoveryCancelledError,
+} from './common/api/client';
+import {
+  clearAuth,
+  refreshCredentials,
+  setCredentials,
+} from './extensions/Auth/duck/authDuck';
 import { socket } from './extensions/Realtime/client/socket';
 import { initSentry } from './common/monitoring/sentryClient';
 import { ErrorBoundary } from './common/monitoring/ErrorBoundary';
@@ -18,7 +31,25 @@ initSentry();
 // Default to dark when no preference is stored.
 const savedTheme = localStorage.getItem('theme');
 const html = document.documentElement;
-html.classList.remove('dark', 'elegant', 'elegant-dark', 'theme-paper', 'theme-nordic', 'theme-archive', 'theme-macintosh', 'theme-obsidian', 'theme-next', 'theme-bauhaus', 'theme-moss', 'theme-vapor', 'theme-cyberpunk', 'theme-the-seven', 'theme-hc-light', 'theme-hc-dark', 'theme-trello');
+html.classList.remove(
+  'dark',
+  'elegant',
+  'elegant-dark',
+  'theme-paper',
+  'theme-nordic',
+  'theme-archive',
+  'theme-macintosh',
+  'theme-obsidian',
+  'theme-next',
+  'theme-bauhaus',
+  'theme-moss',
+  'theme-vapor',
+  'theme-cyberpunk',
+  'theme-the-seven',
+  'theme-hc-light',
+  'theme-hc-dark',
+  'theme-trello',
+);
 if (savedTheme === 'dark') {
   html.classList.add('dark');
 } else if (savedTheme === 'elegant') {
@@ -61,18 +92,27 @@ if (savedTheme === 'dark') {
 // Wire up the API client with store access — done here to avoid circular deps
 // between the client and the store modules
 setTokenGetter(
-  () => (store.getState() as { auth: { accessToken: string | null } }).auth.accessToken
+  () =>
+    (store.getState() as { auth: { accessToken: string | null } }).auth
+      .accessToken,
 );
 setClearAuthCallback(() => store.dispatch(clearAuth()));
 setAuthRecoveryCallbacks({
-  onSuspend: () => { socket.suspendAuthRecovery(); },
+  onSuspend: () => {
+    socket.suspendAuthRecovery();
+  },
   canResume: () => store.getState().auth.status === 'authenticated',
-  onResume: () => { socket.resumeAuthRecovery(); },
+  onResume: () => {
+    socket.resumeAuthRecovery();
+  },
 });
 setCredentialsCallback((credentials) => {
   const user = store.getState().auth.user;
-  if (user && user.id !== credentials.user.id) throw new Error('Session user changed during renewal');
-  store.dispatch(user ? refreshCredentials(credentials) : setCredentials(credentials));
+  if (user && user.id !== credentials.user.id)
+    throw new Error('Session user changed during renewal');
+  store.dispatch(
+    user ? refreshCredentials(credentials) : setCredentials(credentials),
+  );
 });
 let currentToken = store.getState().auth.accessToken;
 let currentAuthStatus = store.getState().auth.status;
@@ -92,8 +132,7 @@ store.subscribe(() => {
     if (nextToken) {
       allowAuthRecovery();
       socket.resumeAuthRecovery();
-    }
-    else {
+    } else {
       cancelAuthRecovery();
       socket.resetRenewalThrottle();
     }
@@ -126,5 +165,5 @@ ReactDOM.createRoot(root).render(
         <App />
       </Provider>
     </ErrorBoundary>
-  </React.StrictMode>
+  </React.StrictMode>,
 );

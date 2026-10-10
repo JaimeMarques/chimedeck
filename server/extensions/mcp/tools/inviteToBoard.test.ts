@@ -23,7 +23,7 @@ const server = {
   registerTool: (
     name: string,
     config: { description: string; inputSchema: Record<string, z.ZodType> },
-    registeredHandler: ToolHandler,
+    registeredHandler: ToolHandler
   ) => {
     toolName = name;
     toolDescription = config.description;
@@ -47,7 +47,9 @@ describe('registerInviteToBoard', () => {
     registerInviteToBoard(server as never, 'token-1');
 
     expect(toolName).toBe('invite_to_board');
-    expect(toolDescription).toBe('Invite a user to a board by email. Requires the token holder to be a board admin.');
+    expect(toolDescription).toBe(
+      'Invite a user to a board by email. Requires the token holder to be a board admin.'
+    );
     expect(handler).toBeDefined();
   });
 
@@ -64,7 +66,11 @@ describe('registerInviteToBoard', () => {
     registerInviteToBoard(server as never, 'token-abc');
     if (!handler) throw new Error('invite_to_board did not register a handler');
 
-    const result = await handler({ boardId: 'board-1', email: 'person@example.com', role: 'member' });
+    const result = await handler({
+      boardId: 'board-1',
+      email: 'person@example.com',
+      role: 'member',
+    });
 
     expect(apiCallMock).toHaveBeenCalledWith({
       method: 'POST',

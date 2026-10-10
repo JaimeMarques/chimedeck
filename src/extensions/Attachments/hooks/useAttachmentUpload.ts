@@ -15,7 +15,7 @@ import type { Attachment, UploadEntry, CompletedPart } from '../types';
 import config from '~/config';
 
 const MULTIPART_THRESHOLD = 5 * 1024 * 1024; // 5 MB
-const PART_SIZE = 5 * 1024 * 1024;           // 5 MB per part
+const PART_SIZE = 5 * 1024 * 1024; // 5 MB per part
 const MAX_CONCURRENT_PARTS = 3;
 
 interface UseAttachmentUploadOptions {
@@ -49,7 +49,7 @@ interface UseAttachmentUploadReturn {
 function singleFileUpload(
   url: string,
   file: File,
-  onProgress: (pct: number) => void,
+  onProgress: (pct: number) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -64,7 +64,7 @@ function singleFileUpload(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
       } else {
-        reject(new Error(`S3 PUT failed: ${String(xhr.status)}`));
+        reject(new Error(`S3 PUT failed: ${xhr.status}`));
       }
     };
     xhr.onerror = () => {
@@ -81,15 +81,12 @@ async function uploadPart(url: string, slice: Blob): Promise<string> {
     body: slice,
     headers: { 'Content-Type': 'application/octet-stream' },
   });
-  if (!res.ok) throw new Error(`Part upload failed: ${String(res.status)}`);
+  if (!res.ok) throw new Error(`Part upload failed: ${res.status}`);
   return res.headers.get('ETag') ?? '';
 }
 
 // Run tasks with limited concurrency.
-async function runConcurrent<T>(
-  tasks: (() => Promise<T>)[],
-  limit: number,
-): Promise<T[]> {
+async function runConcurrent<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
   const results: T[] = new Array(tasks.length);
   let idx = 0;
 
@@ -128,9 +125,7 @@ export function useAttachmentUpload({
   onErrorRef.current = onError;
 
   const updateEntry = useCallback((clientId: string, patch: Partial<UploadEntry>) => {
-    setUploads((prev) =>
-      prev.map((e) => (e.clientId === clientId ? { ...e, ...patch } : e)),
-    );
+    setUploads((prev) => prev.map((e) => (e.clientId === clientId ? { ...e, ...patch } : e)));
   }, []);
 
   const upload = useCallback(
@@ -138,7 +133,10 @@ export function useAttachmentUpload({
       const validFiles = files.filter((file) => {
         if (file.size > config.maxAttachmentSizeBytes) {
           const maxSizeMb = Math.round(config.maxAttachmentSizeBytes / (1024 * 1024));
-          onErrorRef.current?.('', `File "${file.name}" is too large. It must be under ${String(maxSizeMb)}MB.`);
+          onErrorRef.current?.(
+            '',
+            `File "${file.name}" is too large. It must be under ${maxSizeMb}MB.`
+          );
           return false;
         }
         return true;
@@ -166,7 +164,8 @@ export function useAttachmentUpload({
 
       return newEntries.map((e) => e.clientId);
     },
-    [cardId, deferred],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cardId, deferred]
   );
 
   // [why] flush() starts all 'pending' entries (deferred mode) and returns a
@@ -182,6 +181,7 @@ export function useAttachmentUpload({
         void uploadFile(entry);
       }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function notifyFlushComplete() {
@@ -219,11 +219,7 @@ export function useAttachmentUpload({
     }
   }
 
-  async function doSingleUpload(
-    clientId: string,
-    file: File,
-    signal: AbortSignal,
-  ): Promise<void> {
+  async function doSingleUpload(clientId: string, file: File, signal: AbortSignal): Promise<void> {
     updateEntry(clientId, { phase: 'requesting-url' });
 
     const { data: urlData } = await requestUploadUrl({
@@ -278,7 +274,7 @@ export function useAttachmentUpload({
   async function doMultipartUpload(
     clientId: string,
     file: File,
-    signal: AbortSignal,
+    signal: AbortSignal
   ): Promise<void> {
     updateEntry(clientId, { phase: 'requesting-url' });
 
@@ -318,7 +314,7 @@ export function useAttachmentUpload({
         if (!signal.aborted) updateEntry(clientId, { phase: 'uploading', progress: pct });
 
         return { partNumber, etag };
-      },
+      }
     );
 
     updateEntry(clientId, { phase: 'uploading', progress: 0 });

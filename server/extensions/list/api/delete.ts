@@ -8,29 +8,24 @@ import {
   requireRole,
   type WorkspaceScopedRequest,
 } from '../../../middlewares/permissionManager';
-import { requireBoardWritable, type BoardScopedRequest } from '../../board/middlewares/requireBoardWritable';
+import {
+  requireBoardWritable,
+  type BoardScopedRequest,
+} from '../../board/middlewares/requireBoardWritable';
 import { featureFlags } from '../../../config/featureFlags';
 import { syncStateTransitionsOnListDelete } from '../../stateTransitions/hooks/listSync';
 
-type ListRow = {
-  id: string;
-  board_id: string;
-};
-
-type AuthenticatedBoardRequest = AuthenticatedRequest & BoardScopedRequest & {
-  board: NonNullable<BoardScopedRequest['board']>;
-  currentUser: { id: string };
-};
+type ListRow = { id: string; board_id: string };
 
 export async function handleDeleteList(req: Request, listId: string): Promise<Response> {
   const authError = await authenticate(req as AuthenticatedRequest);
   if (authError) return authError;
 
-  const list = await db<ListRow>('lists').where({ id: listId }).first();
+  const list = await db('lists').where({ id: listId }).first();
   if (!list) {
     return Response.json(
       { error: { code: 'list-not-found', message: 'List not found' } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
@@ -38,7 +33,7 @@ export async function handleDeleteList(req: Request, listId: string): Promise<Re
   const writableError = await requireBoardWritable(boardReq, list.board_id);
   if (writableError) return writableError;
 
-  const board = boardReq.board as NonNullable<BoardScopedRequest['board']>;
+  const board = boardReq.board!;
 
   const scopedReq = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
@@ -77,7 +72,7 @@ export async function handleDeleteList(req: Request, listId: string): Promise<Re
     if (cardCount > 0 && !body.confirm) {
       return Response.json(
         { name: 'delete-requires-confirmation', data: { cardCount } },
-        { status: 409 },
+        { status: 409 }
       );
     }
 
@@ -91,8 +86,13 @@ export async function handleDeleteList(req: Request, listId: string): Promise<Re
   }
 
   // Stub event emission.
-  const authenticatedRequest = req as AuthenticatedBoardRequest;
-  await writeEvent({ type: 'list_deleted', boardId: list.board_id, entityId: listId, actorId: authenticatedRequest.currentUser.id, payload: {} });
+  await writeEvent({
+    type: 'list_deleted',
+    boardId: list.board_id,
+    entityId: listId,
+    actorId: (req as AuthenticatedRequest).currentUser?.id ?? 'system',
+    payload: {},
+  });
 
   return new Response(null, { status: 204 });
 }

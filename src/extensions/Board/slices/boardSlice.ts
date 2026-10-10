@@ -1,8 +1,17 @@
 // boardSlice — full kanban board state: board, lists, cards, and optimistic drag support.
 // Sprint 18: provides { board, listOrder, lists, cardsByList, cards, status }.
-import { createSlice, type PayloadAction, createSelector } from '@reduxjs/toolkit';
+import {
+  createSlice,
+  type PayloadAction,
+  createSelector,
+} from '@reduxjs/toolkit';
 import { createAppAsyncThunk } from '~/utils/redux';
-import { getBoard, listCardsByListBatch, type Board, type ListCardHydration } from '../api';
+import {
+  getBoard,
+  listCardsByListBatch,
+  type Board,
+  type ListCardHydration,
+} from '../api';
 import type { List } from '../../List/api';
 import type { ListSortBy } from '../../List/types';
 import type { Card } from '../../Card/api';
@@ -25,7 +34,10 @@ export interface BoardState {
   fetchRevision?: number;
   appliedSnapshotRequestId?: string;
   hydrationRequestIds?: Record<string, string>;
-  listHydration: Record<string, ListCardHydration & { loading: boolean; error: boolean }>;
+  listHydration: Record<
+    string,
+    ListCardHydration & { loading: boolean; error: boolean }
+  >;
   /** Snapshot taken at drag-start; used for rollback on API failure */
   dragSnapshot: {
     listOrder: string[];
@@ -57,21 +69,26 @@ export const fetchBoardDataThunk = createAppAsyncThunk(
     }: { boardId: string; initialCardsPerList?: number; background?: boolean },
     { extra, getState, rejectWithValue },
   ) => {
-    const revision = (getState() as unknown as { board: BoardState }).board.revision;
+    const revision = (getState() as unknown as { board: BoardState }).board
+      .revision;
     let response: Awaited<ReturnType<typeof getBoard>>;
     try {
       response = await getBoard({
         api: (extra as { api: { get: <T>(url: string) => Promise<T> } }).api,
         boardId,
-        ...(background ? {} : {
-          initialCardsPerList:
-            typeof initialCardsPerList === 'number' && initialCardsPerList > 0
-              ? initialCardsPerList
-              : INITIAL_CARDS_PER_LIST,
-        }),
+        ...(background
+          ? {}
+          : {
+              initialCardsPerList:
+                typeof initialCardsPerList === 'number' &&
+                initialCardsPerList > 0
+                  ? initialCardsPerList
+                  : INITIAL_CARDS_PER_LIST,
+            }),
       });
     } catch (error) {
-      if (background) return rejectWithValue({ retryable: isRetryableRequestError(error) });
+      if (background)
+        return rejectWithValue({ retryable: isRetryableRequestError(error) });
       throw error;
     }
     const current = (getState() as unknown as { board: BoardState }).board;
@@ -191,15 +208,15 @@ const boardSlice = createSlice({
     },
 
     /** Update board title in-place (optimistic inline edit) */
-    optimisticUpdateBoardTitle(state, action: PayloadAction<{ title: string }>) {
+    optimisticUpdateBoardTitle(
+      state,
+      action: PayloadAction<{ title: string }>,
+    ) {
       if (state.board) state.board.title = action.payload.title;
     },
 
     /** Add a newly created card to the local state */
-    addCard(
-      state,
-      action: PayloadAction<{ card: Card }>,
-    ) {
+    addCard(state, action: PayloadAction<{ card: Card }>) {
       const { card } = action.payload;
       state.cards[card.id] = card;
       const listCards = state.cardsByList[card.list_id] ?? [];
@@ -219,7 +236,10 @@ const boardSlice = createSlice({
       }
     },
 
-    updateLabelInCards(state, action: PayloadAction<{ label: Card['labels'][number] }>) {
+    updateLabelInCards(
+      state,
+      action: PayloadAction<{ label: Card['labels'][number] }>,
+    ) {
       const { label } = action.payload;
       for (const card of Object.values(state.cards)) {
         if (card.labels?.some((l) => l.id === label.id)) {
@@ -239,7 +259,10 @@ const boardSlice = createSlice({
     },
 
     /** Remove a card from local board state (e.g. after delete) */
-    removeCard(state, action: PayloadAction<{ cardId: string; listId: string }>) {
+    removeCard(
+      state,
+      action: PayloadAction<{ cardId: string; listId: string }>,
+    ) {
       const { cardId, listId } = action.payload;
       delete state.cards[cardId];
       const listCards = state.cardsByList[listId];
@@ -270,16 +293,24 @@ const boardSlice = createSlice({
     /** Optimistically update a single field on a card (e.g. due_date from CalendarView drag) */
     optimisticUpdateCardField(
       state,
-      action: PayloadAction<{ cardId: string; field: keyof Card; value: unknown }>,
+      action: PayloadAction<{
+        cardId: string;
+        field: keyof Card;
+        value: unknown;
+      }>,
     ) {
       const { cardId, field, value } = action.payload;
       if (state.cards[cardId]) {
-        (state.cards[cardId] as Record<string, unknown>)[field as string] = value;
+        (state.cards[cardId] as Record<string, unknown>)[field as string] =
+          value;
       }
     },
 
     /** Update board background URL (from WS event or API response) */
-    updateBoardBackground(state, action: PayloadAction<{ background: string | null }>) {
+    updateBoardBackground(
+      state,
+      action: PayloadAction<{ background: string | null }>,
+    ) {
       if (state.board) {
         state.board.background = action.payload.background;
       }
@@ -288,14 +319,19 @@ const boardSlice = createSlice({
     /** Move a card between lists without saving an undo snapshot (WS events) */
     remoteCardMove(
       state,
-      action: PayloadAction<{ card: { id: string; list_id: string; position: string }; fromListId: string }>,
+      action: PayloadAction<{
+        card: { id: string; list_id: string; position: string };
+        fromListId: string;
+      }>,
     ) {
       const { card, fromListId } = action.payload;
 
       // Only alter source lists belonging to this board. The destination list is absent
       // when this event describes a card leaving for another board.
       if (state.lists[fromListId]) {
-        state.cardsByList[fromListId] = (state.cardsByList[fromListId] ?? []).filter((id) => id !== card.id);
+        state.cardsByList[fromListId] = (
+          state.cardsByList[fromListId] ?? []
+        ).filter((id) => id !== card.id);
       }
       if (!state.lists[card.list_id]) {
         // Removing a departed card is cheaper than cloning the entire board cache.
@@ -310,7 +346,9 @@ const boardSlice = createSlice({
         : (card as Card);
 
       // Insert into target list at the correct sorted position (bytewise, matching DB COLLATE "C")
-      const existing = (state.cardsByList[card.list_id] ?? []).filter((id) => id !== card.id);
+      const existing = (state.cardsByList[card.list_id] ?? []).filter(
+        (id) => id !== card.id,
+      );
       const insertIdx = existing.findIndex((id) => {
         const c = state.cards[id];
         return c != null && c.position > card.position;
@@ -358,7 +396,9 @@ const boardSlice = createSlice({
         }
 
         if (sortBy === 'card-name') {
-          return left.title.localeCompare(right.title, undefined, { sensitivity: 'base' });
+          return left.title.localeCompare(right.title, undefined, {
+            sensitivity: 'base',
+          });
         }
 
         if (sortBy === 'due-date') {
@@ -403,7 +443,11 @@ const boardSlice = createSlice({
       .addCase(fetchBoardDataThunk.fulfilled, (state, action) => {
         if (state.fetchRequestId !== action.meta.requestId) return;
         delete state.fetchRequestId;
-        if (action.meta.arg.background && (state.fetchRevision !== state.revision || state.dragSnapshot)) return;
+        if (
+          action.meta.arg.background &&
+          (state.fetchRevision !== state.revision || state.dragSnapshot)
+        )
+          return;
         state.appliedSnapshotRequestId = action.meta.requestId;
         state.status = 'idle';
         state.board = action.payload.data;
@@ -431,7 +475,8 @@ const boardSlice = createSlice({
             .map((c) => c.id);
           state.cardsByList[list.id] = cardsInList;
 
-          const hydrationFromServer = action.payload.includes.card_hydration?.[list.id];
+          const hydrationFromServer =
+            action.payload.includes.card_hydration?.[list.id];
           if (hydrationFromServer) {
             state.listHydration[list.id] = {
               ...hydrationFromServer,
@@ -472,7 +517,8 @@ const boardSlice = createSlice({
       })
       .addCase(fetchListCardsBatchThunk.fulfilled, (state, action) => {
         const { listId, data, metadata } = action.payload;
-        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId) return;
+        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId)
+          return;
         state.hydrationRequestIds[listId] = '';
         const currentIds = state.cardsByList[listId] ?? [];
         const mergedIds = [...currentIds];
@@ -501,7 +547,8 @@ const boardSlice = createSlice({
       })
       .addCase(fetchListCardsBatchThunk.rejected, (state, action) => {
         const { listId } = action.meta.arg;
-        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId) return;
+        if (state.hydrationRequestIds?.[listId] !== action.meta.requestId)
+          return;
         state.hydrationRequestIds[listId] = '';
         const current = state.listHydration[listId];
         if (!current) return;
@@ -515,16 +562,28 @@ const boardSlice = createSlice({
 });
 
 export const boardSliceActions = boardSlice.actions;
-export function shouldRetryBoardSnapshot({ result, appliedRequestId }: {
+export function shouldRetryBoardSnapshot({
+  result,
+  appliedRequestId,
+}: {
   result: unknown;
   appliedRequestId: string | undefined;
 }): boolean {
-  const action = result as { type: string; payload?: unknown; meta: { condition?: boolean; requestId: string; aborted?: boolean } };
+  const action = result as {
+    type: string;
+    payload?: unknown;
+    meta: { condition?: boolean; requestId: string; aborted?: boolean };
+  };
   if (action.meta.aborted) return false;
-  return action.payload === 'snapshot-stale' || action.meta.condition === true
-    || (typeof action.payload === 'object' && action.payload !== null
-      && (action.payload as { retryable?: boolean }).retryable === true)
-    || (action.type === fetchBoardDataThunk.fulfilled.type && appliedRequestId !== action.meta.requestId);
+  return (
+    action.payload === 'snapshot-stale' ||
+    action.meta.condition === true ||
+    (typeof action.payload === 'object' &&
+      action.payload !== null &&
+      (action.payload as { retryable?: boolean }).retryable === true) ||
+    (action.type === fetchBoardDataThunk.fulfilled.type &&
+      appliedRequestId !== action.meta.requestId)
+  );
 }
 
 export default function boardReducer(
@@ -533,13 +592,16 @@ export default function boardReducer(
 ): BoardState {
   const next = boardSlice.reducer(state, action);
   // [why] Any intervening board mutation makes a background snapshot stale.
-  const changesBoard = action.type.startsWith('board/')
-    && !action.type.startsWith('board/fetchData/')
-    && action.type !== 'board/saveDragSnapshot'
-    && action.type !== 'board/clearDragSnapshot'
-    && !action.type.endsWith('/pending')
-    && !action.type.endsWith('/rejected');
-  return changesBoard && next !== state ? { ...next, revision: (state?.revision ?? 0) + 1 } : next;
+  const changesBoard =
+    action.type.startsWith('board/') &&
+    !action.type.startsWith('board/fetchData/') &&
+    action.type !== 'board/saveDragSnapshot' &&
+    action.type !== 'board/clearDragSnapshot' &&
+    !action.type.endsWith('/pending') &&
+    !action.type.endsWith('/rejected');
+  return changesBoard && next !== state
+    ? { ...next, revision: (state?.revision ?? 0) + 1 }
+    : next;
 }
 
 // ---------- Selectors ----------
@@ -547,13 +609,18 @@ export default function boardReducer(
 
 type StateWithBoard = { board: BoardState };
 
-export const selectBoard = (state: unknown) => (state as StateWithBoard).board.board;
-export const selectListOrder = (state: unknown) => (state as StateWithBoard).board.listOrder;
-export const selectLists = (state: unknown) => (state as StateWithBoard).board.lists;
+export const selectBoard = (state: unknown) =>
+  (state as StateWithBoard).board.board;
+export const selectListOrder = (state: unknown) =>
+  (state as StateWithBoard).board.listOrder;
+export const selectLists = (state: unknown) =>
+  (state as StateWithBoard).board.lists;
 export const selectCardsByList = (state: unknown) =>
   (state as StateWithBoard).board.cardsByList;
-export const selectCards = (state: unknown) => (state as StateWithBoard).board.cards;
-export const selectBoardStatus = (state: unknown) => (state as StateWithBoard).board.status;
+export const selectCards = (state: unknown) =>
+  (state as StateWithBoard).board.cards;
+export const selectBoardStatus = (state: unknown) =>
+  (state as StateWithBoard).board.status;
 export const selectListHydration = (state: unknown) =>
   (state as StateWithBoard).board.listHydration;
 
@@ -561,8 +628,10 @@ export const makeSelectCardIdsByListId = (listId: string) =>
   createSelector(selectCardsByList, (cardsByList) => cardsByList[listId] ?? []);
 
 export const makeSelectCardsForListId = (listId: string) =>
-  createSelector([makeSelectCardIdsByListId(listId), selectCards], (cardIds, cardsById) =>
-    cardIds
-      .map((cardId) => cardsById[cardId])
-      .filter((card): card is Card => card !== undefined),
+  createSelector(
+    [makeSelectCardIdsByListId(listId), selectCards],
+    (cardIds, cardsById) =>
+      cardIds
+        .map((cardId) => cardsById[cardId])
+        .filter((card): card is Card => card !== undefined),
   );

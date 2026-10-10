@@ -7,17 +7,29 @@ import { strict as assert } from 'node:assert';
 import { createHash, randomUUID } from 'node:crypto';
 
 const databaseUrl = Bun.env.DATABASE_URL;
-assert.equal(Bun.env.CHIMEDECK_TEST_SANDBOX, '1', 'Explicit CHIMEDECK_TEST_SANDBOX=1 opt-in required');
+assert.equal(
+  Bun.env.CHIMEDECK_TEST_SANDBOX,
+  '1',
+  'Explicit CHIMEDECK_TEST_SANDBOX=1 opt-in required'
+);
 assert.ok(databaseUrl, 'DATABASE_URL must point to a disposable PostgreSQL database');
 const url = new URL(databaseUrl);
 const databaseName = decodeURIComponent(url.pathname.slice(1));
 assert.ok(['postgres:', 'postgresql:'].includes(url.protocol), 'PostgreSQL URL required');
-assert.match(databaseName, /(?:^|[_-])(test|preflight|scratch|sandbox)(?:$|[_-])/i, 'Refusing to write to a database without a test/preflight/scratch/sandbox name');
-assert.ok(['localhost', '127.0.0.1', 'postgres', 'db'].includes(url.hostname), 'Refusing non-local PostgreSQL host');
+assert.match(
+  databaseName,
+  /(?:^|[_-])(test|preflight|scratch|sandbox)(?:$|[_-])/i,
+  'Refusing to write to a database without a test/preflight/scratch/sandbox name'
+);
+assert.ok(
+  ['localhost', '127.0.0.1', 'postgres', 'db'].includes(url.hostname),
+  'Refusing non-local PostgreSQL host'
+);
 
 const { db } = await import('../../server/common/db');
 const { handleMoveCard } = await import('../../server/extensions/card/api/move');
-const { lockWorkspaceMembershipMutations } = await import('../../server/extensions/workspace/api/members/lock');
+const { lockWorkspaceMembershipMutations } =
+  await import('../../server/extensions/workspace/api/members/lock');
 const { lockBoardMemberMutations } = await import('../../server/extensions/board/api/members/lock');
 
 const workspaceId = randomUUID();
@@ -46,13 +58,16 @@ function move(): Promise<Response> {
 async function waitForMoveOnWorkspaceLock(): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const result = await db.raw<{ rows: Array<{ waiting: string }> }>(`
+    const result = await db.raw<{ rows: Array<{ waiting: string }> }>(
+      `
       SELECT count(*) AS waiting FROM pg_locks
        WHERE locktype = 'advisory' AND NOT granted
          AND classid::bigint = ((hashtext(?)::bigint >> 32) & 4294967295)
          AND objid::bigint = (hashtext(?)::bigint & 4294967295)
          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-    `, [`workspace-memberships:${workspaceId}`, `workspace-memberships:${workspaceId}`]);
+    `,
+      [`workspace-memberships:${workspaceId}`, `workspace-memberships:${workspaceId}`]
+    );
     if (Number(result.rows[0]?.waiting) > 0) return;
     await Bun.sleep(20);
   }
@@ -84,33 +99,71 @@ try {
     ) AS trigger
   `);
   assert.equal(identity.rows[0]?.name, databaseName);
-  assert.equal(identity.rows[0]?.trigger, true, 'Migration 0123 must be applied to the sandbox DB');
+  assert.equal(identity.rows[0].trigger, true, 'Migration 0123 must be applied to the sandbox DB');
 
   await db('users').insert([
     { id: ownerId, email: `${ownerId}@example.test`, name: 'Fixture owner', email_verified: true },
     { id: moverId, email: `${moverId}@example.test`, name: 'Fixture mover', email_verified: true },
   ]);
-  await db('workspaces').insert({ id: workspaceId, name: `move-lock-${shortId()}`, owner_id: ownerId });
+  await db('workspaces').insert({
+    id: workspaceId,
+    name: `move-lock-${shortId()}`,
+    owner_id: ownerId,
+  });
   await db('memberships').insert([
     { workspace_id: workspaceId, user_id: ownerId, role: 'OWNER' },
     { workspace_id: workspaceId, user_id: moverId, role: 'MEMBER' },
   ]);
   await db('boards').insert([
-    { id: sourceBoardId, workspace_id: workspaceId, title: 'Source', visibility: 'PRIVATE', short_id: shortId() },
-    { id: targetBoardId, workspace_id: workspaceId, title: 'Destination', visibility: 'PRIVATE', short_id: shortId() },
+    {
+      id: sourceBoardId,
+      workspace_id: workspaceId,
+      title: 'Source',
+      visibility: 'PRIVATE',
+      short_id: shortId(),
+    },
+    {
+      id: targetBoardId,
+      workspace_id: workspaceId,
+      title: 'Destination',
+      visibility: 'PRIVATE',
+      short_id: shortId(),
+    },
   ]);
   await db('board_members').insert([
     { id: randomUUID(), board_id: sourceBoardId, user_id: moverId, role: 'MEMBER' },
     { id: randomUUID(), board_id: targetBoardId, user_id: moverId, role: 'MEMBER' },
   ]);
   await db('lists').insert([
-    { id: sourceListId, board_id: sourceBoardId, title: 'Source', short_id: shortId(), position: 'a0' },
-    { id: targetListId, board_id: targetBoardId, title: 'Destination', short_id: shortId(), position: 'a0' },
+    {
+      id: sourceListId,
+      board_id: sourceBoardId,
+      title: 'Source',
+      short_id: shortId(),
+      position: 'a0',
+    },
+    {
+      id: targetListId,
+      board_id: targetBoardId,
+      title: 'Destination',
+      short_id: shortId(),
+      position: 'a0',
+    },
   ]);
-  await db('cards').insert({ id: cardId, list_id: sourceListId, title: 'Fixture', short_id: shortId(), position: 'a0', archived: false });
+  await db('cards').insert({
+    id: cardId,
+    list_id: sourceListId,
+    title: 'Fixture',
+    short_id: shortId(),
+    position: 'a0',
+    archived: false,
+  });
   await db('api_tokens').insert({
-    id: tokenId, user_id: moverId, name: 'Disposable Move integration token',
-    token_hash: createHash('sha256').update(token).digest('hex'), token_prefix: token.slice(0, 10),
+    id: tokenId,
+    user_id: moverId,
+    name: 'Disposable Move integration token',
+    token_hash: createHash('sha256').update(token).digest('hex'),
+    token_prefix: token.slice(0, 10),
   });
 
   // Preflight sees the destination grant, but Move waits for the workspace lock.
@@ -123,7 +176,12 @@ try {
     firstMove = move();
     await waitForMoveOnWorkspaceLock();
     await lockBoardMemberMutations(revocation, targetBoardId);
-    assert.equal(await revocation('board_members').where({ board_id: targetBoardId, user_id: moverId }).delete(), 1);
+    assert.equal(
+      await revocation('board_members')
+        .where({ board_id: targetBoardId, user_id: moverId })
+        .delete(),
+      1
+    );
     await revocation.commit();
   } catch (error) {
     await revocation.rollback();
@@ -133,12 +191,27 @@ try {
   assert.ok(firstMove);
   const deniedMove = await firstMove;
   assert.equal(deniedMove.status, 403);
-  assert.equal((await deniedMove.json() as { error: { code: string } }).error.code, 'board-access-denied');
-  assert.equal((await db('cards').where({ id: cardId }).first<{ list_id: string }>())?.list_id, sourceListId);
+  assert.equal(
+    ((await deniedMove.json()) as { error: { code: string } }).error.code,
+    'board-access-denied'
+  );
+  assert.equal(
+    (await db('cards').where({ id: cardId }).first<{ list_id: string }>()).list_id,
+    sourceListId
+  );
   console.info('PASS Move rejects a destination grant revoked while its transaction waits');
 
-  await db('board_members').insert({ id: randomUUID(), board_id: targetBoardId, user_id: moverId, role: 'MEMBER' });
-  await db('board_state_transitions').insert({ id: randomUUID(), board_id: sourceBoardId, enabled: false });
+  await db('board_members').insert({
+    id: randomUUID(),
+    board_id: targetBoardId,
+    user_id: moverId,
+    role: 'MEMBER',
+  });
+  await db('board_state_transitions').insert({
+    id: randomUUID(),
+    board_id: sourceBoardId,
+    enabled: false,
+  });
 
   // The transition writer and Move contend on the *same* workspace lock. Its
   // trigger runs inside this transaction; the freshly enabled rule commits while
@@ -149,7 +222,12 @@ try {
     await lockWorkspaceMembershipMutations(enabling, workspaceId);
     secondMove = move();
     await waitForMoveOnWorkspaceLock();
-    assert.equal(await enabling('board_state_transitions').where({ board_id: sourceBoardId }).update({ enabled: true }), 1);
+    assert.equal(
+      await enabling('board_state_transitions')
+        .where({ board_id: sourceBoardId })
+        .update({ enabled: true }),
+      1
+    );
     await enabling.commit();
   } catch (error) {
     await enabling.rollback();
@@ -159,9 +237,19 @@ try {
   assert.ok(secondMove);
   const blockedMove = await secondMove;
   assert.equal(blockedMove.status, 422);
-  assert.equal((await blockedMove.json() as { error: { code: string } }).error.code, 'cross-board-transition-unsupported');
-  assert.equal((await db('cards').where({ id: cardId }).first<{ list_id: string }>())?.list_id, sourceListId);
+  assert.equal(
+    ((await blockedMove.json()) as { error: { code: string } }).error.code,
+    'cross-board-transition-unsupported'
+  );
+  assert.equal(
+    (await db('cards').where({ id: cardId }).first<{ list_id: string }>()).list_id,
+    sourceListId
+  );
   console.info('PASS Move observes the transition update committed while its transaction waits');
 } finally {
-  try { await cleanup(); } finally { await db.destroy(); }
+  try {
+    await cleanup();
+  } finally {
+    await db.destroy();
+  }
 }

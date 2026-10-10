@@ -34,7 +34,10 @@ export interface UseWebSocketOptions {
   /** Called when queue overflows (trigger full board reload) */
   onQueueOverflow?: (boardId: string) => void;
   /** API fetch function for re-sync after reconnect */
-  fetchMissedEvents?: (boardId: string, since: number) => Promise<RealtimeEvent[]>;
+  fetchMissedEvents?: (
+    boardId: string,
+    since: number,
+  ) => Promise<RealtimeEvent[]>;
   /** Restore authoritative state after reconnect or returning to the tab. */
   onReconnect?: () => unknown;
 }
@@ -57,8 +60,12 @@ export function useWebSocket({
   fetchMissedEvents,
   onReconnect,
 }: UseWebSocketOptions): UseWebSocketResult {
-  const [connectionState, setConnectionState] = useState<ConnectionState>(socket.isConnected ? 'connected' : 'reconnecting');
-  const [pollingActive, setPollingActive] = useState(socket.usingPollingFallback);
+  const [connectionState, setConnectionState] = useState<ConnectionState>(
+    socket.isConnected ? 'connected' : 'reconnecting',
+  );
+  const [pollingActive, setPollingActive] = useState(
+    socket.usingPollingFallback,
+  );
   const lastSeqRef = useRef(lastSequence);
   const isReplayingRef = useRef(false);
   const activeRef = useRef(false);
@@ -94,8 +101,14 @@ export function useWebSocket({
       try {
         const response = await fetch(mutation.url, {
           method: mutation.method,
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: mutation.body !== undefined ? JSON.stringify(mutation.body) : undefined,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body:
+            mutation.body !== undefined
+              ? JSON.stringify(mutation.body)
+              : undefined,
         });
 
         if (response.status === 409 || response.status === 422) {
@@ -120,37 +133,44 @@ export function useWebSocket({
     isReplayingRef.current = false;
   }, [token, onMutationConflict]);
 
-  const handleOpen = useCallback(async (recovered: boolean) => {
-    const generation = generationRef.current;
-    const needsRecovery = recovered || recoveryRef.current;
-    connectedOnceRef.current = true;
-    pollingRef.current = socket.usingPollingFallback;
-    setPollingActive(pollingRef.current);
-    recoveryRef.current = needsRecovery;
-    setConnectionState('connected');
+  const handleOpen = useCallback(
+    async (recovered: boolean) => {
+      const generation = generationRef.current;
+      const needsRecovery = recovered || recoveryRef.current;
+      connectedOnceRef.current = true;
+      pollingRef.current = socket.usingPollingFallback;
+      setPollingActive(pollingRef.current);
+      recoveryRef.current = needsRecovery;
+      setConnectionState('connected');
 
-    // Re-sync missed events from server
-    if (needsRecovery && fetchMissedEvents) {
-      try {
-        const missed = await fetchMissedEvents(boardId, lastSeqRef.current);
-        for (const ev of missed) {
-          onEvent(ev);
+      // Re-sync missed events from server
+      if (needsRecovery && fetchMissedEvents) {
+        try {
+          const missed = await fetchMissedEvents(boardId, lastSeqRef.current);
+          for (const ev of missed) {
+            onEvent(ev);
+          }
+        } catch {
+          // If re-sync fails, board state may be stale — caller can show a toast
         }
-      } catch {
-        // If re-sync fails, board state may be stale — caller can show a toast
       }
-    }
 
-    // Replay queued mutations in order
-    const hadQueuedMutations = messageQueue.size() > 0;
-    if (hadQueuedMutations) recoveryRef.current = true;
-    await replayQueue();
-    if ((needsRecovery || hadQueuedMutations) && activeRef.current
-      && generationRef.current === generation && boardRef.current === boardId) {
-      recoveryRef.current = false;
-      await callbacksRef.current.onReconnect?.();
-    }
-  }, [boardId, fetchMissedEvents, onEvent, replayQueue, onReconnect]);
+      // Replay queued mutations in order
+      const hadQueuedMutations = messageQueue.size() > 0;
+      if (hadQueuedMutations) recoveryRef.current = true;
+      await replayQueue();
+      if (
+        (needsRecovery || hadQueuedMutations) &&
+        activeRef.current &&
+        generationRef.current === generation &&
+        boardRef.current === boardId
+      ) {
+        recoveryRef.current = false;
+        await callbacksRef.current.onReconnect?.();
+      }
+    },
+    [boardId, fetchMissedEvents, onEvent, replayQueue, onReconnect],
+  );
 
   const handleClose = useCallback(() => {
     recoveryRef.current = true;
@@ -175,10 +195,18 @@ export function useWebSocket({
         pingPropagationDelay(event);
         callbacksRef.current.onEvent(event);
       },
-      onOpen: (recovered) => { void callbacksRef.current.handleOpen(recovered); },
+      onOpen: (recovered) => {
+        void callbacksRef.current.handleOpen(recovered);
+      },
       onClose: handleClose,
-      onPollingActive: () => { pollingRef.current = true; setPollingActive(true); },
-      onPollingInactive: () => { pollingRef.current = false; setPollingActive(false); },
+      onPollingActive: () => {
+        pollingRef.current = true;
+        setPollingActive(true);
+      },
+      onPollingInactive: () => {
+        pollingRef.current = false;
+        setPollingActive(false);
+      },
     });
 
     socket.connect({ boardId, token });
@@ -202,7 +230,12 @@ export function useWebSocket({
       socket.disconnect({ boardId });
     };
     // We intentionally only reconnect when boardId/token change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boardId, token]);
 
-  return { connected: connectionState === 'connected', connectionState, pollingActive };
+  return {
+    connected: connectionState === 'connected',
+    connectionState,
+    pollingActive,
+  };
 }

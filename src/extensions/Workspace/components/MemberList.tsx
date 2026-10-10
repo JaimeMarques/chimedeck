@@ -35,13 +35,16 @@ const MemberList = ({
   const removeError = useAppSelector(removeErrorSelector);
   const updateRoleError = useAppSelector(updateRoleErrorSelector);
 
-  const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null);
+  const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(
+    null,
+  );
 
   const ownerCount = members.filter((m) => m.role === 'OWNER').length;
-  const assignableRoles = callerRole === 'OWNER' ? OWNER_ASSIGNABLE_ROLES : ADMIN_ASSIGNABLE_ROLES;
+  const assignableRoles =
+    callerRole === 'OWNER' ? OWNER_ASSIGNABLE_ROLES : ADMIN_ASSIGNABLE_ROLES;
 
   const handleRoleChange = (userId: string, newRole: Role) => {
-    void dispatch(updateMemberRoleThunk({ workspaceId, userId, role: newRole }));
+    dispatch(updateMemberRoleThunk({ workspaceId, userId, role: newRole }));
   };
 
   const handleRemoveConfirm = (userId: string) => {
@@ -50,7 +53,7 @@ const MemberList = ({
 
   const handleRemove = () => {
     if (confirmRemoveUserId) {
-      void dispatch(removeMemberThunk({ workspaceId, userId: confirmRemoveUserId }));
+      dispatch(removeMemberThunk({ workspaceId, userId: confirmRemoveUserId }));
       setConfirmRemoveUserId(null);
     }
   };
@@ -84,10 +87,14 @@ const MemberList = ({
       <table className="min-w-full divide-y divide-border text-sm">
         <thead>
           <tr>
-            <th className="px-4 py-2 text-left font-medium text-muted">Email</th>
+            <th className="px-4 py-2 text-left font-medium text-muted">
+              Email
+            </th>
             <th className="px-4 py-2 text-left font-medium text-muted">Role</th>
             {canManageMembers && (
-              <th className="px-4 py-2 text-left font-medium text-muted">Actions</th>
+              <th className="px-4 py-2 text-left font-medium text-muted">
+                Actions
+              </th>
             )}
           </tr>
         </thead>
@@ -123,16 +130,18 @@ const MemberList = ({
                   {member.userId !== currentUserId &&
                     !isLastOwner(member) &&
                     (callerRole === 'OWNER' || member.role !== 'OWNER') && (
-                    <Button
-                      variant="link"
-                      size="sm"
-                      onClick={() => { handleRemoveConfirm(member.userId); }}
-                      aria-label={`Remove ${member.email}`}
-                      className="!text-danger"
-                    >
-                      Remove
-                    </Button>
-                  )}
+                      <Button
+                        variant="link"
+                        size="sm"
+                        onClick={() => {
+                          handleRemoveConfirm(member.userId);
+                        }}
+                        aria-label={`Remove ${member.email}`}
+                        className="!text-danger"
+                      >
+                        Remove
+                      </Button>
+                    )}
                   {isLastOwner(member) && (
                     <span className="text-xs text-muted">Last owner</span>
                   )}
@@ -162,15 +171,13 @@ const MemberList = ({
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => { setConfirmRemoveUserId(null); }}
+                onClick={() => {
+                  setConfirmRemoveUserId(null);
+                }}
               >
                 Cancel
               </Button>
-              <Button
-                type="button"
-                variant="danger"
-                onClick={handleRemove}
-              >
+              <Button type="button" variant="danger" onClick={handleRemove}>
                 Remove
               </Button>
             </div>

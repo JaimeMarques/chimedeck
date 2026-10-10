@@ -11,6 +11,7 @@ import { dispatchEvent } from '../../../mods/events/dispatch';
 import type { BoardVisibility } from '../types';
 import { sanitizeText, sanitizeRichText } from '../../../common/sanitize';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
+import { prepareBoardLimitGuard } from '../mods/resourceLimitGuard';
 import { getCurrentWorkspaceRole } from './members/authorization';
 import { lockWorkspaceMembershipMutations } from '../../workspace/api/members/lock';
 
@@ -62,6 +63,8 @@ export async function handleCreateBoard(req: Request, workspaceId: string): Prom
   const id = randomUUID();
   const shortId = await generateUniqueShortId('boards');
 
+  const guardLimit = await prepareBoardLimitGuard(workspaceId);
+
   // Wrap board creation + initial member insert in a transaction so no partial state is persisted.
   const creationError = await db.transaction(async (trx) => {
     await lockWorkspaceMembershipMutations(trx, workspaceId);
@@ -72,6 +75,24 @@ export async function handleCreateBoard(req: Request, workspaceId: string): Prom
         { status: 403 },
       );
     }
+    // Serialize the owner's total across workspaces as well as this workspace's count.
+    const workspace = await trx('workspaces').where({ id: workspaceId }).select('owner_id').first();
+    if (workspace?.owner_id) {
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [
+        `board-creation-owner:${workspace.owner_id}`,
+      ]);
+    }
+    const boardCountRow = await trx('boards').where({ workspace_id: workspaceId }).count('id as count').first();
+    const boardCount = Number(boardCountRow?.count ?? 0);
+    const perWorkspaceLimitError = guardLimit('maxBoardsPerWorkspace', boardCount);
+    if (perWorkspaceLimitError) return perWorkspaceLimitError;
+    const totalRow = workspace?.owner_id
+      ? await trx('boards as b').join('workspaces as w', 'b.workspace_id', 'w.id')
+          .where({ 'w.owner_id': workspace.owner_id }).count('b.id as count').first()
+      : boardCountRow;
+    const totalLimitError = guardLimit('maxBoardsTotal', Number(totalRow?.count ?? 0));
+    if (totalLimitError) return totalLimitError;
+
     await trx('boards').insert({
       id,
       short_id: shortId,

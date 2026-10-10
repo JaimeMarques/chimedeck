@@ -22,15 +22,15 @@ import { lockBoardMemberMutations } from '../../board/api/members/lock';
 
 type CardRow = {
   id: string;
+  list_id: string;
   title: string;
   description: string | null;
   due_date: string | null;
   position: string;
-  list_id: string;
   archived: boolean;
   cover_attachment_id: string | null;
-  cover_color: string | null;
-  cover_size: string | null;
+  cover_color?: string | null;
+  cover_size?: string | null;
 };
 
 type ListRow = {
@@ -72,15 +72,10 @@ function computePosition(
   positionIdx: number,
 ): string {
   if (targetCards.length === 0) return between(LOW_SENTINEL, HIGH_SENTINEL);
-  const firstCard = targetCards[0];
-  const lastCard = targetCards.at(-1);
-  if (!firstCard || !lastCard) throw new Error('Expected target cards when computing position');
-  if (positionIdx <= 0) return between(LOW_SENTINEL, firstCard.position);
-  if (positionIdx >= targetCards.length) return between(lastCard.position, HIGH_SENTINEL);
-  const previousCard = targetCards[positionIdx - 1];
-  const nextCard = targetCards[positionIdx];
-  if (!previousCard || !nextCard) throw new Error('Invalid target position index');
-  return between(previousCard.position, nextCard.position);
+  if (positionIdx <= 0) return between(LOW_SENTINEL, targetCards[0]!.position);
+  if (positionIdx >= targetCards.length)
+    return between(targetCards.at(-1)!.position, HIGH_SENTINEL);
+  return between(targetCards[positionIdx - 1]!.position, targetCards[positionIdx]!.position);
 }
 
 async function copyChecklists(trx: Knex.Transaction, sourceCardId: string, newCardId: string): Promise<void> {
@@ -141,9 +136,8 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
   const writableError = await requireCardWritable(cardReq, cardId);
   if (writableError) return writableError;
 
-  const writableCardReq = cardReq as CardScopedRequest & { card: CardRow; board: BoardRow };
-  const card = writableCardReq.card;
-  const board = writableCardReq.board;
+  const card = cardReq.card!;
+  const board = cardReq.board!;
 
   const scopedReq = req as WorkspaceScopedRequest;
   const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
@@ -164,22 +158,22 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
   } catch {
     return Response.json(
       { error: { name: 'bad-request', data: { message: 'Invalid JSON body' } } },
-      { status: 400 },
+      { status: 400 }
     );
   }
 
   if (!body.targetListId) {
     return Response.json(
       { error: { name: 'bad-request', data: { message: 'targetListId is required' } } },
-      { status: 400 },
+      { status: 400 }
     );
   }
 
-  const targetList = await db<ListRow>('lists').where({ id: body.targetListId }).first();
+  const targetList = await db('lists').where({ id: body.targetListId }).first();
   if (!targetList) {
     return Response.json(
       { error: { name: 'target-list-not-found', data: { message: 'Target list not found' } } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
@@ -352,4 +346,3 @@ export async function handleCopyCard(req: Request, cardId: string): Promise<Resp
 
   return Response.json({ data: copyWithCover }, { status: 201 });
 }
-

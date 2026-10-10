@@ -13,6 +13,7 @@ assert.match(decodeURIComponent(url.pathname.slice(1)), /(?:^|[_-])(test|sandbox
 const { db } = await import('../../server/common/db');
 const { handleViewAttachment } = await import('../../server/extensions/attachment/api/view');
 const { handleThumbnailAttachment } = await import('../../server/extensions/attachment/api/thumbnail');
+const { handleReorderAttachments } = await import('../../server/extensions/attachment/api/reorder');
 const ids = {
   owner: randomUUID(), member: randomUUID(), outsider: randomUUID(),
   workspace: randomUUID(), board: randomUUID(), list: randomUUID(), card: randomUUID(),
@@ -52,6 +53,17 @@ try {
     id: randomUUID(), user_id: ids[name], name: 'Disposable attachment access test',
     token_hash: createHash('sha256').update(tokens[name]).digest('hex'), token_prefix: tokens[name].slice(0, 10),
   })));
+  const reorder = (order: string[]) => handleReorderAttachments(new Request(
+    `http://localhost/api/v1/cards/${ids.card}/attachments/reorder`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokens.owner}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    }), ids.card);
+  const emptyPanel = await reorder([]);
+  assert.equal(emptyPanel.status, 200, 'comment images do not enter the panel reorder snapshot');
+  assert.deepEqual((await emptyPanel.json()).data, [], 'reorder read-back must not expose comment drafts or images');
+  assert.equal((await reorder([ids.draft, ids.published])).status, 400, 'comment image IDs cannot be repositioned');
+  console.info('PASS reorder excludes comment images from validation, locked snapshot and read-back');
   for (const thumbnail of [false, true]) {
     assert.equal((await call('owner', ids.draft, thumbnail)).status, 202, 'draft uploader can retrieve status');
     assert.equal((await call('member', ids.draft, thumbnail)).status, 403, 'other board member cannot read unpublished draft');
@@ -60,6 +72,18 @@ try {
     assert.equal((await call('outsider', ids.published, thumbnail)).status, 403, 'private-board outsider cannot read posted image');
     console.info(`PASS ${thumbnail ? 'thumbnail' : 'view'} enforces draft ownership and private-board access`);
   }
+  await db('attachments').whereIn('id', [ids.draft, ids.published]).update({ status: 'READY', s3_key: 'test/private-comment-image', mime_type: 'image/png' });
+  const { readAttachments: readBoardAttachments } = await import('../../server/extensions/board/mods/chat/assist/readAttachments');
+  const { readAttachments: readCardAttachments } = await import('../../server/extensions/cardChat/mods/assist/readAttachments');
+  const toolCall = { id: 'comment-image-scope', type: 'function' as const, function: { name: 'read_attachments', arguments: JSON.stringify({ card_id: ids.card }) } };
+  for (const result of [
+    await readBoardAttachments({ boardId: ids.board, toolCall, model: 'test' }),
+    await readCardAttachments({ cardId: ids.card, toolCall, model: 'test' }),
+  ]) {
+    assert.equal(result.status, 200);
+    assert.ok('data' in result && result.data?.message?.includes('no file attachments'), 'AI readers must not reveal comment images or private drafts');
+  }
+  console.info('PASS board and card AI attachment readers exclude comment drafts and associated images');
 } finally {
   try {
     await db('api_tokens').whereIn('user_id', [ids.owner, ids.member, ids.outsider]).delete();

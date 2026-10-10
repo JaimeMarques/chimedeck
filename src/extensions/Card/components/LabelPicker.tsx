@@ -13,7 +13,13 @@ interface Props {
   disabled?: boolean;
 }
 
-export const LabelPicker = ({ allLabels, selectedIds, onAttach, onDetach, disabled }: Props) => {
+export const LabelPicker = ({
+  allLabels,
+  selectedIds,
+  onAttach,
+  onDetach,
+  disabled,
+}: Props) => {
   const [open, setOpen] = useState(false);
 
   const toggle = async (label: Label) => {
@@ -31,12 +37,18 @@ export const LabelPicker = ({ allLabels, selectedIds, onAttach, onDetach, disabl
         type="button"
         variant="secondary"
         className="px-2 py-1 text-sm"
-        onClick={() => { setOpen((v) => !v); }}
+        onClick={() => {
+          setOpen((v) => !v);
+        }}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        Labels <ChevronDownIcon className="inline-block h-3 w-3 align-middle" aria-hidden="true" />
+        Labels{' '}
+        <ChevronDownIcon
+          className="inline-block h-3 w-3 align-middle"
+          aria-hidden="true"
+        />
       </Button>
       {open && (
         <div
@@ -45,7 +57,9 @@ export const LabelPicker = ({ allLabels, selectedIds, onAttach, onDetach, disabl
           aria-multiselectable="true"
         >
           {allLabels.length === 0 && (
-            <p className="px-3 py-2 text-sm text-muted">No labels on this board</p>
+            <p className="px-3 py-2 text-sm text-muted">
+              No labels on this board
+            </p>
           )}
           {allLabels.map((label) => {
             const selected = selectedIds.includes(label.id);
@@ -56,7 +70,7 @@ export const LabelPicker = ({ allLabels, selectedIds, onAttach, onDetach, disabl
                 role="option"
                 aria-selected={selected}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-bg-overlay"
-                onClick={() => { void toggle(label); }}
+                onClick={() => toggle(label)}
               >
                 <span
                   className="cd-label h-3 w-3 rounded-full flex-shrink-0"

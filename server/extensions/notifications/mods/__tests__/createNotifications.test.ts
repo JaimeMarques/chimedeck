@@ -15,5 +15,5 @@ test('real createNotifications handler preserves guards, preference gating, inse
   ]);
   expect(stderr).toBe('');
   expect(exitCode).toBe(0);
-  expect(stdout).toContain('guards, preferences, insert payload shape and webhook fan-out verified');
+  expect(stdout).toContain('guards, preferences, deduplicated insert payload and webhook fan-out verified');
 });

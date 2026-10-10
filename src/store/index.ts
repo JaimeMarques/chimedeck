@@ -1,6 +1,32 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { apiClient } from '../common/api/client';
-import { authReducer, workspaceShellReducer, boardReducer, boardListPageReducer, boardPageReducer, workspacePageReducer, cardDetailReducer, listReducer, cardsReducer, profileDuckReducer, notificationReducer, pluginDashboardReducer, pluginRegistryReducer, adminInviteReducer, viewPreferenceReducer, boardSwitcherReducer, notificationPreferencesApi, boardMembersApi, boardGuestsApi, searchReducer, boardNotificationTypePreferencesApi, apiTokenApi, webhooksApi, stateTransitionsApi, healthCheckTabReducer } from '../reducers';
+import {
+  authReducer,
+  workspaceShellReducer,
+  boardReducer,
+  boardListPageReducer,
+  boardPageReducer,
+  workspacePageReducer,
+  cardDetailReducer,
+  listReducer,
+  cardsReducer,
+  profileDuckReducer,
+  notificationReducer,
+  pluginDashboardReducer,
+  pluginRegistryReducer,
+  adminInviteReducer,
+  viewPreferenceReducer,
+  boardSwitcherReducer,
+  notificationPreferencesApi,
+  boardMembersApi,
+  boardGuestsApi,
+  searchReducer,
+  boardNotificationTypePreferencesApi,
+  apiTokenApi,
+  webhooksApi,
+  stateTransitionsApi,
+  healthCheckTabReducer,
+} from '../reducers';
 import { uiReducer } from '../slices/uiSlice';
 import { featureFlagsReducer } from '../slices/featureFlagsSlice';
 import { wsMiddleware } from '../extensions/Realtime/middleware/wsMiddleware';
@@ -35,10 +61,12 @@ export const store = configureStore({
     viewPreference: viewPreferenceReducer,
     boardSwitcher: boardSwitcherReducer,
     featureFlags: featureFlagsReducer,
-    [notificationPreferencesApi.reducerPath]: notificationPreferencesApi.reducer,
+    [notificationPreferencesApi.reducerPath]:
+      notificationPreferencesApi.reducer,
     [boardMembersApi.reducerPath]: boardMembersApi.reducer,
     [boardGuestsApi.reducerPath]: boardGuestsApi.reducer,
-    [boardNotificationTypePreferencesApi.reducerPath]: boardNotificationTypePreferencesApi.reducer,
+    [boardNotificationTypePreferencesApi.reducerPath]:
+      boardNotificationTypePreferencesApi.reducer,
     [apiTokenApi.reducerPath]: apiTokenApi.reducer,
     [webhooksApi.reducerPath]: webhooksApi.reducer,
     [stateTransitionsApi.reducerPath]: stateTransitionsApi.reducer,
@@ -54,9 +82,20 @@ export const store = configureStore({
       // middleware and can add noticeable drag latency. Production is already
       // unaffected (these checks are dev-focused); disabling here keeps UX and
       // behavior identical while improving local interaction performance.
-      serializableCheck: DISABLE_DEEP_CHECKS_IN_DEV ? false : { warnAfter: 128 },
+      serializableCheck: DISABLE_DEEP_CHECKS_IN_DEV
+        ? false
+        : { warnAfter: 128 },
       immutableCheck: DISABLE_DEEP_CHECKS_IN_DEV ? false : { warnAfter: 128 },
-    }).concat(wsMiddleware, notificationPreferencesApi.middleware, boardMembersApi.middleware, boardGuestsApi.middleware, boardNotificationTypePreferencesApi.middleware, apiTokenApi.middleware, webhooksApi.middleware, stateTransitionsApi.middleware),
+    }).concat(
+      wsMiddleware,
+      notificationPreferencesApi.middleware,
+      boardMembersApi.middleware,
+      boardGuestsApi.middleware,
+      boardNotificationTypePreferencesApi.middleware,
+      apiTokenApi.middleware,
+      webhooksApi.middleware,
+      stateTransitionsApi.middleware,
+    ),
 });
 
 export type RootState = ReturnType<typeof store.getState>;

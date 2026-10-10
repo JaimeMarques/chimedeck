@@ -26,6 +26,40 @@ type AuthenticatedUserRequest = AuthenticatedRequest & {
 type ResolvedBoardRequest = BoardScopedRequest & { board: { workspace_id: string } };
 type GuestGrantRow = { id: string };
 
+// Preserve upstream's internal userId-based entry point without a second,
+// unlocked membership writer: both invitation forms use the hardened email flow.
+export async function handleInviteGuestById(req: Request, boardId: string): Promise<Response> {
+  const authError = await authenticate(req);
+  if (authError) return authError;
+  const boardReq = req as ResolvedBoardRequest;
+  const accessError = await requireBoardAccess(boardReq, boardId);
+  if (accessError) return accessError;
+  const membershipError = await requireWorkspaceMembership(boardReq, boardReq.board.workspace_id);
+  if (membershipError) return membershipError;
+  const roleError = requireRole(boardReq, 'ADMIN');
+  if (roleError) return roleError;
+  let body: { userId?: unknown; guestType?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: { code: 'invalid-request-body', message: 'Request body must be JSON' } }, { status: 400 });
+  }
+  if (!body || typeof body.userId !== 'string' || !body.userId) {
+    return Response.json({ error: { code: 'missing-user-id', message: 'userId is required' } }, { status: 400 });
+  }
+  const targetUser = await db('users').where({ id: body.userId }).select('email').first<{ email: string }>();
+  if (!targetUser) {
+    return Response.json({ error: { code: 'user-not-found', message: 'User not found' } }, { status: 404 });
+  }
+  const { handleInviteGuestByEmail } = await import('./create');
+  const emailRequest = new Request(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    body: JSON.stringify({ email: targetUser.email, guestType: body.guestType }),
+  });
+  return handleInviteGuestByEmail(emailRequest, boardId, body.userId);
+}
+
 // DELETE /api/v1/boards/:id/guests/:userId
 // Requires ADMIN+ role. Revokes board-scoped guest access.
 // Also removes the GUEST workspace membership if the user has no other board grants.

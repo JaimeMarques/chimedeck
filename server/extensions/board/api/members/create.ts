@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { db } from '../../../../common/db';
 import type { BoardVisibilityScopedRequest } from '../../../../middlewares/boardVisibility';
 import { dispatchEvent } from '../../../../mods/events/dispatch';
+import { prepareBoardLimitGuard } from '../../mods/resourceLimitGuard';
 import { requireBoardMemberManager } from './authorization';
 import { normalizeBoardMemberRole } from './role';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
@@ -70,6 +71,7 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
     );
   }
 
+  const guardLimit = await prepareBoardLimitGuard(board.workspace_id);
   const result = await db.transaction(async (trx) => {
     await lockWorkspaceMembershipMutations(trx, board.workspace_id);
     await lockBoardMemberMutations(trx, boardId);
@@ -139,6 +141,11 @@ export async function handleAddBoardMember(req: Request, boardId: string): Promi
         ),
       };
     }
+
+    // Quota reads share the lock with member additions/removals.
+    const memberCount = await trx('board_members').where({ board_id: boardId }).count('id as count').first();
+    const limitError = guardLimit('maxInvitedMembersPerBoard', Number(memberCount?.count ?? 0));
+    if (limitError) return { error: limitError };
 
     const inserted = await trx('board_members')
       .insert({ id: randomUUID(), board_id: boardId, user_id: userId, role })

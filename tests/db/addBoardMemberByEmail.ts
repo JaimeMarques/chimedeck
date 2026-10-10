@@ -215,6 +215,8 @@ try {
 }
 
 console.info(
-  failures === 0 ? '\nALL EMAIL-LOOKUP CHECKS PASSED' : `\n${String(failures)} EMAIL-LOOKUP CHECK(S) FAILED`
+  failures === 0
+    ? '\nALL EMAIL-LOOKUP CHECKS PASSED'
+    : `\n${String(failures)} EMAIL-LOOKUP CHECK(S) FAILED`
 );
 process.exit(failures === 0 ? 0 : 1);

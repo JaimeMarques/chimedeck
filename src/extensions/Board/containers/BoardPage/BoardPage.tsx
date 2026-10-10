@@ -7,8 +7,9 @@
 // Sprint 56: replace browser confirm() with BoardDeleteDialog/ListDeleteDialog for nested content.
 // Sprint 87: redirect to workspace boards page (with success toast via navigate state) when the currently open board is deleted.
 // Sprint 116: Health Check fifth tab (HEALTH_CHECK_ENABLED flag).
+// Sprint 170: Documentation sixth tab — visible only when board has a valid GitHub Project URL.
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppSelector } from '~/hooks/useAppSelector';
 import { useAppDispatch } from '~/hooks/useAppDispatch';
 import { useStore } from 'react-redux';
@@ -24,7 +25,10 @@ import {
   selectCards,
   selectBoardStatus,
 } from '../../slices/boardSlice';
-import { markReadThunk, selectNotifications } from '../../../Notification/slices/notificationSlice';
+import {
+  markReadThunk,
+  selectNotifications,
+} from '../../../Notification/slices/notificationSlice';
 import BoardHeader from '../../components/BoardHeader';
 import BoardCanvas from '../../components/BoardCanvas';
 import { useBoardCardFieldValues } from '../../../CustomFields/api';
@@ -32,8 +36,21 @@ import CardModalContainer from '../../../Card/containers/CardModal';
 import BoardSettings from '../BoardSettings/BoardSettings';
 import ToastRegion from '~/common/components/ToastRegion';
 import type { ToastItem } from '~/common/components/ToastRegion';
-import { updateBoard, archiveBoard, deleteBoard } from '../../api';
-import { createList, updateList, archiveList, deleteList, reorderLists, sortListCards, updateListColor } from '../../../List/api';
+import {
+  updateBoard,
+  archiveBoard,
+  deleteBoard,
+  getBoardIntegrations,
+} from '../../api';
+import {
+  createList,
+  updateList,
+  archiveList,
+  deleteList,
+  reorderLists,
+  sortListCards,
+  updateListColor,
+} from '../../../List/api';
 import type { ListSortBy } from '../../../List/types';
 import { createCard, getCard, copyCard } from '../../../Card/api';
 import { moveCard, archiveCard } from '../../api/card';
@@ -63,7 +80,10 @@ import BoardFilterPanel, {
   applyBoardFilter,
 } from '../../components/BoardFilterPanel';
 import { useGetBoardMembersQuery } from '../../slices/boardMembersSlice';
-import { selectCurrentUserWorkspaceRole, selectIsGuestInActiveWorkspace } from '~/extensions/Workspace/slices/workspaceSlice';
+import {
+  selectCurrentUserWorkspaceRole,
+  selectIsGuestInActiveWorkspace,
+} from '~/extensions/Workspace/slices/workspaceSlice';
 import {
   selectActiveWorkspaceId,
   setActiveWorkspace,
@@ -72,17 +92,35 @@ import { canBoardGuestWrite } from '../../mods/guestPermissions';
 import { FunnelIcon } from '@heroicons/react/24/outline';
 import HealthCheckTab from '~/extensions/HealthCheck/containers/HealthCheckTab/HealthCheckTab';
 import { HEALTH_CHECK_ENABLED } from '~/extensions/HealthCheck/config/healthCheckConfig';
+import { BOARD_CHAT_ENABLED } from '~/extensions/Board/config/boardChatConfig';
+import { BoardChatDrawer } from '~/extensions/BoardChat';
 import { boardPath, cardPath } from '~/common/routing/shortUrls';
 import BoardBottomBar from '~/extensions/BoardSwitcher/components/BoardBottomBar';
-import { selectSwitcherStarred, toggleStarAndReconcileThunk } from '~/extensions/BoardSwitcher/boardSwitcher.slice';
+import {
+  selectSwitcherStarred,
+  toggleStarAndReconcileThunk,
+} from '~/extensions/BoardSwitcher/boardSwitcher.slice';
+import SpecsWorkspacePage from '~/extensions/DeveloperDocs/containers/SpecsWorkspacePage/SpecsWorkspacePage';
+import {
+  selectBoardChatEnabled,
+  selectGithubEditingEnabled,
+} from '~/slices/featureFlagsSlice';
+import { selectCardDetail } from '../../../Card/slices/cardDetailSlice';
 
 const BoardPage = () => {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
-  const { boardId: boardRouteId, cardId: cardRouteId } = useParams<{ boardId?: string; cardId?: string }>();
+  const { boardId: boardRouteId, cardId: cardRouteId } = useParams<{
+    boardId?: string;
+    cardId?: string;
+  }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const queryCardId = searchParams.get('card');
   const [resolvedBoardId, setResolvedBoardId] = useState<string | null>(null);
-  const [resolvedBoardRouteId, setResolvedBoardRouteId] = useState<string | null>(null);
+  const [resolvedBoardRouteId, setResolvedBoardRouteId] = useState<
+    string | null
+  >(null);
 
   const boardId = boardRouteId ?? resolvedBoardId ?? undefined;
 
@@ -98,15 +136,21 @@ const BoardPage = () => {
   const currentWorkspaceRole = useAppSelector(selectCurrentUserWorkspaceRole);
   const activeWorkspaceId = useAppSelector(selectActiveWorkspaceId);
   const boardWorkspaceId =
-    board?.workspaceId ?? (board as { workspace_id?: string } | null)?.workspace_id;
+    board?.workspaceId ??
+    (board as { workspace_id?: string } | null)?.workspace_id;
   const realtimeBoardId = board?.id ?? '';
   // Active board view type (KANBAN/TABLE/CALENDAR/TIMELINE) — managed by BoardViewSwitcher
   const activeView = useAppSelector(selectActiveView);
   // [why] GUEST workspace members can view boards but not manage settings or members.
   const isGuest = useAppSelector(selectIsGuestInActiveWorkspace);
+  const workspaceRole = useAppSelector(selectCurrentUserWorkspaceRole);
+  const boardChatFlagEnabled = useAppSelector(selectBoardChatEnabled);
+  const githubEditingFlagEnabled = useAppSelector(selectGithubEditingEnabled);
+  const cardDetail = useAppSelector(selectCardDetail);
   // [why] VIEWER guests have read-only access; MEMBER guests can write.
   // Non-guests always get full write access (canBoardGuestWrite returns true for null).
-  const isViewerGuest = isGuest && !canBoardGuestWrite(board?.callerGuestType ?? null);
+  const isViewerGuest =
+    isGuest && !canBoardGuestWrite(board?.callerGuestType ?? null);
 
   // Batch-fetch custom field values for all cards on the board in a single request.
   // [why] Prevents N individual requests (one per card tile) when the board renders.
@@ -114,11 +158,18 @@ const BoardPage = () => {
   const customFieldValuesMap = useBoardCardFieldValues(boardId, allCardIds);
 
   const listSummaries = useMemo(
-    () => listOrder.map((id) => ({ id, title: lists[id]?.title ?? 'Untitled list' })),
+    () =>
+      listOrder.map((id) => ({
+        id,
+        title: lists[id]?.title ?? 'Untitled list',
+      })),
     [listOrder, lists],
   );
   const listColors = useMemo(
-    () => Object.fromEntries(Object.values(lists).map((entry) => [entry.id, entry.color ?? null])) as Record<string, string | null>,
+    () =>
+      Object.fromEntries(
+        Object.values(lists).map((entry) => [entry.id, entry.color ?? null]),
+      ) as Record<string, string | null>,
     [lists],
   );
 
@@ -130,16 +181,21 @@ const BoardPage = () => {
     if (!cardRouteId || boardRouteId) return;
     let cancelled = false;
     getCard({ api, cardId: cardRouteId })
-      .then((res: { includes: { board: { id: string; short_id?: string | null } } }) => {
-        if (cancelled) return;
-        const resolvedId = res.includes.board.id;
-        const resolvedRouteId =
-          typeof res.includes.board.short_id === 'string' && res.includes.board.short_id.length > 0
-            ? res.includes.board.short_id
-            : resolvedId;
-        setResolvedBoardId(resolvedId);
-        setResolvedBoardRouteId(resolvedRouteId);
-      })
+      .then(
+        (res: {
+          includes: { board: { id: string; short_id?: string | null } };
+        }) => {
+          if (cancelled) return;
+          const resolvedId = res.includes.board.id;
+          const resolvedRouteId =
+            typeof res.includes.board.short_id === 'string' &&
+            res.includes.board.short_id.length > 0
+              ? res.includes.board.short_id
+              : resolvedId;
+          setResolvedBoardId(resolvedId);
+          setResolvedBoardRouteId(resolvedRouteId);
+        },
+      )
       .catch(() => {
         if (cancelled) return;
         setResolvedBoardId(null);
@@ -152,39 +208,104 @@ const BoardPage = () => {
 
   // ── Toast notifications ───────────────────────────────────────────────────
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const addToast = useCallback((message: string, variant: ToastItem['variant'] | 'success' = 'error') => {
-    const normalizedVariant: ToastItem['variant'] = variant === 'success' ? 'info' : variant;
-    const id = crypto.randomUUID();
-    setToasts((prev) => [...prev, { id, message, variant: normalizedVariant }]);
-  }, []);
+  const addToast = useCallback(
+    (message: string, variant: ToastItem['variant'] | 'success' = 'error') => {
+      const normalizedVariant: ToastItem['variant'] =
+        variant === 'success' ? 'info' : variant;
+      const id = crypto.randomUUID();
+      setToasts((prev) => [
+        ...prev,
+        { id, message, variant: normalizedVariant },
+      ]);
+    },
+    [],
+  );
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   // ── Active tab ────────────────────────────────────────────────────────────
-  type BoardTab = 'board' | 'activities' | 'archived-cards' | 'health-check';
+  type BoardTab =
+    | 'board'
+    | 'activities'
+    | 'archived-cards'
+    | 'health-check'
+    | 'documentation';
   const [activeTab, setActiveTab] = useState<BoardTab>('board');
+
+  // ── Documentation tab — GitHub Project URL integration gate ───────────────
+  // [why] The Documentation tab is only visible when the board has a configured
+  // GitHub Project URL.  We fetch integrations once when boardId is known and
+  // store the result; null means "not yet loaded or no URL configured".
+  const [githubProjectUrl, setGithubProjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!boardId) return;
+    let cancelled = false;
+    getBoardIntegrations({ api, boardId })
+      .then((res) => {
+        if (cancelled) return;
+        setGithubProjectUrl(res.data.github_project_url ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGithubProjectUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, boardId]);
 
   // ── Board settings panel ─────────────────────────────────────────────────
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // ── Board members panel ───────────────────────────────────────────────────
   const [membersOpen, setMembersOpen] = useState(false);
-  const { data: boardMembers = [] } = useGetBoardMembersQuery(boardId ?? '', { skip: !boardId });
+  const { data: boardMembers = [] } = useGetBoardMembersQuery(boardId ?? '', {
+    skip: !boardId,
+  });
   // [why] Joined board members are explicit board participants.
   const isBoardMember = boardMembers.some((m) => m.user_id === currentUser?.id);
-  const canManageBoard = currentWorkspaceRole === 'OWNER' || currentWorkspaceRole === 'ADMIN';
+  const canManageBoard =
+    currentWorkspaceRole === 'OWNER' || currentWorkspaceRole === 'ADMIN';
   // [why] Board guests are board-scoped participants and should be able to
   //       configure and receive board notifications like joined members.
   const canManageOwnBoardNotifications = isBoardMember || isGuest;
+  const canManageGuestChatPermissions =
+    workspaceRole === 'OWNER' || workspaceRole === 'ADMIN';
+  const canManageIntegrations =
+    workspaceRole === 'OWNER' || workspaceRole === 'ADMIN';
+  const canEditDocs =
+    workspaceRole === 'OWNER' ||
+    workspaceRole === 'ADMIN' ||
+    workspaceRole === 'MEMBER' ||
+    (isGuest && canBoardGuestWrite(board?.callerGuestType ?? null));
+  const isBoardChatEnabled = BOARD_CHAT_ENABLED && boardChatFlagEnabled;
+  const isDocumentationEnabled = githubEditingFlagEnabled;
+
+  // ── Board chat panel ──────────────────────────────────────────────────────
+  const [boardChatOpen, setBoardChatOpen] = useState(false);
+  // [why] Incremented when AI chat assist modifies documentation, forcing
+  // SpecsWorkspacePage to remount and reload its file tree from the server.
+  const [docsRefreshKey, setDocsRefreshKey] = useState(0);
 
   // ── Board filters ─────────────────────────────────────────────────────────
   const [filters, setFilters] = useState<BoardFilters>(DEFAULT_FILTERS);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const filterContainerRef = useRef<HTMLDivElement>(null);
 
-  // Reset filters when navigating to a different board
-  useEffect(() => { setFilters(DEFAULT_FILTERS); setFilterPanelOpen(false); }, [boardId]);
+  // Reset filters and close panels when navigating to a different board
+  useEffect(() => {
+    setFilters(DEFAULT_FILTERS);
+    setFilterPanelOpen(false);
+    setBoardChatOpen(false);
+  }, [boardId]);
+
+  useEffect(() => {
+    if (activeTab === 'documentation' && !isDocumentationEnabled) {
+      setActiveTab('board');
+    }
+  }, [activeTab, isDocumentationEnabled]);
 
   // Derive unique labels from cards for the filter panel label list
   const boardLabels = useMemo(() => {
@@ -192,7 +313,12 @@ const BoardPage = () => {
     for (const card of Object.values(cards)) {
       const labels = Array.isArray(card.labels) ? card.labels : [];
       for (const label of labels) {
-        if (!map.has(label.id)) map.set(label.id, { id: label.id, name: label.name, color: label.color });
+        if (!map.has(label.id))
+          map.set(label.id, {
+            id: label.id,
+            name: label.name,
+            color: label.color,
+          });
       }
     }
     return Array.from(map.values());
@@ -201,34 +327,37 @@ const BoardPage = () => {
   // Apply all active filters to card maps
   const isFiltering = countActiveFilters(filters) > 0;
   const filteredCardsByList: Record<string, string[]> = useMemo(
-    () => (
+    () =>
       isFiltering
         ? Object.fromEntries(
             Object.entries(cardsByList).map(([listId, cardIds]) => [
               listId,
               cardIds.filter((cardId) => {
                 const card = cards[cardId];
-                return card ? applyBoardFilter(card, filters, currentUser?.id) : false;
+                return card
+                  ? applyBoardFilter(card, filters, currentUser?.id)
+                  : false;
               }),
             ]),
           )
-        : cardsByList
-    ),
+        : cardsByList,
     [cardsByList, cards, filters, isFiltering, currentUser?.id],
   );
 
   const filteredCards = useMemo(
-    () => (
+    () =>
       isFiltering
         ? Object.fromEntries(
-            Object.entries(cards).filter(([, card]) => applyBoardFilter(card, filters, currentUser?.id)),
+            Object.entries(cards).filter(([, card]) =>
+              applyBoardFilter(card, filters, currentUser?.id),
+            ),
           )
-        : cards
-    ),
+        : cards,
     [cards, filters, isFiltering, currentUser?.id],
   );
 
   const initialCardsPerList = useMemo(() => {
+    if (globalThis.window === undefined) return 50;
     if (globalThis.window.innerWidth < 900) return 25;
     return 50;
   }, []);
@@ -244,9 +373,13 @@ const BoardPage = () => {
   }, [notifications]);
 
   const unreadNotificationCountByCardId = useMemo(
-    () => Object.fromEntries(
-      Object.entries(unreadNotificationIdsByCardId).map(([cardId, ids]) => [cardId, ids.length]),
-    ) as Record<string, number>,
+    () =>
+      Object.fromEntries(
+        Object.entries(unreadNotificationIdsByCardId).map(([cardId, ids]) => [
+          cardId,
+          ids.length,
+        ]),
+      ) as Record<string, number>,
     [unreadNotificationIdsByCardId],
   );
 
@@ -268,20 +401,32 @@ const BoardPage = () => {
   } | null>(null);
 
   // ── Real-time sync (sprint-20) ────────────────────────────────────────────
-  const { handleEvent, lastSequence } = useBoardSync({ boardId: realtimeBoardId });
+  const { handleEvent, lastSequence } = useBoardSync({
+    boardId: realtimeBoardId,
+  });
   // [why] A full snapshot avoids replaying history against a hydrated board.
   const refreshBoard = useBoardSnapshot({
     boardId,
-    fetchSnapshot: () => dispatch(fetchBoardDataThunk({
-      boardId: boardId ?? '', initialCardsPerList, background: true,
-    })),
-    shouldRetry: (result) => shouldRetryBoardSnapshot({
-      result, appliedRequestId: store.getState().board.appliedSnapshotRequestId,
-    }),
+    fetchSnapshot: () =>
+      dispatch(
+        fetchBoardDataThunk({
+          boardId: boardId ?? '',
+          initialCardsPerList,
+          background: true,
+        }),
+      ),
+    shouldRetry: (result) =>
+      shouldRetryBoardSnapshot({
+        result,
+        appliedRequestId: store.getState().board.appliedSnapshotRequestId,
+      }),
   });
-  const applyPolledEvents = useCallback((events: Parameters<typeof handleEvent>[0][]) => {
-    events.forEach(handleEvent);
-  }, [handleEvent]);
+  const applyPolledEvents = useCallback(
+    (events: Parameters<typeof handleEvent>[0][]) => {
+      events.forEach(handleEvent);
+    },
+    [handleEvent],
+  );
   const { connectionState, pollingActive } = useWebSocket({
     boardId: realtimeBoardId,
     token: accessToken ?? '',
@@ -289,11 +434,14 @@ const BoardPage = () => {
     onEvent: handleEvent,
     onReconnect: refreshBoard,
     onMutationConflict: () => {
-      addToast('A mutation conflicted with a remote change and was discarded.', 'conflict');
+      addToast(
+        'A mutation conflicted with a remote change and was discarded.',
+        'conflict',
+      );
     },
     onQueueOverflow: () => {
       // Full reload on overflow so state is not stale
-      if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+      if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
     },
   });
 
@@ -307,7 +455,8 @@ const BoardPage = () => {
   });
 
   useEffect(() => {
-    if (boardId) void dispatch(fetchBoardDataThunk({ boardId, initialCardsPerList }));
+    if (boardId)
+      dispatch(fetchBoardDataThunk({ boardId, initialCardsPerList }));
   }, [dispatch, boardId, initialCardsPerList]);
 
   useEffect(() => {
@@ -326,47 +475,64 @@ const BoardPage = () => {
         void dispatch(markReadThunk({ id: notificationId }));
       });
 
-      const targetCard = cards[cardId] as { short_id?: string | null; title?: string | null } | undefined;
+      const targetCard = cards[cardId] as
+        { short_id?: string | null; title?: string | null } | undefined;
       const routeCardId = targetCard?.short_id ?? cardId;
-      const boardRouteTarget = board?.short_id ?? resolvedBoardRouteId ?? boardId;
+      const boardRouteTarget =
+        board?.short_id ?? resolvedBoardRouteId ?? boardId;
 
       // Keep the board route mounted and open the modal via query param so
       // board-local UI state (e.g. active filters) is not reset.
       if (boardRouteTarget) {
-        navigate(`${boardPath({
-          id: boardRouteTarget,
-          ...(board?.title ? { title: board.title } : {}),
-        })}?card=${encodeURIComponent(routeCardId)}`);
+        navigate(
+          `${boardPath({
+            id: boardRouteTarget,
+            ...(board?.title ? { title: board.title } : {}),
+          })}?card=${encodeURIComponent(routeCardId)}`,
+        );
         return;
       }
 
-      navigate(cardPath({
-        id: cardId,
-        ...(targetCard?.short_id ? { short_id: targetCard.short_id } : {}),
-        ...(targetCard?.title ? { title: targetCard.title } : {}),
-      }));
+      navigate(
+        cardPath({
+          id: cardId,
+          ...(targetCard?.short_id ? { short_id: targetCard.short_id } : {}),
+          ...(targetCard?.title ? { title: targetCard.title } : {}),
+        }),
+      );
     },
-    [board, resolvedBoardRouteId, boardId, cards, navigate, unreadNotificationIdsByCardId, dispatch],
+    [
+      board,
+      resolvedBoardRouteId,
+      boardId,
+      cards,
+      navigate,
+      unreadNotificationIdsByCardId,
+      dispatch,
+    ],
   );
 
   const handleRouteCardClose = useCallback(() => {
     const boardRouteTarget = board?.short_id ?? resolvedBoardRouteId ?? boardId;
     if (!boardRouteTarget) return;
-    navigate(boardPath({
-      id: boardRouteTarget,
-      ...(board?.title ? { title: board.title } : {}),
-    }));
+    navigate(
+      boardPath({
+        id: boardRouteTarget,
+        ...(board?.title ? { title: board.title } : {}),
+      }),
+    );
   }, [board, resolvedBoardRouteId, boardId, navigate]);
 
   // ── Board title ─────────────────────────────────────────────────────────
-  const handleTitleSave = useCallback(async (title: string) => {
+  const handleTitleSave = useCallback(
+    async (title: string) => {
       if (!board || !boardId) return;
       dispatch(boardSliceActions.optimisticUpdateBoardTitle({ title }));
       try {
         await updateBoard({ api, boardId, title });
       } catch {
         // Rollback — re-fetch authoritative state
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        dispatch(fetchBoardDataThunk({ boardId }));
       }
     },
     [api, board, boardId, dispatch],
@@ -383,7 +549,12 @@ const BoardPage = () => {
 
   // ── Card move ────────────────────────────────────────────────────────────
   const handleCardMove = useCallback(
-    (args: { cardId: string; fromListId: string; toListId: string; newIndex: number }) => {
+    (args: {
+      cardId: string;
+      fromListId: string;
+      toListId: string;
+      newIndex: number;
+    }) => {
       dispatch(boardSliceActions.applyOptimisticCardMove(args));
     },
     [dispatch],
@@ -449,10 +620,17 @@ const BoardPage = () => {
   const handleAddList = useCallback(
     async (title: string) => {
       if (!boardId) return;
-      const result = await createList({ api, boardId, title });
-      dispatch(boardSliceActions.addList({ list: result.data }));
+      try {
+        const result = await createList({ api, boardId, title });
+        dispatch(boardSliceActions.addList({ list: result.data }));
+      } catch (err: unknown) {
+        const msg =
+          (err as { response?: { data?: { error?: { message?: string } } } })
+            .response?.data?.error?.message ?? 'Failed to create list.';
+        addToast(msg, 'error');
+      }
     },
-    [api, boardId, dispatch],
+    [api, boardId, dispatch, addToast],
   );
 
   // ── List rename ──────────────────────────────────────────────────────────
@@ -461,7 +639,7 @@ const BoardPage = () => {
       // Optimistic: update local state; fire API in background
       updateList({ api, listId, title }).catch(() => {
         // On failure, re-fetch to restore authoritative state
-        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
       });
     },
     [api, boardId, dispatch],
@@ -472,7 +650,7 @@ const BoardPage = () => {
     async (listId: string) => {
       try {
         await archiveList({ api, listId });
-        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
         // TODO: surface error to user
       }
@@ -484,11 +662,21 @@ const BoardPage = () => {
     async (listId: string) => {
       try {
         await deleteList({ api, listId });
-        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
       } catch (err: unknown) {
         // 409 means the list has cards — open confirmation dialog.
-        const resp = (err as { response?: { status?: number; data?: { name?: string; data?: { cardCount?: number } } } }).response;
-        if (resp?.status === 409 && resp.data?.name === 'delete-requires-confirmation') {
+        const resp = (
+          err as {
+            response?: {
+              status?: number;
+              data?: { name?: string; data?: { cardCount?: number } };
+            };
+          }
+        ).response;
+        if (
+          resp?.status === 409 &&
+          resp.data?.name === 'delete-requires-confirmation'
+        ) {
           const listTitle = lists[listId]?.title ?? 'this list';
           setListDeleteDialog({
             listId,
@@ -508,9 +696,14 @@ const BoardPage = () => {
       dispatch(boardSliceActions.sortCardsInList({ listId, sortBy }));
       try {
         const response = await sortListCards({ api, listId, sortBy });
-        dispatch(boardSliceActions.applySortedListFromServer({ listId, cards: response.data }));
+        dispatch(
+          boardSliceActions.applySortedListFromServer({
+            listId,
+            cards: response.data,
+          }),
+        );
       } catch {
-        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to sort list.', 'error');
       }
     },
@@ -526,7 +719,7 @@ const BoardPage = () => {
       try {
         await updateListColor({ api, listId, color });
       } catch {
-        if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+        if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to update list color.', 'error');
       }
     },
@@ -540,7 +733,10 @@ const BoardPage = () => {
       if (currentIndex === -1) return;
 
       const without = listOrder.filter((id) => id !== listId);
-      const normalizedTarget = Math.max(0, Math.min(targetIndex, listOrder.length - 1));
+      const normalizedTarget = Math.max(
+        0,
+        Math.min(targetIndex, listOrder.length - 1),
+      );
       const newOrder = [...without];
       newOrder.splice(normalizedTarget, 0, listId);
 
@@ -548,7 +744,7 @@ const BoardPage = () => {
       try {
         await reorderLists({ api, boardId, order: newOrder });
       } catch {
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to move list.', 'error');
       }
     },
@@ -575,9 +771,9 @@ const BoardPage = () => {
           // Chain moves so cards keep their original relative order in the destination list.
           afterCardId = cardId;
         }
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to move all cards.', 'error');
       }
     },
@@ -590,10 +786,12 @@ const BoardPage = () => {
       const cardIds = cardsByList[listId] ?? [];
       if (cardIds.length === 0) return;
       try {
-        await Promise.all(cardIds.map((cardId) => archiveCard({ api, cardId })));
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        await Promise.all(
+          cardIds.map((cardId) => archiveCard({ api, cardId })),
+        );
+        dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        dispatch(fetchBoardDataThunk({ boardId }));
         addToast('Failed to archive all cards in this list.', 'error');
       }
     },
@@ -622,7 +820,7 @@ const BoardPage = () => {
             keepMembers: true,
           });
         }
-        void dispatch(fetchBoardDataThunk({ boardId }));
+        dispatch(fetchBoardDataThunk({ boardId }));
       } catch {
         addToast('Failed to copy list.', 'error');
       }
@@ -635,7 +833,7 @@ const BoardPage = () => {
     if (!boardId || !board) return;
     try {
       await archiveBoard({ api, boardId });
-      void dispatch(fetchBoardDataThunk({ boardId }));
+      dispatch(fetchBoardDataThunk({ boardId }));
     } catch {
       addToast('Failed to archive board.', 'error');
     }
@@ -649,13 +847,26 @@ const BoardPage = () => {
       setSettingsOpen(false);
       setMembersOpen(false);
       automationPanel.closePanel();
-      navigate(`/workspace/${board?.workspaceId ?? ''}/boards`, {
+      navigate(`/workspace/${board?.workspaceId}/boards`, {
         state: { successToast: 'Board deleted' },
       });
     } catch (err: unknown) {
       // 409 means the board has lists/cards — open confirmation dialog.
-      const resp = (err as { response?: { status?: number; data?: { name?: string; data?: { listCount?: number; cardCount?: number } } } }).response;
-      if (resp?.status === 409 && resp.data?.name === 'delete-requires-confirmation') {
+      const resp = (
+        err as {
+          response?: {
+            status?: number;
+            data?: {
+              name?: string;
+              data?: { listCount?: number; cardCount?: number };
+            };
+          };
+        }
+      ).response;
+      if (
+        resp?.status === 409 &&
+        resp.data?.name === 'delete-requires-confirmation'
+      ) {
         setBoardDeleteDialog({
           listCount: resp.data.data?.listCount ?? 0,
           cardCount: resp.data.data?.cardCount ?? 0,
@@ -669,16 +880,68 @@ const BoardPage = () => {
   // ── Star / unstar board ────────────────────────────────────────────────
   // [why] One authority for stars: the switcher's bookkeeping, shared with its panel and the
   // board list. Keyed by the board's UUID, not the route's short id.
-  const switcherStarred = useAppSelector((s) => (board ? selectSwitcherStarred(s, board.id) : undefined));
+  const switcherStarred = useAppSelector((s) =>
+    board ? selectSwitcherStarred(s, board.id) : undefined,
+  );
   const isStarred = switcherStarred ?? board?.isStarred === true;
 
-  const toggleStar = useCallback(async (starred: boolean) => {
-    if (!board) return;
-    const res = await dispatch(toggleStarAndReconcileThunk({ boardId: board.id, starred, prev: isStarred }));
-    if (res.payload === false) addToast(starred ? 'Failed to star board.' : 'Failed to unstar board.', 'error');
-  }, [board, dispatch, isStarred, addToast]);
+  const toggleStar = useCallback(
+    async (starred: boolean) => {
+      if (!board) return;
+      const res = await dispatch(
+        toggleStarAndReconcileThunk({
+          boardId: board.id,
+          starred,
+          prev: isStarred,
+        }),
+      );
+      if (res.payload === false)
+        addToast(
+          starred ? 'Failed to star board.' : 'Failed to unstar board.',
+          'error',
+        );
+    },
+    [board, dispatch, isStarred, addToast],
+  );
   const handleStar = useCallback(() => toggleStar(true), [toggleStar]);
   const handleUnstar = useCallback(() => toggleStar(false), [toggleStar]);
+
+  // ── Dynamic document title ────────────────────────────────────────────────
+  // [why] Sets the browser tab title based on context: card > tab > board > app name.
+  useEffect(() => {
+    const appName = 'ChimeDeck';
+    const boardTitle = board?.title;
+
+    // Card open via ?card= query param or /c/:cardId route — use cardDetail slice
+    // [why] ?card= uses short_id which doesn't match board's cards map keys.
+    const openCardId = queryCardId ?? cardRouteId;
+    if (openCardId && cardDetail?.title && boardTitle) {
+      document.title = `${cardDetail.title} | ${boardTitle} | ${appName}`;
+      return;
+    }
+
+    // Board page with a non-default tab
+    const tabLabels: Record<string, string> = {
+      activities: 'Activities',
+      'archived-cards': 'Archived Cards',
+      'health-check': 'Health Check',
+      documentation: 'Documentation',
+    };
+    if (boardTitle && activeTab !== 'board') {
+      const tabLabel = tabLabels[activeTab] ?? activeTab;
+      document.title = `${tabLabel} | ${boardTitle} | ${appName}`;
+      return;
+    }
+
+    // Default board view
+    if (boardTitle) {
+      document.title = `${boardTitle} | ${appName}`;
+      return;
+    }
+
+    // Fallback
+    document.title = appName;
+  }, [queryCardId, cardRouteId, cardDetail?.title, board?.title, activeTab]);
 
   if (status === 'loading' && !board) {
     return (
@@ -703,106 +966,101 @@ const BoardPage = () => {
     { id: 'activities' as const, label: 'Activities' },
     { id: 'archived-cards' as const, label: 'Archived Cards' },
     // Health Check tab — only visible when feature flag is enabled (Sprint 116)
-    ...(HEALTH_CHECK_ENABLED ? [{ id: 'health-check' as const, label: 'Health Check' }] : []),
+    ...(HEALTH_CHECK_ENABLED
+      ? [{ id: 'health-check' as const, label: 'Health Check' }]
+      : []),
+    // Documentation tab — only visible when GitHub editing is enabled and URL is configured.
+    ...(isDocumentationEnabled && githubProjectUrl
+      ? [{ id: 'documentation' as const, label: 'Documentation' }]
+      : []),
   ];
 
   const tabContent = (() => {
     if (activeTab === 'board') {
       return (
         <div className="flex flex-col flex-1 overflow-hidden">
-          <PluginIframeContainer boardId={boardId ?? ''}>
-            {activeView === 'KANBAN' ? (
-              <BoardCanvas
-                boardId={boardId ?? ''}
-                boardTitle={board.title}
-                currentUserId={currentUser?.id ?? ''}
-                listOrder={listOrder}
-                lists={lists}
-                cardsByList={filteredCardsByList}
-                cards={filteredCards}
-                onCardMove={handleCardMove}
-                onListReorder={handleListReorder}
-                onDragStart={handleDragStart}
-                onDragCommit={handleDragCommit}
-                onDragRollback={handleDragRollback}
-                onAddCard={handleAddCard}
-                onAddList={handleAddList}
-                onRenameList={(listId, title) => {
-                  handleRenameList(listId, title);
-                }}
-                onCopyList={(listId) => {
-                  void handleCopyList(listId);
-                }}
-                onMoveList={(listId, targetIndex) => {
-                  void handleMoveList(listId, targetIndex);
-                }}
-                onMoveAllCards={(fromListId, targetListId) => {
-                  void handleMoveAllCards(fromListId, targetListId);
-                }}
-                onArchiveList={(listId) => {
-                  void handleArchiveList(listId);
-                }}
-                onArchiveAllCards={(listId) => {
-                  void handleArchiveAllCards(listId);
-                }}
-                onDeleteList={(listId) => {
-                  void handleDeleteList(listId);
-                }}
-                onChangeListColor={(listId, color) => {
-                  void handleChangeListColor(listId, color);
-                }}
-                onSortList={(listId, sortBy) => {
-                  void handleSortList(listId, sortBy);
-                }}
-                listColors={listColors}
-                listSummaries={listSummaries}
-                onCardClick={handleCardClick}
-                isReadOnly={board.state === 'ARCHIVED'}
-                isViewerGuest={isViewerGuest}
-                customFieldValuesMap={customFieldValuesMap}
-                unreadNotificationCountByCardId={unreadNotificationCountByCardId}
-                hasBackground={!!board.background}
-                collapseEmptyLists={filters.collapseLists && isFiltering}
-              />
-            ) : activeView === 'TABLE' ? (
-              <TableView
-                cards={Object.values(filteredCards)}
-                lists={lists}
-                onCardClick={handleCardClick}
-              />
-            ) : activeView === 'CALENDAR' ? (
-              <CalendarView
-                cards={Object.values(filteredCards)}
-                lists={lists}
-                onCardClick={handleCardClick}
-                addToast={addToast}
-              />
-            ) : (
-              <TimelineView
-                cards={Object.values(filteredCards)}
-                lists={lists}
-                onCardClick={handleCardClick}
-                addToast={addToast}
-              />
-            )}
-            <AutomationPanel
+          {activeView === 'KANBAN' ? (
+            <BoardCanvas
               boardId={boardId ?? ''}
-              isOpen={automationPanel.isOpen}
-              activeTab={automationPanel.activeTab}
-              onClose={automationPanel.closePanel}
-              onTabChange={automationPanel.setActiveTab}
+              boardTitle={board.title}
+              currentUserId={currentUser?.id ?? ''}
+              listOrder={listOrder}
+              lists={lists}
+              cardsByList={filteredCardsByList}
+              cards={filteredCards}
+              onCardMove={handleCardMove}
+              onListReorder={handleListReorder}
+              onDragStart={handleDragStart}
+              onDragCommit={handleDragCommit}
+              onDragRollback={handleDragRollback}
+              onAddCard={handleAddCard}
+              onAddList={handleAddList}
+              onRenameList={handleRenameList}
+              onCopyList={handleCopyList}
+              onMoveList={handleMoveList}
+              onMoveAllCards={handleMoveAllCards}
+              onArchiveList={handleArchiveList}
+              onArchiveAllCards={handleArchiveAllCards}
+              onDeleteList={handleDeleteList}
+              onChangeListColor={handleChangeListColor}
+              onSortList={handleSortList}
+              listColors={listColors}
+              listSummaries={listSummaries}
+              onCardClick={handleCardClick}
+              isReadOnly={board.state === 'ARCHIVED'}
+              isViewerGuest={isViewerGuest}
+              customFieldValuesMap={customFieldValuesMap}
+              unreadNotificationCountByCardId={unreadNotificationCountByCardId}
+              hasBackground={!!board.background}
+              collapseEmptyLists={filters.collapseLists && isFiltering}
             />
-            <ToastRegion toasts={toasts} onDismiss={dismissToast} />
-          </PluginIframeContainer>
+          ) : activeView === 'TABLE' ? (
+            <TableView
+              cards={Object.values(filteredCards)}
+              lists={lists}
+              onCardClick={handleCardClick}
+            />
+          ) : activeView === 'CALENDAR' ? (
+            <CalendarView
+              cards={Object.values(filteredCards)}
+              lists={lists}
+              onCardClick={handleCardClick}
+              addToast={addToast}
+            />
+          ) : activeView === 'TIMELINE' ? (
+            <TimelineView
+              cards={Object.values(filteredCards)}
+              lists={lists}
+              onCardClick={handleCardClick}
+              addToast={addToast}
+            />
+          ) : null}
+          <AutomationPanel
+            boardId={boardId ?? ''}
+            isOpen={automationPanel.isOpen}
+            activeTab={automationPanel.activeTab}
+            onClose={automationPanel.closePanel}
+            onTabChange={automationPanel.setActiveTab}
+          />
+          <ToastRegion toasts={toasts} onDismiss={dismissToast} />
         </div>
       );
     }
 
     if (activeTab === 'activities') {
       return (
-        <div className={`flex-1 overflow-y-auto${board.background ? ' px-6 py-4' : ''}`}>
-          <div className={board.background ? 'bg-bg-surface rounded-xl min-h-full' : ''}>
-            <BoardActivitiesPanel boardId={boardId ?? ''} onCardClick={handleCardClick} />
+        <div
+          className={`flex-1 overflow-y-auto${board.background ? ' px-6 py-4' : ''}`}
+        >
+          <div
+            className={
+              board.background ? 'bg-bg-surface rounded-xl min-h-full' : ''
+            }
+          >
+            <BoardActivitiesPanel
+              boardId={boardId ?? ''}
+              onCardClick={handleCardClick}
+            />
           </div>
         </div>
       );
@@ -812,13 +1070,30 @@ const BoardPage = () => {
       return <HealthCheckTab boardId={boardId ?? ''} />;
     }
 
+    if (activeTab === 'documentation' && isDocumentationEnabled) {
+      return (
+        <SpecsWorkspacePage
+          key={docsRefreshKey}
+          boardId={boardId ?? ''}
+          accessToken={accessToken ?? null}
+          canEdit={canEditDocs}
+        />
+      );
+    }
+
     return (
-      <div className={`flex-1 overflow-y-auto${board.background ? ' px-6 py-4' : ''}`}>
-        <div className={board.background ? 'bg-bg-surface rounded-xl min-h-full' : ''}>
+      <div
+        className={`flex-1 overflow-y-auto${board.background ? ' px-6 py-4' : ''}`}
+      >
+        <div
+          className={
+            board.background ? 'bg-bg-surface rounded-xl min-h-full' : ''
+          }
+        >
           <BoardArchivedCardsPanel
             boardId={boardId ?? ''}
             onCardUnarchived={() => {
-              if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
+              if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
               setActiveTab('board');
             }}
           />
@@ -830,225 +1105,278 @@ const BoardPage = () => {
   return (
     <div
       className="flex flex-col text-base h-full overflow-hidden relative bg-bg-base bg-cover bg-center"
-      style={board.background ? { backgroundImage: `url(${board.background})` } : undefined}
+      style={
+        board.background
+          ? { backgroundImage: `url(${board.background})` }
+          : undefined
+      }
     >
       {/* Dark scrim over background image so text stays legible */}
       {board.background && (
-        <div className="absolute inset-0 bg-black/50 pointer-events-none z-0" aria-hidden="true" />
+        <div
+          className="absolute inset-0 bg-black/50 pointer-events-none z-0"
+          aria-hidden="true"
+        />
       )}
       {/* All content above the scrim */}
       {/* WHY: pb-14 ends the lists and their scrollbar above the floating bottom bar
           while the background image still extends underneath it */}
       <div className="relative z-10 flex flex-col h-full overflow-hidden pb-14">
-      {/* Unified glass block — one frosted surface using theme tokens so dark mode works */}
-      {/* WHY: relative z-10 ensures this stacking context paints above the BoardCanvas sibling,
+        {/* Unified glass block — one frosted surface using theme tokens so dark mode works */}
+        {/* WHY: relative z-10 ensures this stacking context paints above the BoardCanvas sibling,
           preventing the header dropdown from being hidden behind kanban column elements */}
-      <div className={`relative z-10 border-b border-border${board.background ? ' bg-bg-surface/75 backdrop-blur-2xl' : ' bg-bg-surface'}`}>
-      <BoardHeader
-        board={isStarred === (board.isStarred === true) ? board : { ...board, isStarred }}
-        members={boardMembers.map((m) => ({ id: m.user_id, display_name: m.display_name, email: m.email, avatar_url: m.avatar_url }))}
-        connectionState={connectionState}
-        pollingActive={pollingActive}
-        onTitleSave={handleTitleSave}
-        onOpenAutomation={automationPanel.openPanel}
-        hasBackground={!!board.background}
-        useParentGlass={!!board.background}
-        isGuest={isGuest}
-        onOpenSettings={() => {
-          setSettingsOpen(true);
-        }}
-        onOpenMembers={() => {
-          setMembersOpen(true);
-        }}
-        {...(!isGuest && {
-          onArchive: () => {
-            void handleBoardArchive();
-          },
-          onDelete: () => {
-            void handleBoardDelete();
-          },
-        })}
-        onStar={() => {
-          void handleStar();
-        }}
-        onUnstar={() => {
-          void handleUnstar();
-        }}
-      />
-      {board.state === 'ARCHIVED' && (
-        <div className="mx-6 mt-1 rounded border border-yellow-700 bg-yellow-900/30 px-4 py-2 text-sm text-yellow-400">
-          This board is archived and read-only.
-        </div>
-      )}
-
-      {/* Nav row: primary tabs on the left, view switcher on the right */}
-      <div className="flex items-center px-6 pb-0">
-        {/* Primary navigation group */}
-        <div className="flex items-center">
-          {tabs.map((tab) => {
-            const isActive = activeTab === tab.id;
-            // Underline-only active state — no background pills.
-            let tabClass = '';
-            if (isActive) {
-              tabClass = board.background
-                ? 'text-white font-medium border-b-2 border-white [text-shadow:0_1px_3px_rgba(0,0,0,0.5)]'
-                : 'text-primary font-medium border-b-2 border-primary';
-            } else {
-              tabClass = board.background
-                ? 'text-white/80 border-b-2 border-transparent hover:text-white hover:bg-white/15 rounded transition-colors [text-shadow:0_1px_3px_rgba(0,0,0,0.5)]'
-                : 'text-muted border-b-2 border-transparent hover:text-base transition-colors';
+        <div
+          className={`relative z-10 border-b border-border${board.background ? ' bg-bg-surface/75 backdrop-blur-2xl' : ' bg-bg-surface'}`}
+        >
+          <BoardHeader
+            board={
+              isStarred === (board.isStarred === true)
+                ? board
+                : { ...board, isStarred }
             }
-            return (
-              <button
-                key={tab.id}
-                onClick={() => {
-                  setActiveTab(tab.id);
-                }}
-                className={`px-3 py-2.5 text-sm font-medium ${tabClass}`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-        {/* Thin divider + view switcher + filter button — only on Board tab */}
-        {activeTab === 'board' && (
-          <>
-            <div className={`mx-4 h-4 w-px flex-shrink-0 ${board.background ? 'bg-white/30' : 'bg-border'}`} aria-hidden="true" />
-            <BoardViewSwitcher boardId={boardId ?? ''} hasBackground={!!board.background} segmented />
-            <div ref={filterContainerRef} className="relative ml-2">
-              {/* Filter button — shows active filter count as a badge */}
-              {(() => {
-                const activeCount = countActiveFilters(filters);
-                const hasActiveFilters = activeCount > 0;
-                const btnBase = 'inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary';
-                let btnVariant: string;
-                if (hasActiveFilters && board.background) {
-                  btnVariant = 'bg-white/25 text-white hover:bg-white/30';
-                } else if (hasActiveFilters) {
-                  btnVariant = 'bg-bg-overlay text-base hover:bg-bg-sunken';
-                } else if (board.background) {
-                  btnVariant = 'text-white/80 hover:text-white hover:bg-white/15';
+            members={boardMembers.map((m) => ({
+              id: m.user_id,
+              display_name: m.display_name,
+              email: m.email,
+              avatar_url: m.avatar_url,
+            }))}
+            connectionState={connectionState}
+            pollingActive={pollingActive}
+            onTitleSave={handleTitleSave}
+            onOpenAutomation={automationPanel.openPanel}
+            hasBackground={!!board.background}
+            useParentGlass={!!board.background}
+            isGuest={isGuest}
+            onOpenSettings={() => {
+              setSettingsOpen(true);
+            }}
+            onOpenMembers={() => {
+              setMembersOpen(true);
+            }}
+            {...(isBoardChatEnabled && {
+              onOpenBoardChat: () => {
+                setBoardChatOpen(true);
+              },
+            })}
+            {...(!isGuest && {
+              onArchive: handleBoardArchive,
+              onDelete: handleBoardDelete,
+            })}
+            onStar={handleStar}
+            onUnstar={handleUnstar}
+          />
+          {board.state === 'ARCHIVED' && (
+            <div className="mx-6 mt-1 rounded border border-yellow-700 bg-yellow-900/30 px-4 py-2 text-sm text-yellow-400">
+              This board is archived and read-only.
+            </div>
+          )}
+
+          {/* Nav row: primary tabs on the left, view switcher on the right */}
+          <div className="flex items-center px-6 pb-0">
+            {/* Primary navigation group */}
+            <div className="flex items-center">
+              {tabs.map((tab) => {
+                const isActive = activeTab === tab.id;
+                // Underline-only active state — no background pills.
+                let tabClass = '';
+                if (isActive) {
+                  tabClass = board.background
+                    ? 'text-white font-medium border-b-2 border-white [text-shadow:0_1px_3px_rgba(0,0,0,0.5)]'
+                    : 'text-primary font-medium border-b-2 border-primary';
                 } else {
-                  btnVariant = 'text-muted hover:text-base hover:bg-bg-overlay';
+                  tabClass = board.background
+                    ? 'text-white/80 border-b-2 border-transparent hover:text-white hover:bg-white/15 rounded transition-colors [text-shadow:0_1px_3px_rgba(0,0,0,0.5)]'
+                    : 'text-muted border-b-2 border-transparent hover:text-base transition-colors';
                 }
-                const badgeClass = board.background
-                  ? 'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none bg-white/30 text-white'
-                  : 'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none bg-primary text-white';
                 return (
                   <button
-                    type="button"
+                    key={tab.id}
                     onClick={() => {
-                      setFilterPanelOpen((value) => !value);
+                      setActiveTab(tab.id);
                     }}
-                    className={`${btnBase} ${btnVariant}`}
+                    className={`px-3 py-2.5 text-sm font-medium ${tabClass}`}
                   >
-                    <FunnelIcon className="h-3.5 w-3.5" aria-hidden="true" />
-                    Filter
-                    {hasActiveFilters && (
-                      <span className={badgeClass}>{activeCount}</span>
-                    )}
+                    {tab.label}
                   </button>
                 );
-              })()}
-              {filterPanelOpen && (
-                <BoardFilterPanel
-                  containerRef={filterContainerRef}
-                  onClose={() => {
-                    setFilterPanelOpen(false);
-                  }}
-                  filters={filters}
-                  onChange={setFilters}
-                  boardMembers={boardMembers}
-                  boardLabels={boardLabels}
-                  {...(currentUser?.id ? { currentUserId: currentUser.id } : {})}
-                />
-              )}
+              })}
             </div>
-          </>
+            {/* Thin divider + view switcher + filter button — only on Board tab */}
+            {activeTab === 'board' && (
+              <>
+                <div
+                  className={`mx-4 h-4 w-px flex-shrink-0 ${board.background ? 'bg-white/30' : 'bg-border'}`}
+                  aria-hidden="true"
+                />
+                <BoardViewSwitcher
+                  boardId={boardId ?? ''}
+                  hasBackground={!!board.background}
+                  segmented
+                />
+                <div ref={filterContainerRef} className="relative ml-2">
+                  {/* Filter button — shows active filter count as a badge */}
+                  {(() => {
+                    const activeCount = countActiveFilters(filters);
+                    const hasActiveFilters = activeCount > 0;
+                    const btnBase =
+                      'inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary';
+                    let btnVariant: string;
+                    if (hasActiveFilters && board.background) {
+                      btnVariant = 'bg-white/25 text-white hover:bg-white/30';
+                    } else if (hasActiveFilters) {
+                      btnVariant = 'bg-bg-overlay text-base hover:bg-bg-sunken';
+                    } else if (board.background) {
+                      btnVariant =
+                        'text-white/80 hover:text-white hover:bg-white/15';
+                    } else {
+                      btnVariant =
+                        'text-muted hover:text-base hover:bg-bg-overlay';
+                    }
+                    const badgeClass = board.background
+                      ? 'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none bg-white/30 text-white'
+                      : 'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none bg-primary text-white';
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFilterPanelOpen((v) => !v);
+                        }}
+                        className={`${btnBase} ${btnVariant}`}
+                      >
+                        <FunnelIcon
+                          className="h-3.5 w-3.5"
+                          aria-hidden="true"
+                        />
+                        Filter
+                        {hasActiveFilters && (
+                          <span className={badgeClass}>{activeCount}</span>
+                        )}
+                      </button>
+                    );
+                  })()}
+                  {filterPanelOpen && (
+                    <BoardFilterPanel
+                      containerRef={filterContainerRef}
+                      onClose={() => {
+                        setFilterPanelOpen(false);
+                      }}
+                      filters={filters}
+                      onChange={setFilters}
+                      boardMembers={boardMembers}
+                      boardLabels={boardLabels}
+                      {...(currentUser?.id
+                        ? { currentUserId: currentUser.id }
+                        : {})}
+                    />
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        <PluginIframeContainer boardId={boardId ?? ''}>
+          {/* Tab content */}
+          {tabContent}
+
+          {/* Trello-style bottom bar: Inbox / Planner / Board / Switch boards */}
+          <BoardBottomBar
+            boardId={boardId ?? ''}
+            boardTabActive={activeTab === 'board'}
+            onShowBoardTab={() => {
+              setActiveTab('board');
+            }}
+          />
+
+          {/* Card detail modal — always mounted so ?card= links work from any tab */}
+          <CardModalContainer
+            {...(cardRouteId ? { forcedCardId: cardRouteId } : {})}
+            {...(cardRouteId ? { onCloseCard: handleRouteCardClose } : {})}
+          />
+        </PluginIframeContainer>
+
+        {/* Board settings panel */}
+        {settingsOpen && (
+          <BoardSettings
+            onClose={() => {
+              setSettingsOpen(false);
+            }}
+            isGuest={isGuest}
+            isViewerGuest={isViewerGuest}
+            isBoardParticipant={canManageOwnBoardNotifications}
+            canManageBoard={canManageBoard}
+            canManageIntegrations={canManageIntegrations}
+          />
+        )}
+        {/* Board members panel (Sprint 79) */}
+        {membersOpen && (
+          <BoardMembersPanel
+            onClose={() => {
+              setMembersOpen(false);
+            }}
+            isGuest={isGuest}
+          />
+        )}
+
+        {/* Board chat drawer (Sprint 164) */}
+        {isBoardChatEnabled && boardChatOpen && (
+          <BoardChatDrawer
+            boardId={boardId ?? ''}
+            isGuest={isGuest}
+            callerGuestType={board?.callerGuestType ?? null}
+            canManageGuestPermissions={canManageGuestChatPermissions}
+            onClose={() => {
+              setBoardChatOpen(false);
+            }}
+            onDocsChanged={() => {
+              setDocsRefreshKey((k) => k + 1);
+            }}
+          />
+        )}
+
+        {/* Board delete confirmation dialog — shown when server returns 409 with nested content counts */}
+        {boardDeleteDialog && (
+          <BoardDeleteDialog
+            boardTitle={board.title}
+            listCount={boardDeleteDialog.listCount}
+            cardCount={boardDeleteDialog.cardCount}
+            onConfirm={async () => {
+              setBoardDeleteDialog(null);
+              try {
+                await deleteBoard({ api, boardId: boardId!, confirm: true });
+                setSettingsOpen(false);
+                setMembersOpen(false);
+                automationPanel.closePanel();
+                navigate(`/workspace/${board.workspaceId}/boards`, {
+                  state: { successToast: 'Board deleted' },
+                });
+              } catch {
+                addToast('Failed to delete board.', 'error');
+              }
+            }}
+            onCancel={() => {
+              setBoardDeleteDialog(null);
+            }}
+          />
+        )}
+
+        {/* List delete confirmation dialog — shown when server returns 409 for a list with cards */}
+        {listDeleteDialog && (
+          <ListDeleteDialog
+            listTitle={listDeleteDialog.listTitle}
+            cardCount={listDeleteDialog.cardCount}
+            onConfirm={async () => {
+              const { listId } = listDeleteDialog;
+              setListDeleteDialog(null);
+              await deleteList({ api, listId, confirm: true });
+              if (boardId) dispatch(fetchBoardDataThunk({ boardId }));
+            }}
+            onCancel={() => {
+              setListDeleteDialog(null);
+            }}
+          />
         )}
       </div>
-      </div>
-
-      {/* Tab content */}
-      {tabContent}
-
-      {/* Trello-style bottom bar: Inbox / Planner / Board / Switch boards */}
-      <BoardBottomBar
-        boardId={boardId ?? ''}
-        boardTabActive={activeTab === 'board'}
-        onShowBoardTab={() => { setActiveTab('board'); }}
-      />
-
-      {/* Card detail modal — always mounted so ?card= links work from any tab */}
-      <CardModalContainer
-        {...(cardRouteId ? { forcedCardId: cardRouteId } : {})}
-        {...(cardRouteId ? { onCloseCard: handleRouteCardClose } : {})}
-      />
-
-      {/* Board settings panel */}
-      {settingsOpen && (
-        <BoardSettings
-          onClose={() => {
-            setSettingsOpen(false);
-          }}
-          isGuest={isGuest}
-          isViewerGuest={isViewerGuest}
-          isBoardParticipant={canManageOwnBoardNotifications}
-          canManageBoard={canManageBoard}
-        />
-      )}
-      {/* Board members panel (Sprint 79) */}
-      {membersOpen && (
-        <BoardMembersPanel onClose={() => {
-          setMembersOpen(false);
-        }} isGuest={isGuest} />
-      )}
-
-      {/* Board delete confirmation dialog — shown when server returns 409 with nested content counts */}
-      {boardDeleteDialog && (
-        <BoardDeleteDialog
-          boardTitle={board.title}
-          listCount={boardDeleteDialog.listCount}
-          cardCount={boardDeleteDialog.cardCount}
-          onConfirm={async () => {
-            if (!boardId) return;
-            setBoardDeleteDialog(null);
-            try {
-              await deleteBoard({ api, boardId, confirm: true });
-              setSettingsOpen(false);
-              setMembersOpen(false);
-              automationPanel.closePanel();
-              navigate(`/workspace/${board.workspaceId}/boards`, {
-                state: { successToast: 'Board deleted' },
-              });
-            } catch {
-              addToast('Failed to delete board.', 'error');
-            }
-          }}
-          onCancel={() => {
-            setBoardDeleteDialog(null);
-          }}
-        />
-      )}
-
-      {/* List delete confirmation dialog — shown when server returns 409 for a list with cards */}
-      {listDeleteDialog && (
-        <ListDeleteDialog
-          listTitle={listDeleteDialog.listTitle}
-          cardCount={listDeleteDialog.cardCount}
-          onConfirm={async () => {
-            const { listId } = listDeleteDialog;
-            setListDeleteDialog(null);
-            await deleteList({ api, listId, confirm: true });
-            if (boardId) void dispatch(fetchBoardDataThunk({ boardId }));
-          }}
-          onCancel={() => {
-            setListDeleteDialog(null);
-          }}
-        />
-      )}
-    </div>
     </div>
   );
 };
