@@ -2,16 +2,16 @@ import { createHash } from 'node:crypto';
 import { db } from '../../../../../common/db';
 import { dispatchEvent } from '../../../../../mods/events/dispatch';
 import { emitCardCreated } from '../../../../activity/mods/createActivityEvent';
-import { createCard } from '../../../../card/mods/create';
+import type { CreateCardInput } from '../../../../card/mods/create';
+import { createCardInTransaction } from './createCardInTransaction';
+import { canUserAccessBoard, type BoardAccessRow } from '../../../access';
+import { lockWorkspaceMembershipMutations } from '../../../../workspace/api/members/lock';
+import { lockBoardMemberMutations } from '../../../api/members/lock';
 import {
-  requireWorkspaceMembership,
-  requireMemberOrBoardGuestMember,
+  hasRole,
+  resolveHighestRole,
   type WorkspaceScopedRequest,
 } from '../../../../../middlewares/permissionManager';
-import {
-  requireBoardWritable,
-  type BoardScopedRequest,
-} from '../../../../board/middlewares/requireBoardWritable';
 import type {
   BoardChatAssistActionCard,
   BoardChatAssistOutput,
@@ -220,33 +220,9 @@ async function runCreateBoardCard({
   const normalized = normalizeToolArguments(toolCall.function.arguments);
   if ('status' in normalized) return normalized;
 
-  const boardReq = request as BoardScopedRequest;
-  const writableError = await requireBoardWritable(boardReq, board.id);
-  if (writableError) {
-    return {
-      status: writableError.status,
-      name: 'board-writable-check-failed',
-      message: 'Board is not writable',
-    };
-  }
-
   const scopedReq = request as WorkspaceScopedRequest;
-  const membershipError = await requireWorkspaceMembership(scopedReq, board.workspace_id);
-  if (membershipError) {
-    return {
-      status: membershipError.status,
-      name: 'workspace-membership-required',
-      message: 'Workspace membership is required',
-    };
-  }
-
-  const roleError = await requireMemberOrBoardGuestMember(scopedReq, board.id);
-  if (roleError) {
-    return {
-      status: roleError.status,
-      name: 'board-card-create-forbidden',
-      message: 'You do not have permission to create cards on this board',
-    };
+  if (!scopedReq.currentUser || scopedReq.currentUser.id !== actorId) {
+    return { status: 401, name: 'unauthorized', message: 'Authentication required' };
   }
 
   const idempotencyKey = buildIdempotencyKey({
@@ -260,51 +236,121 @@ async function runCreateBoardCard({
   if (cached) return cached;
 
   const execution = (async (): Promise<BoardChatAssistOutput> => {
-    let listId = normalized.listId;
+    const mutation = await db.transaction(
+      async (
+        trx
+      ): Promise<
+        | BoardChatAssistOutput
+        | {
+            card: Awaited<ReturnType<typeof createCardInTransaction>>;
+            list: { id: string; board_id: string; title: string | null };
+          }
+      > => {
+        // Provider latency invalidates middleware snapshots. Serialize with the
+        // canonical membership writers and retain both locks through the insert.
+        await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+        await lockBoardMemberMutations(trx, board.id);
+        const currentBoard = await trx<BoardAccessRow & { state: string }>('boards')
+          .where({ id: board.id })
+          .forShare()
+          .first();
+        if (!currentBoard) {
+          return { status: 404, name: 'board-not-found', message: 'Board not found' };
+        }
+        if (currentBoard.workspace_id !== board.workspace_id) {
+          return {
+            status: 403,
+            name: 'board-card-create-forbidden',
+            message: 'Board context changed',
+          };
+        }
+        if (currentBoard.state !== 'ACTIVE') {
+          return {
+            status: 403,
+            name: 'board-writable-check-failed',
+            message: 'Board is not writable',
+          };
+        }
+        const memberships = await trx<{ role: string; user_id: string; workspace_id: string }>(
+          'memberships'
+        )
+          .where({ user_id: actorId, workspace_id: currentBoard.workspace_id })
+          .select('role');
+        const currentRole = resolveHighestRole(memberships.map((membership) => membership.role));
+        if (!currentRole) {
+          return {
+            status: 403,
+            name: 'workspace-membership-required',
+            message: 'Workspace membership is required',
+          };
+        }
+        const guest = await trx('board_guest_access')
+          .where({ user_id: actorId, board_id: currentBoard.id })
+          .first<{ guest_type: string } | undefined>();
+        if (
+          !(await canUserAccessBoard(actorId, currentBoard, trx)) ||
+          (!hasRole(currentRole, 'MEMBER') && guest?.guest_type.toUpperCase() !== 'MEMBER')
+        ) {
+          return {
+            status: 403,
+            name: 'board-card-create-forbidden',
+            message: 'You do not have permission to create cards on this board',
+          };
+        }
+        let listId = normalized.listId;
 
-    // [why] Default to Backlog when no listId is provided — resolves the
-    // first list whose title contains "backlog" (case-insensitive).
-    if (!listId) {
-      const backlogList = await db('lists')
-        .where({ board_id: board.id })
-        .whereRaw('LOWER(title) LIKE ?', ['%backlog%'])
-        .orderBy('position', 'asc')
-        .first();
+        // [why] Default to Backlog when no listId is provided — resolves the
+        // first list whose title contains "backlog" (case-insensitive).
+        if (!listId) {
+          const backlogList = await trx('lists')
+            .where({ board_id: board.id })
+            .whereRaw('LOWER(title) LIKE ?', ['%backlog%'])
+            .orderBy('position', 'asc')
+            .first<{ id: string } | undefined>();
 
-      if (!backlogList) {
-        return {
-          status: 404,
-          name: 'backlog-list-not-found',
-          message: 'No Backlog list found on this board. Please specify a listId.',
+          if (!backlogList) {
+            return {
+              status: 404,
+              name: 'backlog-list-not-found',
+              message: 'No Backlog list found on this board. Please specify a listId.',
+            };
+          }
+
+          listId = backlogList.id;
+        }
+
+        const list = await trx('lists')
+          .where({ id: listId })
+          .forShare()
+          .first<{ id: string; board_id: string; title: string | null } | undefined>();
+        if (!list || list.board_id !== board.id) {
+          return {
+            status: 404,
+            name: 'list-not-found',
+            message: 'Target list not found',
+          };
+        }
+
+        const createCardInput: CreateCardInput = {
+          listId: list.id,
+          title: normalized.title,
+          createdBy: actorId,
         };
+        if (normalized.description != null) {
+          createCardInput.description = normalized.description;
+        }
+        if (normalized.startDate != null) {
+          createCardInput.startDate = normalized.startDate;
+        }
+
+        const card = await createCardInTransaction(createCardInput, trx);
+        return { card, list };
       }
+    );
+    if ('status' in mutation) return mutation;
+    const { card, list } = mutation;
 
-      listId = backlogList.id;
-    }
-
-    const list = await db('lists').where({ id: listId }).first();
-    if (!list || list.board_id !== board.id) {
-      return {
-        status: 404,
-        name: 'list-not-found',
-        message: 'Target list not found',
-      };
-    }
-
-    const createCardInput = {
-      listId: list.id,
-      title: normalized.title,
-      createdBy: actorId,
-    } as Parameters<typeof createCard>[0];
-    if (normalized.description !== null) {
-      createCardInput.description = normalized.description;
-    }
-    if (normalized.startDate !== null) {
-      createCardInput.startDate = normalized.startDate;
-    }
-
-    const card = await createCard(createCardInput);
-
+    // Publish only after the authorization + insertion transaction commits.
     await Promise.all([
       dispatchEvent({
         type: 'card.created',

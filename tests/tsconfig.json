@@ -6,6 +6,7 @@
     "exactOptionalPropertyTypes": false
   },
   "include": [
+    "db/boardAiAuthorization.ts",
     "db/concurrentBoardMemberAdd.ts",
     "db/addBoardMemberByEmail.ts",
     "db/concurrentBoardMemberRoleMutation.ts",
