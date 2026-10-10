@@ -3,6 +3,7 @@
 // which files they want; this tool lets the AI fetch exactly those files.
 import { db } from '../../../../../common/db';
 import { resolveCardId } from '../../../../../common/ids/resolveEntityId';
+import { canUserAccessBoard, type BoardAccessRow } from '../../../access';
 import { s3ServerClient, s3Config } from '../../../../attachment/common/config/s3';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import type {
@@ -45,6 +46,7 @@ interface ReadAttachmentsArguments {
 
 interface ReadAttachmentsInput {
   boardId: string;
+  actorId: string;
   toolCall: BoardChatAssistToolCall;
   model: string;
   usage?: {
@@ -320,9 +322,36 @@ export async function readAttachments(input: ReadAttachmentsInput): Promise<Boar
   const normalized = normalizeReadAttachmentsArguments(input.toolCall.function.arguments);
   if ('status' in normalized) return normalized;
 
+  // [why] Tool execution can follow a slow provider round-trip. Re-read access
+  // rather than trusting the request's earlier membership/board snapshot.
+  const board = await db<BoardAccessRow>('boards')
+    .where({ id: input.boardId })
+    .select('id', 'workspace_id', 'visibility')
+    .first();
+  if (!board) {
+    return { status: 404, name: 'board-not-found', message: 'Board not found.' };
+  }
+  if (!input.actorId || !(await canUserAccessBoard(input.actorId, board))) {
+    return { status: 403, name: 'board-access-denied', message: 'Board access denied.' };
+  }
+
   // [why] Resolve short ID → full UUID so the DB query works with either format.
   const resolvedId = await resolveCardId(normalized.card_id);
-  if (!resolvedId) {
+  // [why] A model-supplied card ID is untrusted, even within the same workspace.
+  // Check the card's current list/board before reading any attachment metadata.
+  const card = resolvedId
+    ? await db<{ id: string; list_id: string }>('cards')
+        .where({ id: resolvedId })
+        .select('list_id')
+        .first()
+    : undefined;
+  const list = card
+    ? await db<{ id: string; board_id: string }>('lists')
+        .where({ id: card.list_id, board_id: input.boardId })
+        .select('id')
+        .first()
+    : undefined;
+  if (!resolvedId || !list) {
     return {
       status: 404,
       name: 'card-not-found',

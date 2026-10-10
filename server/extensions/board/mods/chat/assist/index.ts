@@ -221,6 +221,7 @@ async function executeOneToolCall(
   if (toolName === 'read_attachments') {
     const result = await deps.readAttachments({
       boardId: ctx.boardId,
+      actorId: ctx.actorId,
       toolCall,
       model,
       ...maybeUsage(usage),
