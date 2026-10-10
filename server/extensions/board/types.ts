@@ -1,4 +1,5 @@
 // Shared types for the board feature.
+import type { AssistProviderConfig } from './mods/chat/providerConfig';
 
 export type MonetizationType = 'pre-paid' | 'pay-to-paid';
 export type BoardVisibility = 'PUBLIC' | 'PRIVATE' | 'WORKSPACE';
@@ -217,6 +218,20 @@ export interface BoardChatAssistInput {
   sessionId: string;
   prompt: string;
   contextLimit?: number;
+}
+
+// Keep the transport configuration aligned with the provider resolver.
+export type BoardChatAssistProviderConfig = AssistProviderConfig;
+
+export interface BoardChatAssistProviderInput {
+  messages: BoardChatAssistMessage[];
+  tools?: BoardChatAssistToolDefinition[];
+}
+
+export interface SpecsFileResult {
+  content: string;
+  etag: string;
+  sizeBytes: number;
 }
 
 export interface BoardChatAssistOutput {

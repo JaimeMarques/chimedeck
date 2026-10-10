@@ -10,6 +10,7 @@ const { requestBoardChatAssistCompletion, boardChatAssistProviderDeps } = provid
 
 beforeEach(() => {
   config = {
+    provider: 'openai',
     apiKey: 'test-key',
     baseUrl: 'https://example.openai.local/v1',
     model: 'gpt-4.1-mini',

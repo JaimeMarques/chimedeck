@@ -6,6 +6,8 @@
     "exactOptionalPropertyTypes": false
   },
   "include": [
+    "../server/extensions/board/mods/specs/__tests__/files.test.ts",
+    "../server/extensions/board/mods/chat/assist/__tests__/provider.test.ts",
     "db/boardAiAuthorization.ts",
     "db/concurrentBoardMemberAdd.ts",
     "db/addBoardMemberByEmail.ts",

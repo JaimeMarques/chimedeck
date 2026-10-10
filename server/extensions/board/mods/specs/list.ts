@@ -1,9 +1,9 @@
 // Lists all markdown files under specs/ in a cloned repository worktree.
 // Used by the board chat assistant to discover existing documentation before
 // proposing edits or new files.
+import type { Dirent } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { resolveSpecsFilePath } from './resolvePath';
 
 export interface ListSpecsFilesInput {
   repoPath: string;
@@ -22,8 +22,9 @@ async function walkSpecsDir(repoPath: string): Promise<SpecsFileEntry[]> {
   const dirs: string[] = [specsRoot];
 
   while (dirs.length > 0) {
-    const currentDir = dirs.shift()!;
-    let items: string[];
+    const currentDir = dirs.shift();
+    if (currentDir === undefined) break;
+    let items: Dirent[];
     try {
       items = await readdir(currentDir, { withFileTypes: true });
     } catch {
