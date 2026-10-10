@@ -7,7 +7,13 @@ import {
   type AuthenticatedRequest,
 } from '../../auth/middlewares/authentication';
 import { registerMcpTools } from '../registerTools';
-import { initSession, getSession, deleteSession, startEvictionLoop } from './sessions';
+import {
+  initSession,
+  getSession,
+  touchSession,
+  deleteSession,
+  startEvictionLoop,
+} from './sessions';
 
 // [why] Start the periodic DB + local-cache eviction loop once at module load.
 // Bun's module cache ensures this only runs once regardless of hot-reloads.
@@ -105,6 +111,8 @@ export async function mcpHttpHandler(req: Request): Promise<Response | null> {
     await deleteSession(sessionId);
     return new Response(null, { status: 204 });
   }
+
+  touchSession(sessionId);
 
   // POST (tool call / notification) or GET (SSE stream)
   return session.transport.handleRequest(req);

@@ -73,8 +73,6 @@ export async function getSession(
 ): Promise<{ userId: string; transport?: WebStandardStreamableHTTPServerTransport } | null> {
   const local = transportCache.get(id);
   if (local) {
-    // [why] Touch DB on each lookup so the distributed TTL stays fresh across instances.
-    void dbTouchSession(id);
     return { userId: local.userId, transport: local.transport };
   }
 
@@ -87,6 +85,17 @@ export async function getSession(
   }
 
   return null;
+}
+
+/** Refresh liveness only after the handler has authenticated the session owner. */
+export function touchSession(id: string): void {
+  const local = transportCache.get(id);
+  if (!local) return;
+
+  local.lastActiveAt = new Date();
+  // [why] Persistence is best-effort; a DB failure must not reject an owner request
+  // or prevent the active local transport from surviving the eviction sweep.
+  void dbTouchSession(id).catch(() => {});
 }
 
 /** Remove session from DB and local cache. */
