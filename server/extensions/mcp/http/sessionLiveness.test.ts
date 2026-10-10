@@ -12,6 +12,7 @@ for (const scenario of [
   'db-only-reinitialize',
   'owner-get',
   'owner-delete',
+  ...['PUT', 'PATCH', 'OPTIONS'].map((method) => `unsupported-${method}`),
 ]) {
   test(`MCP HTTP session liveness: ${scenario}`, () => {
     const result = Bun.spawnSync(

@@ -112,7 +112,9 @@ export async function mcpHttpHandler(req: Request): Promise<Response | null> {
     return new Response(null, { status: 204 });
   }
 
-  touchSession(sessionId);
+  if (method === 'GET' || method === 'POST') {
+    touchSession(sessionId);
+  }
 
   // POST (tool call / notification) or GET (SSE stream)
   return session.transport.handleRequest(req);

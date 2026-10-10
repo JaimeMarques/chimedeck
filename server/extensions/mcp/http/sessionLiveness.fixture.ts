@@ -287,6 +287,21 @@ switch (scenario) {
     await response.body?.cancel();
     break;
   }
+  case 'unsupported-PUT':
+  case 'unsupported-PATCH':
+  case 'unsupported-OPTIONS': {
+    now = epoch + 29 * minute;
+    const response = await request(scenario.slice('unsupported-'.length));
+    assert.equal(response.status, 405, 'SDK transport must reject unsupported methods');
+    await response.text();
+    assert.deepEqual(touches, [], 'unsupported methods must not extend distributed TTL');
+    assert.equal(rows.get(sessionId)?.last_active_at.getTime(), epoch);
+    await evictAt(31);
+    assert.equal(close.mock.calls.length, 1, 'unsupported methods must not extend local TTL');
+    assert.equal(rows.has(sessionId), false);
+    assert.equal((await ping()).status, 404);
+    break;
+  }
   case 'owner-delete': {
     now = epoch + 29 * minute;
     assert.equal((await request('DELETE')).status, 204);
