@@ -1,6 +1,8 @@
 name: MCP discussion reads
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -8,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mcp-discussion-${{ github.event.pull_request.number }}
+  group: mcp-discussion-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
