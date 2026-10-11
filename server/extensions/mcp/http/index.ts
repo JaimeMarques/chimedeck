@@ -56,8 +56,8 @@ export async function mcpHttpHandler(req: Request): Promise<Response | null> {
       onsessioninitialized: (id) => {
         // [why] Local transport cache must be set synchronously (callback fires
         // during handleRequest which returns a Response). DB persistence is
-        // fire-and-forget — if it fails, the session is just invisible to other
-        // instances until the next request, which is acceptable.
+        // fire-and-forget — if it fails, the local session remains usable while
+        // other instances return 404 and require re-initialization.
         initSession(id, userId, server, transport).catch(() => {});
       },
     });

@@ -56,15 +56,20 @@ async function dbEvictStale(): Promise<void> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Persist session metadata to DB and cache transport locally. */
+/** Publish the local transport synchronously, then persist metadata best-effort. */
 export async function initSession(
   id: string,
   userId: string,
   server: McpSession['server'],
   transport: McpSession['transport']
 ): Promise<void> {
+  const session = { server, transport, userId, lastActiveAt: new Date() };
+  transportCache.set(id, session);
   await dbInsertSession(id, userId);
-  transportCache.set(id, { server, transport, userId, lastActiveAt: new Date() });
+  // [why] DELETE or eviction can remove the local transport while insertion is
+  // pending. Compensate after it completes so late persistence cannot retain
+  // metadata for a terminated session. Never publish the transport again here.
+  if (transportCache.get(id) !== session) await dbDeleteSession(id);
 }
 
 /** Look up session: local transport cache first, DB metadata as fallback. */
