@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { commitSpecsChanges } from '../commit';
 import { withDirectory } from '../filesystem';
@@ -42,6 +52,167 @@ async function assertDenied(filePath: string) {
   expect(await readFile(join(outside, 'sentinel.md'), 'utf8')).toBe(secret);
   expect(await readFile(join(repoPath, 'README.md'), 'utf8')).toBe(secret);
 }
+
+describe('real Git specs commit selection', () => {
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim();
+  const commit = (changedFiles: string[]) =>
+    commitSpecsChanges({
+      repoPath,
+      branch: 'main',
+      changedFiles,
+      message: 'Selected specs update',
+      actorId: 'actor',
+      boardId: 'board',
+      botAlias: 'specs-test',
+    });
+  function initialize() {
+    git('init', '--quiet');
+    git('config', 'user.name', 'specs-test');
+    git('config', 'user.email', 'specs-test@example.invalid');
+    git('add', '--', 'README.md');
+    git('commit', '--quiet', '-m', 'baseline');
+  }
+
+  it('rejects a .md directory before staging any selected files or descendants', async () => {
+    initialize();
+    const head = git('rev-parse', 'HEAD');
+    await mkdir(join(repoPath, 'specs', 'bundle.md'));
+    await writeFile(join(repoPath, 'specs', 'bundle.md', 'outside-type.txt'), 'NOT MARKDOWN');
+    await symlink(join(outside, 'sentinel.md'), join(repoPath, 'specs', 'bundle.md', 'linked.md'));
+    await writeFile(join(repoPath, 'specs', 'safe.md'), 'VALID');
+    await assert.rejects(
+      commit(['specs/safe.md', 'specs/bundle.md']),
+      /specs-file-must-be-regular/
+    );
+    expect(git('rev-parse', 'HEAD')).toBe(head);
+    expect(git('diff', '--cached', '--name-only')).toBe('');
+    expect(await readFile(join(outside, 'sentinel.md'), 'utf8')).toBe(secret);
+  });
+
+  it('commits only selected Markdown while preserving unrelated index entries and staged hunks', async () => {
+    initialize();
+    await writeFile(join(repoPath, 'obsolete.txt'), 'DELETE LATER');
+    await writeFile(join(repoPath, 'specs', 'other.md'), 'OTHER BASELINE');
+    git('add', '--', 'obsolete.txt', 'specs/other.md');
+    git('commit', '--quiet', '-m', 'unrelated baseline');
+    await writeFile(join(repoPath, 'README.md'), 'STAGED README');
+    await writeFile(join(repoPath, 'extra.txt'), 'STAGED ADDITION');
+    await writeFile(join(repoPath, 'specs', 'other.md'), 'STAGED OTHER SPEC');
+    git('add', '--', 'README.md', 'extra.txt', 'specs/other.md');
+    git('rm', '--quiet', '--', 'obsolete.txt');
+    await writeFile(join(repoPath, 'README.md'), 'UNSTAGED README');
+    await writeFile(join(repoPath, 'specs', 'other.md'), 'UNSTAGED OTHER SPEC');
+    const cachedDiff = git('diff', '--cached', '--binary');
+    const unstagedDiff = git('diff', '--binary');
+    const indexEntries = git('ls-files', '--stage');
+    await writeFile(join(repoPath, 'specs', 'safe.md'), 'SELECTED CONTENT');
+    const result = await commit(['specs/./safe.md', 'specs/safe.md']);
+    expect(result.changedFiles).toEqual(['specs/safe.md']);
+    expect(git('show', '--format=', '--name-only', result.commitHash)).toBe('specs/safe.md');
+    expect(git('show', 'HEAD:specs/safe.md')).toBe('SELECTED CONTENT');
+    expect(git('diff', '--cached', '--binary')).toBe(cachedDiff);
+    expect(git('diff', '--binary')).toBe(unstagedDiff);
+    expect(
+      git('ls-files', '--stage')
+        .split('\n')
+        .filter((line) => !line.endsWith('\tspecs/safe.md'))
+        .join('\n')
+    ).toBe(indexEntries);
+    expect(await readFile(join(repoPath, 'README.md'), 'utf8')).toBe('UNSTAGED README');
+    expect(await readFile(join(repoPath, 'specs', 'other.md'), 'utf8')).toBe('UNSTAGED OTHER SPEC');
+    expect(result.pushStatus).toBe('pending');
+    expect(git('show', '-s', '--format=%B', 'HEAD')).toContain('Changed-Files: specs/safe.md');
+  });
+
+  it('treats wildcard and bracket filenames as literal selections rather than Git pathspecs', async () => {
+    initialize();
+    const selected = ['specs/guide*.md', 'specs/guide[ab].md'];
+    const unselected = ['specs/guide-other.md', 'specs/guidea.md'];
+    for (const file of [...selected, ...unselected]) await writeFile(join(repoPath, file), file);
+    const result = await commit(selected);
+    expect(result.changedFiles).toEqual(selected);
+    expect(
+      git('diff-tree', '--no-commit-id', '--name-only', '-r', '-z', result.commitHash)
+        .split('\0')
+        .filter(Boolean)
+        .sort()
+    ).toEqual(selected);
+    expect(
+      git('ls-files', '-z')
+        .split('\0')
+        .filter((file) => file.startsWith('specs/'))
+        .sort()
+    ).toEqual(selected);
+    for (const file of unselected) expect(await readFile(join(repoPath, file), 'utf8')).toBe(file);
+  });
+
+  it('rejects missing untracked leaves and deleted non-regular HEAD entries before staging', async () => {
+    initialize();
+    await mkdir(join(repoPath, 'specs', 'former-directory.md'));
+    await writeFile(join(repoPath, 'specs', 'former-directory.md', 'child.md'), 'CHILD');
+    await symlink(join(outside, 'sentinel.md'), join(repoPath, 'specs', 'former-link.md'));
+    git('add', '--', 'specs/former-directory.md', 'specs/former-link.md');
+    git('commit', '--quiet', '-m', 'non-regular baseline');
+    git('rm', '--quiet', '-r', '--', 'specs/former-directory.md', 'specs/former-link.md');
+    await mkdir(join(repoPath, 'specs'), { recursive: true });
+    const head = git('rev-parse', 'HEAD');
+    const index = git('ls-files', '--stage');
+    await writeFile(join(repoPath, 'specs', 'safe.md'), 'SELECTED');
+    for (const file of ['specs/missing*.md', 'specs/former-directory.md', 'specs/former-link.md']) {
+      await assert.rejects(commit(['specs/safe.md', file]), /specs-file-not-found/);
+      expect(git('rev-parse', 'HEAD')).toBe(head);
+      expect(git('ls-files', '--stage')).toBe(index);
+    }
+  });
+
+  it('does not commit unrelated staged changes when the selected Markdown has no changes', async () => {
+    initialize();
+    await writeFile(join(repoPath, 'specs', 'unchanged.md'), 'UNCHANGED');
+    git('add', '--', 'specs/unchanged.md');
+    git('commit', '--quiet', '-m', 'unchanged Markdown baseline');
+    await writeFile(join(repoPath, 'README.md'), 'STAGED ONLY');
+    git('add', '--', 'README.md');
+    await writeFile(join(repoPath, 'README.md'), 'UNSTAGED ALSO');
+    const head = git('rev-parse', 'HEAD');
+    const index = git('ls-files', '--stage');
+    const cachedDiff = git('diff', '--cached', '--binary');
+    const unstagedDiff = git('diff', '--binary');
+    await assert.rejects(commit(['specs/unchanged.md']), /no-specs-changes/);
+    expect(git('rev-parse', 'HEAD')).toBe(head);
+    expect(git('ls-files', '--stage')).toBe(index);
+    expect(git('diff', '--cached', '--binary')).toBe(cachedDiff);
+    expect(git('diff', '--binary')).toBe(unstagedDiff);
+    expect(await readFile(join(repoPath, 'README.md'), 'utf8')).toBe('UNSTAGED ALSO');
+  });
+
+  for (const staged of [false, true]) {
+    it(`commits ${staged ? 'already staged' : 'unstaged'} regular Markdown deletions literally`, async () => {
+      initialize();
+      const selected: [string, string] = ['specs/gone*.md', 'specs/gone[ab].md'];
+      const retained = 'specs/gonea.md';
+      for (const file of [...selected, retained]) await writeFile(join(repoPath, file), 'BASELINE');
+      await chmod(join(repoPath, selected[1]), 0o755);
+      git('--literal-pathspecs', 'add', '--', ...selected, retained);
+      git('commit', '--quiet', '-m', 'tracked Markdown baseline');
+      for (const file of selected) {
+        if (staged) git('--literal-pathspecs', 'rm', '--quiet', '--', file);
+        else await unlink(join(repoPath, file));
+      }
+      await writeFile(join(repoPath, 'README.md'), 'UNRELATED STAGED');
+      git('add', '--', 'README.md');
+      const readmeIndex = git('ls-files', '--stage', '--', 'README.md');
+      const result = await commit(selected);
+      expect(
+        git('diff-tree', '--no-commit-id', '--name-status', '-r', '-z', result.commitHash)
+      ).toBe(`D\0${selected[0]}\0D\0${selected[1]}\0`);
+      expect(git('ls-files', '--stage', '--', 'README.md')).toBe(readmeIndex);
+      expect(git('diff', '--cached', '--name-only')).toBe('README.md');
+      expect(git('ls-tree', '-r', '--name-only', 'HEAD', '--', 'specs')).toBe(retained);
+      expect(await readFile(join(repoPath, retained), 'utf8')).toBe('BASELINE');
+    });
+  }
+});
 
 describe('real filesystem specs containment', () => {
   it('rejects normalized and symlinked commit paths before staging in real Git', async () => {
