@@ -51,6 +51,7 @@ function makeAttachment(id: string, uploadContext: 'card' | 'comment'): Attachme
     name: 'image.png',
     alias: null,
     type: 'FILE',
+    position: null,
     status: 'READY',
     key: `comments/${id}/image.png`,
     thumbnail_key: null,

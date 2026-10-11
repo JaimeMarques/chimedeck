@@ -45,6 +45,8 @@ export interface Attachment {
   referenced_card_id: string | null;
   /** Resolved card preview — populated by the list API when referenced_card_id is set. */
   referenced_card: CardPreview | null;
+  /** Fractional position for drag-and-drop reorder within the card. */
+  position: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -125,7 +127,7 @@ export interface PatchAttachmentRequest {
 // ---------- In-flight upload state (client-only) ----------
 
 export type UploadPhase =
-  | 'pending'          // buffered locally, not yet started (deferred mode)
+  | 'pending' // buffered locally, not yet started (deferred mode)
   | 'requesting-url'
   | 'uploading'
   | 'confirming'

@@ -3,7 +3,17 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { config } from '../config';
 import {
-  ToolError, apiFetch, apiPath, dataOf, expectFields, findRow, inParent, request, rowWithId, rowsOf, runTool,
+  ToolError,
+  apiFetch,
+  apiPath,
+  dataOf,
+  expectFields,
+  findRow,
+  inParent,
+  request,
+  rowWithId,
+  rowsOf,
+  runTool,
 } from './toolSupport';
 
 // Card attachments. Names, arguments and read-backs mirror the local Python
@@ -56,88 +66,136 @@ async function download(row: AttachmentRow, token: string) {
     await res.body?.cancel();
     throw new ToolError(`http-${String(res.status)}`);
   }
-  const mimeType = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase()
-    || row.content_type || 'application/octet-stream';
+  const mimeType =
+    (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ||
+    row.content_type ||
+    'application/octet-stream';
   // The SPA's HTML page (or the browser viewer) instead of the file.
   if (mimeType === 'text/html' && row.content_type !== 'text/html') {
     await res.body?.cancel();
     throw new ToolError('invalid-response');
   }
   const bytes = await readCapped(res);
-  if (typeof row.size_bytes === 'number' && bytes.byteLength !== row.size_bytes) throw new ToolError('size-mismatch');
+  if (typeof row.size_bytes === 'number' && bytes.byteLength !== row.size_bytes)
+    throw new ToolError('size-mismatch');
 
   const data = Buffer.from(bytes).toString('base64');
   const block: CallToolResult['content'][number] = mimeType.startsWith('image/')
     ? { type: 'image', data, mimeType }
     : { type: 'resource', resource: { uri: `${config.apiUrl}${path}`, mimeType, blob: data } };
-  return { meta: { id: row.id, name: row.name ?? null, size_bytes: bytes.byteLength, content_type: mimeType }, block };
+  return {
+    meta: {
+      id: row.id,
+      name: row.name ?? null,
+      size_bytes: bytes.byteLength,
+      content_type: mimeType,
+    },
+    block,
+  };
 }
 
 export function registerAttachmentTools(server: McpServer, token: string): void {
-  const cardAttachments = async (cardId: string) => (await request({
-    path: apiPath`/api/v1/cards/${cardId}/attachments`, token, schema: rowsOf(rowWithId),
-  })).data;
+  const cardAttachments = async (cardId: string) =>
+    (
+      await request({
+        path: apiPath`/api/v1/cards/${cardId}/attachments`,
+        token,
+        schema: rowsOf(rowWithId),
+      })
+    ).data;
 
-  server.registerTool('get_attachments', {
-    description: 'List the attachments on a card.',
-    inputSchema: { cardId: z.string().min(1).describe('ID of the card') },
-    annotations: { readOnlyHint: true },
-  }, (args) => runTool(token, () => cardAttachments(args.cardId)));
-
-  server.registerTool('download_attachment', {
-    description: "Fetch an uploaded card attachment's bytes (max 10 MB). Returns its metadata, then the file "
-      + 'as an image block (image types) or an embedded resource with a base64 blob. Link attachments have no bytes.',
-    inputSchema: {
-      cardId: attachmentCardId,
-      attachmentId: z.string().min(1).describe('ID of the attachment (from get_attachments)'),
+  server.registerTool(
+    'get_attachments',
+    {
+      description: 'List the attachments on a card.',
+      inputSchema: { cardId: z.string().min(1).describe('ID of the card') },
+      annotations: { readOnlyHint: true },
     },
-    annotations: { readOnlyHint: true },
-  }, async (args) => {
-    let block: CallToolResult['content'][number] | undefined;
-    const result = await runTool(token, async () => {
-      const row = attachmentRow.safeParse(inParent(await cardAttachments(args.cardId), args.attachmentId, 'card'));
-      if (!row.success) throw new ToolError('invalid-response');
-      const file = await download(row.data, token);
-      block = file.block;
-      return file.meta;
-    });
-    if (block) result.content.push(block);
-    return result;
-  });
+    (args) => runTool(token, () => cardAttachments(args.cardId))
+  );
 
-  server.registerTool('add_url_attachment', {
-    description: 'Attach a link to a card.',
-    inputSchema: {
-      cardId: z.string().min(1).describe('ID of the card'),
-      url: z.string().min(1).describe('Link URL'),
-      name: z.string().optional().describe('Display name (defaults to the URL)'),
+  server.registerTool(
+    'download_attachment',
+    {
+      description:
+        "Fetch an uploaded card attachment's bytes (max 10 MB). Returns its metadata, then the file " +
+        'as an image block (image types) or an embedded resource with a base64 blob. Link attachments have no bytes.',
+      inputSchema: {
+        cardId: attachmentCardId,
+        attachmentId: z.string().min(1).describe('ID of the attachment (from get_attachments)'),
+      },
+      annotations: { readOnlyHint: true },
     },
-  }, (args) => runTool(token, async () => {
-    const created = await request({
-      method: 'POST', path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
-      // [why] The server rejects a missing name; Python leaves it optional.
-      body: { url: args.url, name: args.name || args.url }, token, schema: dataOf(rowWithId),
-    });
-    const row = findRow(await cardAttachments(args.cardId), 'id', created.data.id);
-    // Stored verbatim (attachment/api/addUrl.ts); a link's view_url is its URL.
-    expectFields(row, { name: args.name || args.url, view_url: args.url });
-    return row;
-  }));
+    async (args) => {
+      let block: CallToolResult['content'][number] | undefined;
+      const result = await runTool(token, async () => {
+        const row = attachmentRow.safeParse(
+          inParent(await cardAttachments(args.cardId), args.attachmentId, 'card')
+        );
+        if (!row.success) throw new ToolError('invalid-response');
+        const file = await download(row.data, token);
+        block = file.block;
+        return file.meta;
+      });
+      if (block) result.content.push(block);
+      return result;
+    }
+  );
 
-  server.registerTool('delete_attachment', {
-    description: 'Remove an attachment from a card. It must be on cardId (not-in-card otherwise).',
-    inputSchema: { cardId: attachmentCardId, attachmentId: z.string().min(1).describe('ID of the attachment') },
-    annotations: { destructiveHint: true },
-  }, (args) => runTool(token, async () => {
-    // [why] There is no GET /attachments/:id, so the card's list is both the
-    // scope check (DELETE /attachments/:id alone would delete it on any card) and the read-back.
-    const target = inParent(await cardAttachments(args.cardId), args.attachmentId, 'card');
-    // The route answers 200 {data: {id}}; anything else (HTML-200, null) is invalid-response.
-    const { data } = await request({
-      method: 'DELETE', path: apiPath`/api/v1/attachments/${target.id}`, token, schema: dataOf(rowWithId),
-    });
-    if (data.id !== target.id) throw new ToolError('invalid-response');
-    if ((await cardAttachments(args.cardId)).some((row) => row.id === target.id)) throw new ToolError('delete-failed');
-    return { deleted: true, id: target.id };
-  }));
+  server.registerTool(
+    'add_url_attachment',
+    {
+      description: 'Attach a link to a card.',
+      inputSchema: {
+        cardId: z.string().min(1).describe('ID of the card'),
+        url: z.string().min(1).describe('Link URL'),
+        name: z.string().optional().describe('Display name (defaults to the URL)'),
+      },
+    },
+    (args) =>
+      runTool(token, async () => {
+        const created = await request({
+          method: 'POST',
+          path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
+          // [why] The server rejects a missing name; Python leaves it optional.
+          body: { url: args.url, name: args.name || args.url },
+          token,
+          schema: dataOf(rowWithId),
+        });
+        const row = findRow(await cardAttachments(args.cardId), 'id', created.data.id);
+        // Stored verbatim (attachment/api/addUrl.ts); a link's view_url is its URL.
+        expectFields(row, { name: args.name || args.url, view_url: args.url });
+        return row;
+      })
+  );
+
+  server.registerTool(
+    'delete_attachment',
+    {
+      description:
+        'Remove an attachment from a card. It must be on cardId (not-in-card otherwise).',
+      inputSchema: {
+        cardId: attachmentCardId,
+        attachmentId: z.string().min(1).describe('ID of the attachment'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    (args) =>
+      runTool(token, async () => {
+        // [why] There is no GET /attachments/:id, so the card's list is both the
+        // scope check (DELETE /attachments/:id alone would delete it on any card) and the read-back.
+        const target = inParent(await cardAttachments(args.cardId), args.attachmentId, 'card');
+        // The route answers 200 {data: {id}}; anything else (HTML-200, null) is invalid-response.
+        const { data } = await request({
+          method: 'DELETE',
+          path: apiPath`/api/v1/attachments/${target.id}`,
+          token,
+          schema: dataOf(rowWithId),
+        });
+        if (data.id !== target.id) throw new ToolError('invalid-response');
+        if ((await cardAttachments(args.cardId)).some((row) => row.id === target.id))
+          throw new ToolError('delete-failed');
+        return { deleted: true, id: target.id };
+      })
+  );
 }

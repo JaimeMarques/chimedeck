@@ -1,6 +1,7 @@
 // Modal for creating a new board within a workspace.
 import { useState } from 'react';
 import Button from '~/common/components/Button';
+import translations from '../translations/en.json';
 
 interface Props {
   onClose: () => void;
@@ -13,7 +14,13 @@ interface Props {
   pending?: boolean | undefined;
 }
 
-const CreateBoardModal = ({ onClose, onCreate, subtitle, error, pending = false }: Props) => {
+const CreateBoardModal = ({
+  onClose,
+  onCreate,
+  subtitle,
+  error,
+  pending = false,
+}: Props) => {
   const [title, setTitle] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -27,30 +34,45 @@ const CreateBoardModal = ({ onClose, onCreate, subtitle, error, pending = false 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="w-full max-w-md rounded-lg bg-bg-surface p-6 shadow-xl">
-        <h2 className={`${subtitle ? 'mb-1' : 'mb-4'} text-lg font-semibold text-base`}>Create Board</h2>
+        <h2
+          className={`${subtitle ? 'mb-1' : 'mb-4'} text-lg font-semibold text-base`}
+        >
+          {translations.Board.createBoard}
+        </h2>
         {subtitle && <p className="mb-4 text-sm text-muted">{subtitle}</p>}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <input
             autoFocus
             type="text"
-            placeholder="Board title"
+            placeholder={translations['CreateBoardModal.titlePlaceholder']}
             value={title}
-            onChange={(e) => { setTitle(e.target.value); }}
+            onChange={(e) => {
+              setTitle(e.target.value);
+            }}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? 'create-board-error' : undefined}
             className="rounded border border-border bg-bg-overlay px-3 py-2 text-sm text-base placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-primary"
           />
           {error && (
-            <p id="create-board-error" role="alert" className="-mt-2 text-sm text-danger">
+            <p
+              id="create-board-error"
+              role="alert"
+              className="-mt-2 text-sm text-danger"
+            >
               {error}
             </p>
           )}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" size="md" onClick={onClose}>
-              Cancel
+              {translations.Board.cancel}
             </Button>
-            <Button type="submit" variant="primary" size="md" disabled={!title.trim() || pending}>
-              Create
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              disabled={!title.trim() || pending}
+            >
+              {translations.Board.create}
             </Button>
           </div>
         </form>

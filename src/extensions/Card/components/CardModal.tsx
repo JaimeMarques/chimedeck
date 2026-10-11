@@ -1,9 +1,19 @@
 // CardModal — full detail Radix Dialog modal for viewing and editing a card.
 // URL-driven: ?card=:id opens the modal; closing clears the query param.
 // Two-column layout: left = content, right = ActivityFeed (ResizablePanels).
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { PhotoIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  PhotoIcon,
+  XMarkIcon,
+  DocumentTextIcon,
+} from '@heroicons/react/24/outline';
 import type { Card, Label, CardMember, Checklist } from '../api';
 import type { Attachment } from '../../Attachments/types';
 import CardTitle from './CardTitle';
@@ -18,9 +28,12 @@ import CardPluginSection from '../../Plugins/uiInjections/CardPluginSection';
 import CustomFieldsSection from '../../CustomFields/CustomFieldsSection';
 import { AttachmentPanel } from '../../Attachments/components/AttachmentPanel';
 import { useAttachmentUpload } from '../../Attachments/hooks/useAttachmentUpload';
+import CardChatDrawer from '../../CardChat/components/CardChatDrawer';
+import type { CardChatSession } from '../../CardChat/api';
 
 import type { ActivityData } from '../slices/cardDetailSlice';
 import type { CommentData } from '../api/cardDetail';
+import translations from '../translations/en.json';
 
 interface BoardMember {
   id: string;
@@ -60,17 +73,42 @@ interface Props {
   onDeleteChecklist: (checklistId: string) => Promise<void>;
   onChecklistReorder: (checklistId: string, position: string) => Promise<void>;
   onItemAdd: (checklistId: string, title: string) => Promise<void>;
-  onItemToggle: (checklistId: string, itemId: string, checked: boolean) => Promise<void>;
-  onItemRename: (checklistId: string, itemId: string, title: string) => Promise<void>;
+  onItemToggle: (
+    checklistId: string,
+    itemId: string,
+    checked: boolean,
+  ) => Promise<void>;
+  onItemRename: (
+    checklistId: string,
+    itemId: string,
+    title: string,
+  ) => Promise<void>;
   onItemDelete: (checklistId: string, itemId: string) => Promise<void>;
-  onItemAssign: (checklistId: string, itemId: string, memberId: string | null) => Promise<void>;
-  onItemDueDateChange: (checklistId: string, itemId: string, dueDate: string | null) => Promise<void>;
+  onItemAssign: (
+    checklistId: string,
+    itemId: string,
+    memberId: string | null,
+  ) => Promise<void>;
+  onItemDueDateChange: (
+    checklistId: string,
+    itemId: string,
+    dueDate: string | null,
+  ) => Promise<void>;
   onItemConvertToCard: (checklistId: string, itemId: string) => Promise<void>;
-  onItemReorder: (sourceChecklistId: string, itemId: string, position: string, targetChecklistId?: string) => Promise<void>;
+  onItemReorder: (
+    sourceChecklistId: string,
+    itemId: string,
+    position: string,
+    targetChecklistId?: string,
+  ) => Promise<void>;
   onLabelAttach: (labelId: string) => Promise<void>;
   onLabelDetach: (labelId: string) => Promise<void>;
   onLabelCreate: (name: string, color: string) => Promise<void>;
-  onLabelUpdate: (labelId: string, name: string, color: string) => Promise<void>;
+  onLabelUpdate: (
+    labelId: string,
+    name: string,
+    color: string,
+  ) => Promise<void>;
   onMemberAssign: (userId: string) => Promise<void>;
   onMemberRemove: (userId: string) => Promise<void>;
   onAddComment: (content: string) => Promise<void>;
@@ -90,9 +128,30 @@ interface Props {
   onCoverSizeChange: (size: 'SMALL' | 'FULL') => void;
   onCoverAttachmentChange: (attachmentId: string | null) => void;
   /** Called whenever the persisted attachment count changes — used to keep the board card tile in sync. */
-  onAttachmentCountChange?: (counts: { fileCount: number; linkedCardCount: number }) => void;
+  onAttachmentCountChange?: (counts: {
+    fileCount: number;
+    linkedCardCount: number;
+  }) => void;
   /** True when the current user is a VIEWER guest — hides write-action controls. */
   isViewerGuest?: boolean;
+  /** AI Assist card-chat state. */
+  innerCardChatEnabled?: boolean;
+  chatDrawerOpen?: boolean;
+  chatSession?: CardChatSession | null;
+  onChatStart?: () => void;
+  onChatClose?: () => void;
+  // Sprint 176 — rich event renderer callbacks
+  /** Callback when a file path in a diff summary is clicked. */
+  onFileClick?: (path: string) => void;
+  /** Callback for approve action on sprint generation / as-built sync runs. */
+  onApprove?: (runId: string) => void | Promise<void>;
+  /** Callback for re-run action on AI edit runs. */
+  onRerun?: (runId: string) => void | Promise<void>;
+  /** Callback for edit action on AI edit runs. */
+  onEdit?: (runId: string) => void | Promise<void>;
+  isTemplate?: boolean;
+  onMakeTemplate?: () => void;
+  onCreateFromTemplate?: () => void;
 }
 
 const COVER_COLORS = [
@@ -108,7 +167,12 @@ const COVER_COLORS = [
   '#6B7280',
 ];
 
-const ALLOWED_COVER_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const ALLOWED_COVER_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
 
 const CardModal = ({
   boardId,
@@ -170,6 +234,18 @@ const CardModal = ({
   onCoverAttachmentChange,
   onAttachmentCountChange,
   isViewerGuest = false,
+  innerCardChatEnabled = false,
+  chatDrawerOpen = false,
+  chatSession = null,
+  onChatStart,
+  onChatClose,
+  onFileClick,
+  onApprove,
+  onRerun,
+  onEdit,
+  isTemplate = false,
+  onMakeTemplate,
+  onCreateFromTemplate,
 }: Props) => {
   const isReadOnly = card.archived;
   const canEditCover = !isReadOnly && !isViewerGuest;
@@ -189,18 +265,28 @@ const CardModal = ({
   const [cardAttachments, setCardAttachments] = useState<Attachment[]>([]);
   const [attachmentRefreshSignal, setAttachmentRefreshSignal] = useState(0);
 
-  const syncCardAttachmentState = useCallback((attachments: Attachment[]) => {
-    setCardAttachments(attachments);
-    const fileCount = attachments.filter((entry) => entry.referenced_card_id == null).length;
-    const linkedCardCount = attachments.filter((entry) => entry.referenced_card_id != null).length;
-    onAttachmentCountChange?.({ fileCount, linkedCardCount });
-  }, [onAttachmentCountChange]);
+  const syncCardAttachmentState = useCallback(
+    (attachments: Attachment[]) => {
+      setCardAttachments(attachments);
+      const fileCount = attachments.filter(
+        (entry) => entry.referenced_card_id == null,
+      ).length;
+      const linkedCardCount = attachments.filter(
+        (entry) => entry.referenced_card_id != null,
+      ).length;
+      onAttachmentCountChange?.({ fileCount, linkedCardCount });
+    },
+    [onAttachmentCountChange],
+  );
 
-  const handleEditorAttachmentsChange = useCallback((attachments: Attachment[]) => {
-    syncCardAttachmentState(attachments);
-    // [why] editor paste/file uploads happen outside AttachmentPanel; trigger a panel refresh.
-    setAttachmentRefreshSignal((value) => value + 1);
-  }, [syncCardAttachmentState]);
+  const handleEditorAttachmentsChange = useCallback(
+    (attachments: Attachment[]) => {
+      syncCardAttachmentState(attachments);
+      // [why] editor paste/file uploads happen outside AttachmentPanel; trigger a panel refresh.
+      setAttachmentRefreshSignal((value) => value + 1);
+    },
+    [syncCardAttachmentState],
+  );
   const { uploads: coverUploads, upload: uploadCover } = useAttachmentUpload({
     cardId: card.id,
     onSuccess: (attachment) => {
@@ -212,8 +298,11 @@ const CardModal = ({
     },
   });
 
-  const coverUploading = coverUploads.some((entry) =>
-    entry.phase === 'requesting-url' || entry.phase === 'uploading' || entry.phase === 'confirming',
+  const coverUploading = coverUploads.some(
+    (entry) =>
+      entry.phase === 'requesting-url' ||
+      entry.phase === 'uploading' ||
+      entry.phase === 'confirming',
   );
 
   useEffect(() => {
@@ -222,7 +311,10 @@ const CardModal = ({
       if (event.key === 'Escape') setCoverMenuOpen(false);
     };
     const onMouseDown = (event: MouseEvent) => {
-      if (coverMenuRef.current && !coverMenuRef.current.contains(event.target as Node)) {
+      if (
+        coverMenuRef.current &&
+        !coverMenuRef.current.contains(event.target as Node)
+      ) {
         setCoverMenuOpen(false);
       }
     };
@@ -247,7 +339,9 @@ const CardModal = ({
   } else if (card.cover_color) {
     previewSurfaceStyle = { backgroundColor: card.cover_color };
   } else {
-    previewSurfaceStyle = { background: 'linear-gradient(135deg, #64748b 0%, #334155 100%)' };
+    previewSurfaceStyle = {
+      background: 'linear-gradient(135deg, #64748b 0%, #334155 100%)',
+    };
   }
 
   const handlePickCoverFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -255,7 +349,9 @@ const CardModal = ({
     if (!file) return;
     // WHY: explicit allowlist ensures GIF animation is preserved and unsupported formats (e.g. SVG) are rejected.
     if (!ALLOWED_COVER_TYPES.has(file.type)) {
-      setCoverUploadError('Only JPEG, PNG, GIF, or WebP images can be used as a card cover.');
+      setCoverUploadError(
+        'Only JPEG, PNG, GIF, or WebP images can be used as a card cover.',
+      );
       event.target.value = '';
       return;
     }
@@ -265,7 +361,12 @@ const CardModal = ({
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+    >
       <Dialog.Portal>
         {/* Overlay */}
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
@@ -281,14 +382,18 @@ const CardModal = ({
             backdropPointerDownRef.current = e.target === e.currentTarget;
           }}
           onClick={(e) => {
-            const shouldClose = e.target === e.currentTarget && backdropPointerDownRef.current;
+            const shouldClose =
+              e.target === e.currentTarget && backdropPointerDownRef.current;
             backdropPointerDownRef.current = false;
             if (shouldClose) onClose();
           }}
         >
           {/* Visually-hidden title for screen-reader accessibility (Radix requirement) */}
           <Dialog.Title className="sr-only">Card: {card.title}</Dialog.Title>
-          <div className="bg-bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col max-h-[calc(100vh-5rem)] supports-[height:100dvh]:max-h-[calc(100dvh-5rem)]" data-card-modal-content="true">
+          <div
+            className="bg-bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col max-h-[calc(100vh-5rem)] supports-[height:100dvh]:max-h-[calc(100dvh-5rem)]"
+            data-card-modal-content="true"
+          >
             <input
               ref={coverInputRef}
               type="file"
@@ -300,21 +405,23 @@ const CardModal = ({
             {hasCover && (
               <div
                 className={`w-full overflow-hidden rounded-t-2xl ${(card.cover_size ?? 'SMALL') === 'FULL' ? 'h-44' : 'h-28'}`}
-                style={card.cover_image_url
-                  ? undefined
-                  : { backgroundColor: card.cover_color ?? '#334155' }}
+                style={
+                  card.cover_image_url
+                    ? undefined
+                    : { backgroundColor: card.cover_color ?? '#334155' }
+                }
               >
-                {card.cover_image_url
-                  ? (
-                    <img
-                      src={card.cover_image_url}
-                      alt="Card cover"
-                      className="h-full w-full object-contain"
-                      loading="eager"
-                      draggable={false}
-                    />
-                    )
-                  : <span className="sr-only">Card cover color</span>}
+                {card.cover_image_url ? (
+                  <img
+                    src={card.cover_image_url}
+                    alt="Card cover"
+                    className="h-full w-full object-contain"
+                    loading="eager"
+                    draggable={false}
+                  />
+                ) : (
+                  <span className="sr-only">Card cover color</span>
+                )}
               </div>
             )}
 
@@ -327,15 +434,18 @@ const CardModal = ({
                   disabled={isReadOnly}
                 />
                 <p className="mt-1 text-xs text-subtle px-2">
-                  in list <span className="text-link font-medium">{listTitle}</span>{' '}
-                  · {boardTitle}
+                  in list{' '}
+                  <span className="text-link font-medium">{listTitle}</span> ·{' '}
+                  {boardTitle}
                 </p>
               </div>
               <div className="relative" ref={coverMenuRef}>
                 <button
                   type="button"
                   className="rounded-lg px-2.5 py-2 text-sm text-muted hover:bg-bg-overlay hover:text-base transition-colors disabled:opacity-40"
-                  onClick={() => { setCoverMenuOpen((openState) => !openState); }}
+                  onClick={() => {
+                    setCoverMenuOpen((openState) => !openState);
+                  }}
                   disabled={!canEditCover}
                 >
                   <span className="inline-flex items-center gap-1.5">
@@ -352,14 +462,21 @@ const CardModal = ({
                     <div className="mb-3 grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => { onCoverSizeChange('FULL'); }}
-                        className={`rounded-md border p-1.5 text-left text-xs transition-colors ${selectedCoverSize === 'FULL'
-                          ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-                          : 'border-border text-muted hover:bg-bg-overlay'}`}
+                        onClick={() => {
+                          onCoverSizeChange('FULL');
+                        }}
+                        className={`rounded-md border p-1.5 text-left text-xs transition-colors ${
+                          selectedCoverSize === 'FULL'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                            : 'border-border text-muted hover:bg-bg-overlay'
+                        }`}
                         aria-label="Show cover image above card"
                       >
                         <div className="h-12 w-full overflow-hidden rounded">
-                          <div className="h-5 w-full" style={previewSurfaceStyle} />
+                          <div
+                            className="h-5 w-full"
+                            style={previewSurfaceStyle}
+                          />
                           <div className="h-7 w-full bg-bg-surface px-1.5 py-1">
                             <div className="h-1 w-10 rounded bg-border" />
                             <div className="mt-1 h-1 w-7 rounded bg-border" />
@@ -368,13 +485,20 @@ const CardModal = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => { onCoverSizeChange('SMALL'); }}
-                        className={`rounded-md border p-1.5 text-left text-xs transition-colors ${selectedCoverSize === 'SMALL'
-                          ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-                          : 'border-border text-muted hover:bg-bg-overlay'}`}
+                        onClick={() => {
+                          onCoverSizeChange('SMALL');
+                        }}
+                        className={`rounded-md border p-1.5 text-left text-xs transition-colors ${
+                          selectedCoverSize === 'SMALL'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                            : 'border-border text-muted hover:bg-bg-overlay'
+                        }`}
                         aria-label="Show card content on image background"
                       >
-                        <div className="h-12 w-full overflow-hidden rounded px-1.5 py-1" style={previewSurfaceStyle}>
+                        <div
+                          className="h-12 w-full overflow-hidden rounded px-1.5 py-1"
+                          style={previewSurfaceStyle}
+                        >
                           <div className="h-full w-full rounded bg-black/30 p-1 flex items-end">
                             <div>
                               <div className="h-1 w-10 rounded bg-white/70" />
@@ -393,7 +517,9 @@ const CardModal = ({
                         <button
                           key={color}
                           type="button"
-                          onClick={() => { onCoverColorChange(color); }}
+                          onClick={() => {
+                            onCoverColorChange(color);
+                          }}
                           className={`h-7 w-full rounded ${card.cover_color === color ? 'ring-2 ring-blue-500 ring-offset-1 ring-offset-white dark:ring-offset-slate-900' : ''}`}
                           style={{ backgroundColor: color }}
                           aria-label={`Set card cover color ${color}`}
@@ -407,7 +533,9 @@ const CardModal = ({
                       disabled={coverUploading}
                       className="mb-2 w-full rounded-md border border-border-strong px-3 py-2 text-xs font-medium text-base transition-colors hover:bg-bg-overlay disabled:opacity-50 dark:hover:bg-slate-800"
                     >
-                      {coverUploading ? 'Uploading cover...' : 'Upload a cover image'}
+                      {coverUploading
+                        ? 'Uploading cover...'
+                        : 'Upload a cover image'}
                     </button>
 
                     {(card.cover_attachment_id || card.cover_color) && (
@@ -424,14 +552,16 @@ const CardModal = ({
                     )}
 
                     {coverUploadError && (
-                      <p className="mt-2 text-xs text-danger">{coverUploadError}</p>
+                      <p className="mt-2 text-xs text-danger">
+                        {coverUploadError}
+                      </p>
                     )}
                   </div>
                 )}
               </div>
               <Dialog.Close
                 className="rounded-lg p-2 text-subtle hover:bg-bg-overlay hover:text-base transition-colors flex-shrink-0"
-                aria-label="Close"
+                aria-label={translations['card.modal.closeAria']}
               >
                 <XMarkIcon className="h-5 w-5" aria-hidden="true" />
               </Dialog.Close>
@@ -468,6 +598,22 @@ const CardModal = ({
             {isReadOnly && (
               <div className="mx-5 mb-2 rounded-lg bg-yellow-50 border border-yellow-300 px-3 py-2 text-sm text-yellow-800 dark:bg-yellow-900/30 dark:border-yellow-700/50 dark:text-yellow-400">
                 This card is archived.
+              </div>
+            )}
+
+            {isTemplate && (
+              <div className="mx-5 mb-2 rounded-lg bg-blue-50 border border-blue-300 px-3 py-2 text-sm text-blue-800 dark:bg-blue-900/30 dark:border-blue-700/50 dark:text-blue-400 flex items-center justify-between">
+                <span>This is a template card.</span>
+                {onCreateFromTemplate && (
+                  <button
+                    type="button"
+                    className="ml-3 inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
+                    onClick={onCreateFromTemplate}
+                  >
+                    <DocumentTextIcon className="w-3.5 h-3.5" />
+                    Create card from Template
+                  </button>
+                )}
               </div>
             )}
 
@@ -520,7 +666,9 @@ const CardModal = ({
                       cardId={card.id}
                       canWrite={!isViewerGuest}
                       insertMarkdownRef={insertMarkdownRef}
-                      onCountChange={onAttachmentCountChange}
+                      {...(onAttachmentCountChange
+                        ? { onCountChange: onAttachmentCountChange }
+                        : {})}
                       onAttachmentsChange={syncCardAttachmentState}
                       refreshSignal={attachmentRefreshSignal}
                     />
@@ -560,6 +708,10 @@ const CardModal = ({
                       canAddComment={!isViewerGuest}
                       onAttachmentsChange={handleEditorAttachmentsChange}
                       insertMarkdownRef={insertMarkdownRef}
+                      onFileClick={onFileClick}
+                      onApprove={onApprove}
+                      onRerun={onRerun}
+                      onEdit={onEdit}
                     />
                   </div>
                 }
@@ -610,7 +762,9 @@ const CardModal = ({
                     cardId={card.id}
                     canWrite={!isViewerGuest}
                     insertMarkdownRef={insertMarkdownRef}
-                    onCountChange={onAttachmentCountChange}
+                    {...(onAttachmentCountChange
+                      ? { onCountChange: onAttachmentCountChange }
+                      : {})}
                     onAttachmentsChange={syncCardAttachmentState}
                     refreshSignal={attachmentRefreshSignal}
                   />
@@ -643,15 +797,37 @@ const CardModal = ({
               archived={card.archived}
               disabled={isReadOnly}
               activityVisible={activityVisible}
-              onToggleActivity={() => { setActivityVisible((v) => !v); }}
+              innerCardChatEnabled={innerCardChatEnabled}
+              onToggleActivity={() => {
+                setActivityVisible((v) => !v);
+              }}
               onArchive={onArchive}
               onDelete={onDelete}
               onCopyLink={onCopyLink}
               onCopyCard={onCopyCard}
               onMoveCard={onMoveCard}
               onPrint={onPrint}
+              onAIAssist={onChatStart}
+              isTemplate={isTemplate}
+              onMakeTemplate={onMakeTemplate}
             />
           </div>
+
+          {/* [why] Card Chat Drawer rendered inside Dialog.Content as an
+               absolutely-positioned child. Since Dialog.Content is fixed
+               inset-0, the drawer's fixed backdrop and absolute panel
+               position correctly within the viewport. Clicks on the drawer
+               don't trigger Radix's onPointerDownOutside because they're
+               inside Dialog.Content. */}
+          {chatDrawerOpen && chatSession && (
+            <CardChatDrawer
+              cardId={card.id}
+              boardId={boardId}
+              session={chatSession}
+              onClose={() => onChatClose?.()}
+              onDescriptionSave={onDescriptionSave}
+            />
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

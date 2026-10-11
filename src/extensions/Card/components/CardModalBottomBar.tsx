@@ -9,9 +9,11 @@ import {
   BoltIcon,
   ChevronUpIcon,
   DocumentDuplicateIcon,
+  DocumentTextIcon,
   LinkIcon,
   PrinterIcon,
   PuzzlePieceIcon,
+  SparklesIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { Bars3Icon } from '@heroicons/react/24/solid';
@@ -30,6 +32,7 @@ interface Props {
   archived: boolean;
   disabled?: boolean;
   activityVisible: boolean;
+  innerCardChatEnabled?: boolean;
   onToggleActivity: () => void;
   onArchive: () => Promise<void>;
   onDelete: () => Promise<void>;
@@ -37,6 +40,9 @@ interface Props {
   onCopyCard: () => void;
   onMoveCard: () => void;
   onPrint: () => void;
+  onAIAssist?: () => void;
+  isTemplate?: boolean;
+  onMakeTemplate?: () => void;
 }
 
 // ------------------------------------------------------------------
@@ -48,7 +54,9 @@ function usePopover() {
 
   useEffect(() => {
     if (!open) return;
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     const handleClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
@@ -81,6 +89,7 @@ const CardModalBottomBar = ({
   archived,
   disabled,
   activityVisible,
+  innerCardChatEnabled,
   onToggleActivity,
   onArchive,
   onDelete,
@@ -88,6 +97,9 @@ const CardModalBottomBar = ({
   onCopyCard,
   onMoveCard,
   onPrint,
+  onAIAssist,
+  isTemplate,
+  onMakeTemplate,
 }: Props) => {
   const powerUps = usePopover();
   const automations = usePopover();
@@ -104,15 +116,20 @@ const CardModalBottomBar = ({
             className={barButtonClass}
             aria-expanded={powerUps.open}
             aria-haspopup="true"
-            onClick={() => { powerUps.setOpen((v) => !v); }}
+            onClick={() => {
+              powerUps.setOpen((v) => !v);
+            }}
           >
             <PuzzlePieceIcon className="w-4 h-4" />
             Power-ups
-            <ChevronUpIcon className={`w-3 h-3 transition-transform ${powerUps.open ? '' : 'rotate-180'}`} />
+            <ChevronUpIcon
+              className={`w-3 h-3 transition-transform ${powerUps.open ? '' : 'rotate-180'}`}
+            />
           </button>
           {powerUps.open && (
             <div className="absolute bottom-full left-0 mb-1 z-10 w-56 rounded-xl bg-bg-surface border border-border shadow-lg p-2">
               <CardPluginButtons
+                boardId={boardId}
                 cardId={cardId}
                 listId={listId}
                 {...(cardTitle !== undefined ? { cardTitle } : {})}
@@ -134,15 +151,23 @@ const CardModalBottomBar = ({
             aria-expanded={automations.open}
             aria-haspopup="true"
             disabled={disabled}
-            onClick={() => { automations.setOpen((v) => !v); }}
+            onClick={() => {
+              automations.setOpen((v) => !v);
+            }}
           >
             <BoltIcon className="w-4 h-4" />
             Automations
-            <ChevronUpIcon className={`w-3 h-3 transition-transform ${automations.open ? '' : 'rotate-180'}`} />
+            <ChevronUpIcon
+              className={`w-3 h-3 transition-transform ${automations.open ? '' : 'rotate-180'}`}
+            />
           </button>
           {automations.open && (
             <div className="absolute bottom-full left-0 mb-1 z-10 w-72 rounded-xl bg-bg-surface border border-border shadow-lg p-3">
-              <CardButtonsSection boardId={boardId} cardId={cardId} {...(disabled !== undefined ? { disabled } : {})} />
+              <CardButtonsSection
+                boardId={boardId}
+                cardId={cardId}
+                {...(disabled !== undefined ? { disabled } : {})}
+              />
             </div>
           )}
         </div>
@@ -154,47 +179,105 @@ const CardModalBottomBar = ({
             className={barButtonClass}
             aria-expanded={actions.open}
             aria-haspopup="true"
-            onClick={() => { actions.setOpen((v) => !v); }}
+            onClick={() => {
+              actions.setOpen((v) => !v);
+            }}
           >
             Actions
-            <ChevronUpIcon className={`w-3 h-3 transition-transform ${actions.open ? '' : 'rotate-180'}`} />
+            <ChevronUpIcon
+              className={`w-3 h-3 transition-transform ${actions.open ? '' : 'rotate-180'}`}
+            />
           </button>
           {actions.open && (
             <div className="absolute bottom-full left-0 mb-1 z-10 w-52 rounded-xl bg-bg-surface border border-border shadow-lg p-2">
+              {/* AI Assist — gated by feature flag */}
+              {innerCardChatEnabled && onAIAssist && (
+                <>
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
+                    onClick={() => {
+                      actions.setOpen(false);
+                      onAIAssist();
+                    }}
+                  >
+                    <SparklesIcon className="w-4 h-4 shrink-0 text-blue-500" />
+                    AI Assist
+                  </button>
+                  <div className="border-t border-border my-1" />
+                </>
+              )}
+              {onMakeTemplate && (
+                <>
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
+                    onClick={() => {
+                      actions.setOpen(false);
+                      onMakeTemplate();
+                    }}
+                  >
+                    <DocumentTextIcon className="w-4 h-4 shrink-0" />
+                    {isTemplate ? 'Remove template' : 'Make template'}
+                  </button>
+                  <div className="border-t border-border my-1" />
+                </>
+              )}
               <button
                 type="button"
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
-                onClick={() => { actions.setOpen(false); void onArchive(); }}
+                onClick={() => {
+                  actions.setOpen(false);
+                  onArchive();
+                }}
               >
-                {archived
-                  ? <><ArchiveBoxXMarkIcon className="w-4 h-4 shrink-0" /> Unarchive card</>
-                  : <><ArchiveBoxIcon className="w-4 h-4 shrink-0" /> Archive card</>}
+                {archived ? (
+                  <>
+                    <ArchiveBoxXMarkIcon className="w-4 h-4 shrink-0" /> Unarchive card
+                  </>
+                ) : (
+                  <>
+                    <ArchiveBoxIcon className="w-4 h-4 shrink-0" /> Archive card
+                  </>
+                )}
               </button>
               <button
                 type="button"
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
-                onClick={() => { actions.setOpen(false); onCopyLink(); }}
+                onClick={() => {
+                  actions.setOpen(false);
+                  onCopyLink();
+                }}
               >
                 <LinkIcon className="w-4 h-4 shrink-0" /> Copy link
               </button>
               <button
                 type="button"
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
-                onClick={() => { actions.setOpen(false); onCopyCard(); }}
+                onClick={() => {
+                  actions.setOpen(false);
+                  onCopyCard();
+                }}
               >
                 <DocumentDuplicateIcon className="w-4 h-4 shrink-0" /> Copy card
               </button>
               <button
                 type="button"
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
-                onClick={() => { actions.setOpen(false); onMoveCard(); }}
+                onClick={() => {
+                  actions.setOpen(false);
+                  onMoveCard();
+                }}
               >
                 <ArrowRightIcon className="w-4 h-4 shrink-0" /> Move card
               </button>
               <button
                 type="button"
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base hover:bg-bg-overlay rounded-lg transition-colors"
-                onClick={() => { actions.setOpen(false); onPrint(); }}
+                onClick={() => {
+                  actions.setOpen(false);
+                  onPrint();
+                }}
               >
                 <PrinterIcon className="w-4 h-4 shrink-0" /> Print card
               </button>
@@ -203,7 +286,7 @@ const CardModalBottomBar = ({
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-danger hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors disabled:opacity-40"
                 onClick={() => {
                   actions.setOpen(false);
-                  if (confirm('Delete this card? This cannot be undone.')) void onDelete();
+                  if (confirm('Delete this card? This cannot be undone.')) onDelete();
                 }}
                 disabled={disabled}
               >

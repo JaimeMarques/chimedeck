@@ -8,13 +8,24 @@ import { strict as assert } from 'node:assert';
 import { createHash, randomUUID } from 'node:crypto';
 
 const databaseUrl = Bun.env.DATABASE_URL;
-assert.equal(Bun.env.CHIMEDECK_TEST_SANDBOX, '1', 'Explicit CHIMEDECK_TEST_SANDBOX=1 opt-in required');
+assert.equal(
+  Bun.env.CHIMEDECK_TEST_SANDBOX,
+  '1',
+  'Explicit CHIMEDECK_TEST_SANDBOX=1 opt-in required'
+);
 assert.ok(databaseUrl, 'DATABASE_URL must point to a disposable PostgreSQL database');
 const url = new URL(databaseUrl);
 const databaseName = decodeURIComponent(url.pathname.slice(1));
 assert.ok(['postgres:', 'postgresql:'].includes(url.protocol), 'PostgreSQL URL required');
-assert.match(databaseName, /(?:^|[_-])(test|preflight|scratch|sandbox)(?:$|[_-])/i, 'Refusing to write to a database without a test/preflight/scratch/sandbox name');
-assert.ok(['localhost', '127.0.0.1', 'postgres', 'db'].includes(url.hostname), 'Refusing non-local PostgreSQL host');
+assert.match(
+  databaseName,
+  /(?:^|[_-])(test|preflight|scratch|sandbox)(?:$|[_-])/i,
+  'Refusing to write to a database without a test/preflight/scratch/sandbox name'
+);
+assert.ok(
+  ['localhost', '127.0.0.1', 'postgres', 'db'].includes(url.hostname),
+  'Refusing non-local PostgreSQL host'
+);
 
 const { db } = await import('../../server/common/db');
 const { handleGetCard } = await import('../../server/extensions/card/api/get');
@@ -43,7 +54,7 @@ function get(path: string, authenticated: boolean): Request {
 async function assertActivitiesHideAudit(
   label: string,
   response: Response,
-  pick: (body: unknown) => unknown,
+  pick: (body: unknown) => unknown
 ): Promise<void> {
   assert.equal(response.status, 200, `${label}: expected 200`);
   const rows = pick(await response.json()) as Array<Record<string, unknown>>;
@@ -69,16 +80,46 @@ async function cleanup(): Promise<void> {
 }
 
 try {
-  const identity = await db.raw<{ rows: Array<{ name: string }> }>('SELECT current_database() AS name');
+  const identity = await db.raw<{ rows: Array<{ name: string }> }>(
+    'SELECT current_database() AS name'
+  );
   assert.equal(identity.rows[0]?.name, databaseName);
 
-  await db('users').insert({ id: ownerId, email: `${ownerId}@example.test`, name: 'Fixture owner', email_verified: true });
-  await db('workspaces').insert({ id: workspaceId, name: `activity-privacy-${shortId()}`, owner_id: ownerId });
+  await db('users').insert({
+    id: ownerId,
+    email: `${ownerId}@example.test`,
+    name: 'Fixture owner',
+    email_verified: true,
+  });
+  await db('workspaces').insert({
+    id: workspaceId,
+    name: `activity-privacy-${shortId()}`,
+    owner_id: ownerId,
+  });
   await db('memberships').insert({ workspace_id: workspaceId, user_id: ownerId, role: 'OWNER' });
   // PUBLIC: the board feeds are readable without authentication.
-  await db('boards').insert({ id: boardId, workspace_id: workspaceId, title: 'Public', visibility: 'PUBLIC', short_id: shortId() });
-  await db('lists').insert({ id: listId, board_id: boardId, title: 'List', short_id: shortId(), position: 'a0' });
-  await db('cards').insert({ id: cardId, list_id: listId, title: 'Fixture', short_id: shortId(), position: 'a0', archived: false });
+  await db('boards').insert({
+    id: boardId,
+    workspace_id: workspaceId,
+    title: 'Public',
+    visibility: 'PUBLIC',
+    short_id: shortId(),
+  });
+  await db('lists').insert({
+    id: listId,
+    board_id: boardId,
+    title: 'List',
+    short_id: shortId(),
+    position: 'a0',
+  });
+  await db('cards').insert({
+    id: cardId,
+    list_id: listId,
+    title: 'Fixture',
+    short_id: shortId(),
+    position: 'a0',
+    archived: false,
+  });
   await db('activities').insert({
     id: activityId,
     entity_type: 'card',
@@ -91,35 +132,44 @@ try {
     user_agent: 'Fixture-Agent/1.0',
   });
   await db('api_tokens').insert({
-    id: tokenId, user_id: ownerId, name: 'Disposable activity privacy token',
-    token_hash: createHash('sha256').update(token).digest('hex'), token_prefix: token.slice(0, 10),
+    id: tokenId,
+    user_id: ownerId,
+    name: 'Disposable activity privacy token',
+    token_hash: createHash('sha256').update(token).digest('hex'),
+    token_prefix: token.slice(0, 10),
   });
 
   await assertActivitiesHideAudit(
     'GET /boards/:id/activity (anonymous, PUBLIC board)',
     await handleBoardActivity(get(`/api/v1/boards/${boardId}/activity`, false), boardId),
-    (body) => (body as { data: unknown }).data,
+    (body) => (body as { data: unknown }).data
   );
   await assertActivitiesHideAudit(
     'GET /boards/:id?include=activities (anonymous, PUBLIC board)',
     await handleGetBoard(get(`/api/v1/boards/${boardId}?include=activities`, false), boardId),
-    (body) => (body as { includes: { activities: unknown } }).includes.activities,
+    (body) => (body as { includes: { activities: unknown } }).includes.activities
   );
   await assertActivitiesHideAudit(
     'GET /cards/:id/activity',
     await handleCardActivity(get(`/api/v1/cards/${cardId}/activity`, true), cardId),
-    (body) => (body as { data: unknown }).data,
+    (body) => (body as { data: unknown }).data
   );
   await assertActivitiesHideAudit(
     'GET /cards/:id?include=activities',
     await handleGetCard(get(`/api/v1/cards/${cardId}?include=activities`, true), cardId),
-    (body) => (body as { includes: { activities: unknown } }).includes.activities,
+    (body) => (body as { includes: { activities: unknown } }).includes.activities
   );
 
   // Writers keep storing the audit columns; only reads drop them.
-  const stored = await db('activities').where({ id: activityId }).first<{ ip_address: string; user_agent: string }>();
-  assert.equal(stored?.ip_address, '203.0.113.7');
-  assert.equal(stored?.user_agent, 'Fixture-Agent/1.0');
+  const stored = await db('activities')
+    .where({ id: activityId })
+    .first<{ ip_address: string; user_agent: string }>();
+  assert.equal(stored.ip_address, '203.0.113.7');
+  assert.equal(stored.user_agent, 'Fixture-Agent/1.0');
 } finally {
-  try { await cleanup(); } finally { await db.destroy(); }
+  try {
+    await cleanup();
+  } finally {
+    await db.destroy();
+  }
 }

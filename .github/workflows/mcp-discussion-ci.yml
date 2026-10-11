@@ -1,6 +1,8 @@
 name: MCP discussion reads
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -8,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mcp-discussion-${{ github.event.pull_request.number }}
+  group: mcp-discussion-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -53,5 +55,6 @@ jobs:
           server/extensions/mcp/tools/listBoardAdmin.test.ts
           server/extensions/mcp/registerTools.ts
           server/extensions/mcp/registerTools.test.ts
+          server/extensions/mcp/http
       - name: Build client including MCP developer documentation
         run: bun run build:client

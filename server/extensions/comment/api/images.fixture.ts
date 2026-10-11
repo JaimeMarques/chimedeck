@@ -73,6 +73,10 @@ void mock.module('../../../middlewares/permissionManager', () => ({
 }));
 void mock.module('../../../common/ids/resolveEntityId', () => ({ resolveCardId: async () => cardId }));
 void mock.module('../../../common/ids/shortId', () => ({ generateUniqueShortId: async () => 'short' }));
+// Subscription accounting is independently tested; retain this fixture's focus
+// on upload-context and image ownership instead of growing its tiny DB double.
+void mock.module('../../../middlewares/limitGuard', () => ({ applyLimitGuard: async () => null }));
+void mock.module('../../subscription/common/usage', () => ({ getStorageBytesUsed: async () => 0 }));
 void mock.module('../../attachment/common/config/s3', () => ({
   s3Config: { bucket: 'test' },
   s3ServerClient: { send: async (command: object) => {

@@ -2,7 +2,7 @@
 <img src="https://github.com/Chimedeck/chimedeck/blob/main/public/android-chrome-512x512.png?raw=true" alt="ChimeDeck Logo" width="60"/>
 
 # Chimedeck: an open-source work management platform  
-A full-stack workspace and card management app with boards, lists, comments, attachments, pricing tools, CLI commands, MCP intergration and automated tests. MCP-compatible AI agents can connect directly to Chimedeck to create tasks, update cards, search work, add comments, and collaborate with human teams.
+A full-stack workspace and card management app with boards, lists, comments, attachments, pricing tools, CLI commands, MCP integration and automated tests. MCP-compatible AI agents can connect directly to Chimedeck to create tasks, update cards, search work, add comments, and collaborate with human teams.
 
 Built with React, Bun/TypeScript, and an extensible server/client architecture for fast product iteration.
 
@@ -63,7 +63,7 @@ bun install
 cp .env.example .env
 
 # 3. Build + start Postgres (pg_cron image built on first run, ~20 s) + LocalStack S3
-docker compose up -d postgres localstack
+docker compose up -d postgres localstack redis
 
 # 4. Run database migrations
 bun run db:migrate

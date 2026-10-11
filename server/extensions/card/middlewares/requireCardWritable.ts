@@ -14,6 +14,8 @@ interface ScopedCardRow {
   due_date: Date | string | null;
   created_at: Date | string | null;
   updated_at: Date | string | null;
+  cover_color?: string | null;
+  cover_size?: string | null;
 }
 
 // Parent lookup columns from 0005_list.ts.
@@ -30,14 +32,14 @@ export interface CardScopedRequest extends BoardScopedRequest {
 // Returns a Response if not found, board is ARCHIVED, or card is archived; null on success.
 export async function requireCardWritable(
   req: CardScopedRequest,
-  cardId: string,
+  cardId: string
 ): Promise<Response | null> {
   const card = await db<ScopedCardRow>('cards').where({ id: cardId }).first();
 
   if (!card) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card not found' } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
@@ -45,7 +47,7 @@ export async function requireCardWritable(
   if (!list) {
     return Response.json(
       { error: { code: 'card-not-found', message: 'Card parent list not found' } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
@@ -53,21 +55,26 @@ export async function requireCardWritable(
   if (!board) {
     return Response.json(
       { error: { code: 'board-not-found', message: 'Board not found' } },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
   if (board.state === 'ARCHIVED') {
     return Response.json(
-      { error: { code: 'board-is-archived', message: 'This board is archived and cannot be modified.' } },
-      { status: 403 },
+      {
+        error: {
+          code: 'board-is-archived',
+          message: 'This board is archived and cannot be modified.',
+        },
+      },
+      { status: 403 }
     );
   }
 
   if (card.archived) {
     return Response.json(
       { error: { code: 'card-archived', message: 'Card is archived and cannot be modified' } },
-      { status: 403 },
+      { status: 403 }
     );
   }
 

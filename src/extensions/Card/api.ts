@@ -21,6 +21,7 @@ export interface Card {
   cover_aspect_ratio?: '16:9' | '1:1' | null;
   /** True when the cover attachment is a GIF (served via /view to preserve animation). */
   cover_is_gif?: boolean;
+  is_template?: boolean;
   created_at: string;
   updated_at: string;
   labels: Array<{ id: string; name: string; color: string }>;
@@ -280,7 +281,9 @@ export async function attachLabel({
   cardId: string;
   labelId: string;
 }): Promise<{ data: { card_id: string; label_id: string } }> {
-  return api.post<{ data: { card_id: string; label_id: string } }>(`/cards/${cardId}/labels`, { labelId });
+  return api.post<{ data: { card_id: string; label_id: string } }>(`/cards/${cardId}/labels`, {
+    labelId,
+  });
 }
 
 export async function detachLabel({
@@ -306,7 +309,9 @@ export async function assignMember({
   cardId: string;
   userId: string;
 }): Promise<{ data: { card_id: string; user_id: string } }> {
-  return api.post<{ data: { card_id: string; user_id: string } }>(`/cards/${cardId}/members`, { userId });
+  return api.post<{ data: { card_id: string; user_id: string } }>(`/cards/${cardId}/members`, {
+    userId,
+  });
 }
 
 export async function removeMember({
@@ -350,7 +355,12 @@ export async function updateChecklistItem({
   position?: string;
   checklist_id?: string | null;
 }): Promise<{ data: ChecklistItem }> {
-  return api.patch<{ data: ChecklistItem }>(`/checklist-items/${itemId}`, { title, checked, position, checklist_id });
+  return api.patch<{ data: ChecklistItem }>(`/checklist-items/${itemId}`, {
+    title,
+    checked,
+    position,
+    checklist_id,
+  });
 }
 
 export async function deleteChecklistItem({
@@ -374,5 +384,7 @@ export async function listDueCards({
   workspaceId: string;
   before: string; // ISO 8601
 }): Promise<{ data: Card[] }> {
-  return api.get<{ data: Card[] }>(`/workspaces/${workspaceId}/cards/due?before=${encodeURIComponent(before)}`);
+  return api.get<{ data: Card[] }>(
+    `/workspaces/${workspaceId}/cards/due?before=${encodeURIComponent(before)}`
+  );
 }

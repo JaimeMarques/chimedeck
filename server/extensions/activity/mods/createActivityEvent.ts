@@ -18,12 +18,15 @@ async function fireCardMemberWebhook({
   cardId,
   actorId,
   eventType,
+  eventId,
   payload,
 }: {
   boardId: string;
   cardId: string;
   actorId: string;
   eventType: WebhookEventType;
+  // Persisted activities.id — one logical member action, stable across retries.
+  eventId: string;
   payload: Record<string, unknown>;
 }): Promise<void> {
   if (!env.WEBHOOKS_ENABLED) return;
@@ -38,7 +41,7 @@ async function fireCardMemberWebhook({
       endpoint: wh.endpoint_url,
       signingSecret: wh.signing_secret,
       eventType,
-      payload: { ...payload, boardId, cardId, actorId },
+      payload: { ...payload, boardId, cardId, actorId, eventId },
       webhookId: wh.id,
       knex: db,
     });
@@ -52,6 +55,12 @@ export interface CardCreatedPayload {
   listName?: string | null;
   boardId: string;
   workspaceId: string;
+  source?: {
+    type: 'board-chat-assist';
+    tool: 'create_board_card';
+    toolCallId: string;
+    idempotencyKey: string;
+  };
 }
 
 export async function emitCardCreated({
@@ -158,8 +167,13 @@ export async function emitCardMemberAssigned({
     boardId: payload.boardId,
     cardId: payload.cardId,
     actorId,
+    eventId: activity.id,
     eventType: 'card.member_assigned',
-    payload: { userId: payload.userId, assigneeName: payload.assigneeName, cardTitle: payload.cardTitle },
+    payload: {
+      userId: payload.userId,
+      assigneeName: payload.assigneeName,
+      cardTitle: payload.cardTitle,
+    },
   }).catch(() => {});
   return activity;
 }
@@ -199,8 +213,13 @@ export async function emitCardMemberUnassigned({
     boardId: payload.boardId,
     cardId: payload.cardId,
     actorId,
+    eventId: activity.id,
     eventType: 'card.member_removed',
-    payload: { userId: payload.userId, assigneeName: payload.assigneeName, cardTitle: payload.cardTitle },
+    payload: {
+      userId: payload.userId,
+      assigneeName: payload.assigneeName,
+      cardTitle: payload.cardTitle,
+    },
   }).catch(() => {});
   return activity;
 }

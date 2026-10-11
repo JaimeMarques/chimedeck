@@ -20,7 +20,7 @@ const allSockets = new Set<ServerWebSocket<WsData>>();
 
 startHeartbeatLoop(() => allSockets);
 
-export async function handleWsUpgrade(req: Request, server: Server): Promise<boolean> {
+export async function handleWsUpgrade(req: Request, server: Server<WsData>): Promise<boolean> {
   const url = new URL(req.url);
   if (url.pathname !== '/api/v1/ws') return false;
 

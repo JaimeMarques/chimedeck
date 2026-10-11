@@ -5,11 +5,35 @@
 // External links are shown in a separate "Links" section.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { PaperClipIcon, LinkIcon } from '@heroicons/react/24/outline';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import Button from '../../../common/components/Button';
 import ToastRegion from '../../../common/components/ToastRegion';
 import type { ToastItem } from '../../../common/components/ToastRegion';
 import { useAttachmentUpload } from '../hooks/useAttachmentUpload';
-import { listAttachments, deleteAttachment, createUrlAttachment, patchAttachment, fetchCardPreview } from '../api';
+import { useReorderPersistence } from '../hooks/useReorderPersistence';
+import {
+  listAttachments,
+  deleteAttachment,
+  createUrlAttachment,
+  patchAttachment,
+  fetchCardPreview,
+} from '../api';
 import { AttachmentDropZone } from './AttachmentDropZone';
 import { AttachmentItem } from './AttachmentItem';
 import { CardAttachmentPreview } from './CardAttachmentPreview';
@@ -31,18 +55,101 @@ interface Props {
    */
   insertMarkdownRef?: React.MutableRefObject<((md: string) => void) | null>;
   /** Called whenever the persisted attachment count changes (add, delete, or initial load). */
-  onCountChange?: (counts: { fileCount: number; linkedCardCount: number }) => void;
+  onCountChange?: (counts: {
+    fileCount: number;
+    linkedCardCount: number;
+  }) => void;
   /** Called whenever the full attachment list changes — useful for features that need to reference attachments by id. */
   onAttachmentsChange?: (attachments: Attachment[]) => void;
   /** External signal to force a refresh (e.g. uploads initiated outside this panel). */
   refreshSignal?: number;
 }
 
-export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, onCountChange, onAttachmentsChange, refreshSignal }: Readonly<Props>): React.ReactElement {
+// SortableAttachmentItem — wraps AttachmentItem with @dnd-kit/sortable drag-and-drop.
+interface SortableAttachmentItemProps {
+  readonly attachment: Attachment;
+  readonly uploadProgress?: number | null | undefined;
+  readonly onDelete: (id: string) => void;
+  readonly onRename?: (id: string, alias: string) => void;
+  readonly onInsertComment?: (markdown: string) => void;
+  readonly disabled?: boolean;
+}
+
+function SortableAttachmentItem({
+  attachment,
+  uploadProgress,
+  onDelete,
+  onRename,
+  onInsertComment,
+  disabled = false,
+}: Readonly<SortableAttachmentItemProps>): React.ReactElement {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: attachment.id,
+    data: { type: 'attachment', attachmentId: attachment.id },
+    disabled,
+  });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : undefined,
+  };
+
+  // [why] setActivatorNodeRef and listeners need to be passed to the drag handle
+  // button inside AttachmentItem. We spread them as a combined object and the
+  // AttachmentItem applies them to the Bars3Icon button.
+  const dragHandleProps = {
+    ref: setActivatorNodeRef as React.Ref<HTMLButtonElement>,
+    ...listeners,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      <AttachmentItem
+        attachment={attachment}
+        uploadProgress={uploadProgress ?? null}
+        onDelete={onDelete}
+        {...(onRename ? { onRename } : {})}
+        {...(onInsertComment ? { onInsertComment } : {})}
+        dragHandleProps={dragHandleProps}
+      />
+    </div>
+  );
+}
+
+export function AttachmentPanel({
+  cardId,
+  canWrite = true,
+  insertMarkdownRef,
+  onCountChange,
+  onAttachmentsChange,
+  refreshSignal,
+}: Readonly<Props>): React.ReactElement {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Server-persisted attachments
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Mirror of `attachments` for callbacks that must read the latest order without
+  // re-subscribing on every render (drag-end reads it outside state updaters).
+  const attachmentsRef = useRef<Attachment[]>([]);
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+  // [why] Monotonic generation counter for reorder mutations, bumped synchronously
+  // at persistReorder call time. loadAttachments snapshots it when its fetch starts
+  // and refuses to apply the snapshot if a reorder was issued meanwhile — otherwise
+  // a failed reorder's unawaited rollback reload can land AFTER a newer queued
+  // reorder succeeded and overwrite the latest order with a pre-reorder server
+  // snapshot (UI stale even though the server saved the newest order).
+  const reorderEpochRef = useRef(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
@@ -73,21 +180,56 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
   }, []);
 
   // Load attachments from the server
-  const loadAttachments = useCallback(async () => {
-    try {
-      const res = await listAttachments({ cardId });
-      // Sort newest-first
-      const sorted = [...res.data].sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      );
-      setAttachments(sorted);
-      const fileCount = sorted.filter((a) => a.referenced_card_id == null).length;
-      const linkedCardCount = sorted.filter((a) => a.referenced_card_id != null).length;
-      onCountChange?.({ fileCount, linkedCardCount });
-    } catch {
-      setLoadError('Failed to load attachments');
-    }
-  }, [cardId, onCountChange]);
+  const loadAttachments = useCallback(
+    async (newAttachmentId?: string) => {
+      // [why] Snapshot the reorder generation when the fetch STARTS. If any
+      // persistReorder is issued while this request is in flight, our response is a
+      // pre-reorder snapshot for the list's ORDER — applying it would clobber the
+      // newer committed order (a failed reorder's rollback reload landing after a
+      // newer reorder succeeded left the UI stale even though the server saved the
+      // newest order). A reorder cannot change membership or counts, only order, so
+      // dropping the whole snapshot is safe; the newer reorder's own path owns the list.
+      const reorderEpochAtStart = reorderEpochRef.current;
+      try {
+        const res = await listAttachments({ cardId });
+        if (reorderEpochRef.current !== reorderEpochAtStart) {
+          // A reorder raced this fetch — discard the pre-reorder snapshot. For an
+          // add-triggered load, re-fetch so the new attachment still appears: the
+          // fresh GET snapshots the current epoch and applies unless ANOTHER reorder
+          // races it again (terminates: each retry requires a new real epoch bump).
+          if (newAttachmentId) void loadAttachments(newAttachmentId);
+          return;
+        }
+        // [why] Server returns attachments ordered by position ASC — no client-side
+        // sort needed. When a new attachment is added, we reorder it to the top.
+        let sorted = res.data;
+        if (newAttachmentId) {
+          const newIdx = sorted.findIndex((a) => a.id === newAttachmentId);
+          if (newIdx > 0) {
+            // Move the new attachment to the front
+            const newItem = sorted[newIdx];
+            if (newItem) {
+              sorted = [newItem, ...sorted.filter((_, i) => i !== newIdx)];
+              // Persist the new order — handled outside state updaters so React
+              // replaying the updater can't re-fire the network call.
+              void persistReorder(sorted.map((a) => a.id));
+            }
+          }
+        }
+        setAttachments(sorted);
+        const fileCount = sorted.filter(
+          (a) => a.referenced_card_id == null,
+        ).length;
+        const linkedCardCount = sorted.filter(
+          (a) => a.referenced_card_id != null,
+        ).length;
+        onCountChange?.({ fileCount, linkedCardCount });
+      } catch {
+        setLoadError('Failed to load attachments');
+      }
+    },
+    [cardId, onCountChange],
+  );
 
   useEffect(() => {
     void loadAttachments();
@@ -104,11 +246,25 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
     onAttachmentsChange?.(attachments);
   }, [attachments, onAttachmentsChange]);
 
+  // [why] Serialize reorder mutations + latest-wins failure handling live in
+  // useReorderPersistence (unit-tested in useReorderPersistence.test.ts): calls
+  // are serialized, only the latest failed reorder toasts + reloads, every call
+  // bumps reorderEpochRef so in-flight list fetches discard pre-reorder snapshots,
+  // and success reconciles state from the endpoint's returned list.
+  const persistReorder = useReorderPersistence({
+    cardId,
+    attachmentsRef: attachmentsRef as React.MutableRefObject<Attachment[]>,
+    setAttachments,
+    pushErrorToast,
+    loadAttachments,
+    reorderEpochRef: reorderEpochRef as React.MutableRefObject<number>,
+  });
+
   // Upload hook — refreshes the server list when a new upload completes
   const { uploads, upload, removeEntry } = useAttachmentUpload({
     cardId,
-    onSuccess: () => {
-      void loadAttachments();
+    onSuccess: (attachment) => {
+      void loadAttachments(attachment.id);
     },
     onError: (_clientId, message) => {
       pushErrorToast(message);
@@ -120,8 +276,12 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
     async (id: string) => {
       setAttachments((prev) => {
         const next = prev.filter((a) => a.id !== id);
-        const fileCount = next.filter((a) => a.referenced_card_id == null).length;
-        const linkedCardCount = next.filter((a) => a.referenced_card_id != null).length;
+        const fileCount = next.filter(
+          (a) => a.referenced_card_id == null,
+        ).length;
+        const linkedCardCount = next.filter(
+          (a) => a.referenced_card_id != null,
+        ).length;
         onCountChange?.({ fileCount, linkedCardCount });
         return next;
       });
@@ -152,8 +312,8 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
         }
       }
       try {
-        await createUrlAttachment({ cardId, url, name });
-        void loadAttachments();
+        const created = await createUrlAttachment({ cardId, url, name });
+        void loadAttachments(created.data.id);
       } catch {
         // silently ignore — user can still use the manual link form
       }
@@ -171,9 +331,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
       try {
         const res = await patchAttachment({ attachmentId: id, alias });
         // Sync with confirmed server value
-        setAttachments((prev) =>
-          prev.map((a) => (a.id === id ? res.data : a)),
-        );
+        setAttachments((prev) => prev.map((a) => (a.id === id ? res.data : a)));
       } catch {
         // Roll back optimistic update on failure
         void loadAttachments();
@@ -186,7 +344,9 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
   const handleUpdateUrl = useCallback(
     async (id: string, url: string) => {
       setAttachments((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, view_url: url, external_url: url } : a)),
+        prev.map((a) =>
+          a.id === id ? { ...a, view_url: url, external_url: url } : a,
+        ),
       );
       try {
         await patchAttachment({ attachmentId: id, url });
@@ -211,7 +371,9 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
     fileInputRef.current?.click();
   };
 
-  const handleFileInputChange = (ev: React.ChangeEvent<HTMLInputElement>): void => {
+  const handleFileInputChange = (
+    ev: React.ChangeEvent<HTMLInputElement>,
+  ): void => {
     const files = Array.from(ev.target.files ?? []);
     if (files.length > 0) upload(files);
     // Reset input so the same file can be picked again
@@ -230,7 +392,9 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
       const parsed = new URL(url);
       const configuredAppOrigin = (() => {
         try {
-          return config.appUrl ? new URL(config.appUrl).origin : globalThis.location.origin;
+          return config.appUrl
+            ? new URL(config.appUrl).origin
+            : globalThis.location.origin;
         } catch {
           return globalThis.location.origin;
         }
@@ -241,8 +405,8 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
       const parsedHost = new URL(parsed.origin).hostname;
       const appHost = new URL(configuredAppOrigin).hostname;
       const isLocalMatch =
-        (parsedHost === 'localhost' || parsedHost === '127.0.0.1')
-        && (appHost === 'localhost' || appHost === '127.0.0.1');
+        (parsedHost === 'localhost' || parsedHost === '127.0.0.1') &&
+        (appHost === 'localhost' || appHost === '127.0.0.1');
       if (parsed.origin !== configuredAppOrigin && !isLocalMatch) return null;
 
       const pathname = parsed.pathname.replace(/\/+$/, '');
@@ -252,7 +416,8 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
         return { cardId: shortCardMatch[1] as string };
       }
 
-      const legacyCardMatch = /^\/boards\/[^/]+\/cards\/([^/]+)(?:\/[^/]+)?$/.exec(pathname);
+      const legacyCardMatch =
+        /^\/boards\/[^/]+\/cards\/([^/]+)(?:\/[^/]+)?$/.exec(pathname);
       if (legacyCardMatch) {
         return { cardId: legacyCardMatch[1] as string };
       }
@@ -279,8 +444,7 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
     if (!internal) return;
 
     setDetectingCard(true);
-    detectTimerRef.current = setTimeout(() => {
-      void (async () => {
+    detectTimerRef.current = setTimeout(async () => {
       try {
         const res = await fetchCardPreview({ cardId: internal.cardId });
         const card: CardPreview = {
@@ -300,7 +464,6 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
       } finally {
         setDetectingCard(false);
       }
-      })();
     }, 400);
   };
 
@@ -312,13 +475,14 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
     try {
       // [why] For internal card links the name is auto-filled from the card title;
       // fall back to the URL string only for external links with no display name.
-      const nameToSend = linkName.trim() || detectedCard?.title || linkUrl.trim();
-      await createUrlAttachment({
+      const nameToSend =
+        linkName.trim() || detectedCard?.title || linkUrl.trim();
+      const created = await createUrlAttachment({
         cardId,
         url: linkUrl.trim(),
         name: nameToSend,
       });
-      void loadAttachments();
+      void loadAttachments(created.data.id);
       setLinkUrl('');
       setLinkName('');
       setDetectedCard(null);
@@ -346,9 +510,40 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
 
   // Find the progress for a given server attachment id (by matching attachmentId on upload entries)
   const progressForAttachment = (id: string): number | null => {
-    const entry = uploads.find((u) => u.attachmentId === id && u.phase === 'uploading');
+    const entry = uploads.find(
+      (u) => u.attachmentId === id && u.phase === 'uploading',
+    );
     return entry ? entry.progress : null;
   };
+
+  // DnD sensors for attachment reorder
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  // Handle drag-end: reorder attachments optimistically, then persist
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      // [why] No network calls inside the functional updater: React may replay an
+      // updater (Strict Mode, interrupted renders), which would re-fire the request.
+      // Read current order, compute the move, update state, then persist outside.
+      const current = attachmentsRef.current;
+      const oldIndex = current.findIndex((a) => a.id === active.id);
+      const newIndex = current.findIndex((a) => a.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = arrayMove(current, oldIndex, newIndex);
+      setAttachments(reordered);
+      void persistReorder(reordered.map((a) => a.id));
+    },
+    [persistReorder],
+  );
 
   return (
     <>
@@ -361,248 +556,305 @@ export function AttachmentPanel({ cardId, canWrite = true, insertMarkdownRef, on
           "[data-attachment-dropzone-root='true']",
         ]}
       >
-      {/* Invisible paste listener — only active when the user can write */}
-      <PasteListener enabled={canWrite} onFiles={upload} onLink={(url) => void handlePasteLink(url)} />
-
-      {/* Hidden file input — accept covers all server-allowed types; server re-validates */}
-      {canWrite && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept="image/*,video/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,text/markdown,application/zip,application/x-tar,application/gzip,audio/*"
-          className="hidden"
-          onChange={handleFileInputChange}
-          data-testid="attachment-file-input"
+        {/* Invisible paste listener — only active when the user can write */}
+        <PasteListener
+          enabled={canWrite}
+          onFiles={upload}
+          onLink={handlePasteLink}
         />
-      )}
 
-      {/* Section header */}
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="cd-section-heading text-sm font-semibold text-subtle flex items-center gap-1.5">
-          <PaperClipIcon className="h-4 w-4 text-muted" aria-hidden="true" />
-          {translations['attachments.panel.title']}
-        </h3>
+        {/* Hidden file input — accept covers all server-allowed types; server re-validates */}
         {canWrite && (
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            onClick={handlePickerClick}
-            data-testid="attach-file-button"
-          >
-            {translations['attachments.panel.attachFile']}
-          </Button>
-        )}
-      </div>
-
-      {/* In-flight uploads (before server record exists) */}
-      {uploads
-        .filter((u) => u.phase !== 'done')
-        .map((entry) => {
-          // Render a temporary row using the file details
-          const tempAttachment: Attachment = {
-            id: entry.clientId,
-            card_id: cardId,
-            name: entry.file.name,
-            alias: null,
-            type: 'FILE',
-            status: 'PENDING',
-            key: null,
-            thumbnail_key: null,
-            content_type: entry.file.type || null,
-            size_bytes: entry.file.size,
-            width: null,
-            height: null,
-            view_url: null,
-            thumbnail_url: null,
-            external_url: null,
-            referenced_card_id: null,
-            referenced_card: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          };
-          return (
-            <AttachmentItem
-              key={entry.clientId}
-              attachment={tempAttachment}
-              uploadProgress={entry.phase === 'uploading' ? entry.progress : null}
-              onDelete={() => { removeEntry(entry.clientId); }}
-            />
-          );
-        })}
-
-      {/* Server-persisted attachment list */}
-      {loadError && (
-        <p className="text-xs text-danger mt-1">{loadError}</p>
-      )}
-
-      {attachments.length === 0 && uploads.filter((u) => u.phase !== 'done').length === 0 && (
-        <p className="text-xs text-muted italic mt-1">{translations['attachments.panel.empty']}</p>
-      )}
-
-      {/* FILE attachments */}
-      <div className="space-y-0" data-testid="attachment-list">
-        {fileAttachments.map((attachment) => (
-          <AttachmentItem
-            key={attachment.id}
-            attachment={attachment}
-            uploadProgress={progressForAttachment(attachment.id)}
-            onDelete={(id) => void handleDelete(id)}
-            onRename={(id, alias) => void handleRename(id, alias)}
-            {...(insertMarkdownRef ? { onInsertComment: handleInsertComment } : {})}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,video/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,text/markdown,application/zip,application/x-tar,application/gzip,audio/*"
+            className="hidden"
+            onChange={handleFileInputChange}
+            data-testid="attachment-file-input"
           />
-        ))}
-      </div>
+        )}
 
-      {/* Cards section — internal card-link attachments */}
-      {cardLinkAttachments.length > 0 && (
-        <div className="mt-4" data-testid="card-attachments-section">
-          <p className="text-xs font-semibold text-muted mb-2">
-            {translations['attachments.panel.cardsSection']}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {cardLinkAttachments.map((attachment) =>
-              attachment.referenced_card ? (
-                <CardAttachmentPreview
-                  key={attachment.id}
-                  attachmentId={attachment.id}
-                  card={attachment.referenced_card}
-                  cardUrl={attachment.view_url ?? attachment.external_url ?? ''}
-                  canWrite={canWrite}
-                  onDelete={(id) => void handleDelete(id)}
-                />
-              ) : null,
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Links section — external URL attachments */}
-      {externalLinkAttachments.length > 0 && (
-        <div className="mt-4" data-testid="link-attachments-section">
-          <p className="text-xs font-semibold text-muted mb-2">
-            {translations['attachments.panel.linksSection']}
-          </p>
-          <div className="space-y-2">
-            {externalLinkAttachments.map((attachment) => (
-              <ExternalLinkPreview
-                key={attachment.id}
-                attachment={attachment}
-                canWrite={canWrite}
-                onDelete={(id) => void handleDelete(id)}
-                onRename={(id: string, alias: string) => { void handleRename(id, alias); }}
-                onUpdateUrl={(id: string, url: string) => { void handleUpdateUrl(id, url); }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Video attachments do not show previews — they are listed in the attachment list above. */}
-
-      {/* External URL / card link form — hidden for VIEWER guests */}
-      {canWrite && (
-        <div className="mt-3 pb-4">
-          {showLinkForm ? (
-            <form
-              onSubmit={(e) => void handleLinkSubmit(e)}
-              className="space-y-2"
-              data-testid="link-form"
-            >
-              <input
-                type="url"
-                placeholder={translations['attachments.panel.link.urlPlaceholder']}
-                value={linkUrl}
-                onChange={(e) => { handleLinkUrlChange(e.target.value); }}
-                required
-                className="w-full text-sm bg-bg-overlay text-base placeholder:text-subtle border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary"
-                data-testid="link-url-input"
-                autoFocus
-              />
-
-              {/* Internal card preview — shown when URL resolves to a card in this workspace */}
-              {detectingCard && (
-                <p className="text-xs text-muted italic">{translations['attachments.panel.link.loadingCard']}</p>
-              )}
-              {detectError && !detectingCard && (
-                <p className="text-xs text-amber-400">{translations['attachments.panel.link.cardNotFound']}</p>
-              )}
-              {detectedCard && !detectingCard && (
-                <div className="rounded-lg border border-border bg-bg-surface/60 px-3 py-2" data-testid="link-card-preview">
-                  <p className="text-[11px] text-muted truncate mb-0.5">
-                    {detectedCard.board_name ?? ''}
-                    {detectedCard.list_name ? <span className="ml-1 text-muted">· {detectedCard.list_name}</span> : null}
-                  </p>
-                  {detectedCard.labels.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-1">
-                      {detectedCard.labels.map((label) => (
-                        <span
-                          key={label.id}
-                          className="cd-label inline-block px-2 py-0.5 rounded text-[10px] font-semibold truncate max-w-[120px]"
-                          style={labelStyle(label.color)}
-                          title={label.name}
-                        >
-                          {label.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-sm font-medium text-base truncate">{detectedCard.title}</p>
-                </div>
-              )}
-
-              {/* Name field — hidden when a card was detected (card title is used automatically) */}
-              {!detectedCard && (
-                <input
-                  type="text"
-                  placeholder={translations['attachments.panel.link.namePlaceholder']}
-                  value={linkName}
-                  onChange={(e) => { setLinkName(e.target.value); }}
-                  className="w-full text-sm bg-bg-overlay text-base placeholder:text-subtle border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary"
-                  data-testid="link-name-input"
-                />
-              )}
-
-              <div className="flex gap-2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  type="submit"
-                  disabled={linkSubmitting || detectingCard}
-                  data-testid="link-submit-button"
-                >
-                  {translations['attachments.panel.link.attach']}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() => {
-                    setShowLinkForm(false);
-                    setLinkUrl('');
-                    setLinkName('');
-                    setDetectedCard(null);
-                    setDetectError(false);
-                  }}
-                >
-                  {translations['attachments.panel.link.cancel']}
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <button
+        {/* Section header */}
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="cd-section-heading text-sm font-semibold text-subtle flex items-center gap-1.5">
+            <PaperClipIcon className="h-4 w-4 text-muted" aria-hidden="true" />
+            {translations['attachments.panel.title']}
+          </h3>
+          {canWrite && (
+            <Button
+              variant="secondary"
+              size="sm"
               type="button"
-              onClick={() => { setShowLinkForm(true); }}
-              className="flex items-center gap-1 text-xs text-muted hover:text-subtle transition-colors"
-              data-testid="attach-link-button"
+              onClick={handlePickerClick}
+              data-testid="attach-file-button"
             >
-              <LinkIcon className="h-3.5 w-3.5" aria-hidden="true" />
-              {translations['attachments.panel.link.attachLink']}
-            </button>
+              {translations['attachments.panel.attachFile']}
+            </Button>
           )}
         </div>
-      )}
+
+        {/* In-flight uploads (before server record exists) */}
+        {uploads
+          .filter((u) => u.phase !== 'done')
+          .map((entry) => {
+            // Render a temporary row using the file details
+            const tempAttachment: Attachment = {
+              id: entry.clientId,
+              card_id: cardId,
+              name: entry.file.name,
+              alias: null,
+              type: 'FILE',
+              status: 'PENDING',
+              key: null,
+              thumbnail_key: null,
+              content_type: entry.file.type || null,
+              size_bytes: entry.file.size,
+              width: null,
+              height: null,
+              view_url: null,
+              thumbnail_url: null,
+              external_url: null,
+              referenced_card_id: null,
+              referenced_card: null,
+              position: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+            return (
+              <AttachmentItem
+                key={entry.clientId}
+                attachment={tempAttachment}
+                uploadProgress={
+                  entry.phase === 'uploading' ? entry.progress : null
+                }
+                onDelete={() => {
+                  removeEntry(entry.clientId);
+                }}
+              />
+            );
+          })}
+
+        {/* Server-persisted attachment list */}
+        {loadError && <p className="text-xs text-danger mt-1">{loadError}</p>}
+
+        {attachments.length === 0 &&
+          uploads.filter((u) => u.phase !== 'done').length === 0 && (
+            <p className="text-xs text-muted italic mt-1">
+              {translations['attachments.panel.empty']}
+            </p>
+          )}
+
+        {/* FILE attachments — sortable via drag-and-drop */}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={fileAttachments.map((a) => a.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div
+              className="space-y-0"
+              data-testid="attachment-list"
+              data-upload-drop-exclude="true"
+            >
+              {fileAttachments.map((attachment) => (
+                <SortableAttachmentItem
+                  key={attachment.id}
+                  attachment={attachment}
+                  uploadProgress={progressForAttachment(attachment.id)}
+                  onDelete={handleDelete}
+                  onRename={handleRename}
+                  {...(insertMarkdownRef
+                    ? { onInsertComment: handleInsertComment }
+                    : {})}
+                  disabled={!canWrite}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+
+        {/* Cards section — internal card-link attachments */}
+        {cardLinkAttachments.length > 0 && (
+          <div className="mt-4" data-testid="card-attachments-section">
+            <p className="text-xs font-semibold text-muted mb-2">
+              {translations['attachments.panel.cardsSection']}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {cardLinkAttachments.map((attachment) =>
+                attachment.referenced_card ? (
+                  <CardAttachmentPreview
+                    key={attachment.id}
+                    attachmentId={attachment.id}
+                    card={attachment.referenced_card}
+                    cardUrl={
+                      attachment.view_url ?? attachment.external_url ?? ''
+                    }
+                    canWrite={canWrite}
+                    onDelete={handleDelete}
+                  />
+                ) : null,
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Links section — external URL attachments */}
+        {externalLinkAttachments.length > 0 && (
+          <div className="mt-4" data-testid="link-attachments-section">
+            <p className="text-xs font-semibold text-muted mb-2">
+              {translations['attachments.panel.linksSection']}
+            </p>
+            <div className="space-y-2">
+              {externalLinkAttachments.map((attachment) => (
+                <ExternalLinkPreview
+                  key={attachment.id}
+                  attachment={attachment}
+                  canWrite={canWrite}
+                  onDelete={handleDelete}
+                  onRename={(id: string, alias: string) => {
+                    void handleRename(id, alias);
+                  }}
+                  onUpdateUrl={(id: string, url: string) => {
+                    void handleUpdateUrl(id, url);
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Video attachments do not show previews — they are listed in the attachment list above. */}
+
+        {/* External URL / card link form — hidden for VIEWER guests */}
+        {canWrite && (
+          <div className="mt-3 pb-4">
+            {showLinkForm ? (
+              <form
+                onSubmit={handleLinkSubmit}
+                className="space-y-2"
+                data-testid="link-form"
+              >
+                <input
+                  type="url"
+                  placeholder={
+                    translations['attachments.panel.link.urlPlaceholder']
+                  }
+                  value={linkUrl}
+                  onChange={(e) => {
+                    handleLinkUrlChange(e.target.value);
+                  }}
+                  required
+                  className="w-full text-sm bg-bg-overlay text-base placeholder:text-subtle border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary"
+                  data-testid="link-url-input"
+                  autoFocus
+                />
+
+                {/* Internal card preview — shown when URL resolves to a card in this workspace */}
+                {detectingCard && (
+                  <p className="text-xs text-muted italic">
+                    {translations['attachments.panel.link.loadingCard']}
+                  </p>
+                )}
+                {detectError && !detectingCard && (
+                  <p className="text-xs text-amber-400">
+                    {translations['attachments.panel.link.cardNotFound']}
+                  </p>
+                )}
+                {detectedCard && !detectingCard && (
+                  <div
+                    className="rounded-lg border border-border bg-bg-surface/60 px-3 py-2"
+                    data-testid="link-card-preview"
+                  >
+                    <p className="text-[11px] text-muted truncate mb-0.5">
+                      {detectedCard.board_name ?? ''}
+                      {detectedCard.list_name ? (
+                        <span className="ml-1 text-muted">
+                          · {detectedCard.list_name}
+                        </span>
+                      ) : null}
+                    </p>
+                    {detectedCard.labels.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-1">
+                        {detectedCard.labels.map((label) => (
+                          <span
+                            key={label.id}
+                            className="cd-label inline-block px-2 py-0.5 rounded text-[10px] font-semibold truncate max-w-[120px]"
+                            style={labelStyle(label.color)}
+                            title={label.name}
+                          >
+                            {label.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-sm font-medium text-base truncate">
+                      {detectedCard.title}
+                    </p>
+                  </div>
+                )}
+
+                {/* Name field — hidden when a card was detected (card title is used automatically) */}
+                {!detectedCard && (
+                  <input
+                    type="text"
+                    placeholder={
+                      translations['attachments.panel.link.namePlaceholder']
+                    }
+                    value={linkName}
+                    onChange={(e) => {
+                      setLinkName(e.target.value);
+                    }}
+                    className="w-full text-sm bg-bg-overlay text-base placeholder:text-subtle border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary"
+                    data-testid="link-name-input"
+                  />
+                )}
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    type="submit"
+                    disabled={linkSubmitting || detectingCard}
+                    data-testid="link-submit-button"
+                  >
+                    {translations['attachments.panel.link.attach']}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => {
+                      setShowLinkForm(false);
+                      setLinkUrl('');
+                      setLinkName('');
+                      setDetectedCard(null);
+                      setDetectError(false);
+                    }}
+                  >
+                    {translations['attachments.panel.link.cancel']}
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLinkForm(true);
+                }}
+                className="flex items-center gap-1 text-xs text-muted hover:text-subtle transition-colors"
+                data-testid="attach-link-button"
+              >
+                <LinkIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                {translations['attachments.panel.link.attachLink']}
+              </button>
+            )}
+          </div>
+        )}
       </AttachmentDropZone>
 
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />

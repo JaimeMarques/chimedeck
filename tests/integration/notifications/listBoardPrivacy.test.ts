@@ -7,16 +7,18 @@ import knex from 'knex';
 Bun.env.DATABASE_URL ??= 'postgres://localhost/chimedeck_test';
 const { buildNotificationListQuery } = await import('../../../server/extensions/notifications/api/list');
 
-function rowsForCard({ notificationBoardId, cardBoardId, sourceType = 'card_description' }: {
+function rowsForCard({ notificationBoardId, cardBoardId, sourceType = 'card_description', notificationType = 'mention', storedListTitle = null }: {
   notificationBoardId: string | null;
   cardBoardId: string;
   sourceType?: 'card_description' | 'comment';
+  notificationType?: 'mention' | 'card_moved';
+  storedListTitle?: string | null;
 }) {
   const sqlite = new Database(':memory:');
   const builder = knex({ client: 'pg' });
   try {
     sqlite.exec(`
-      CREATE TABLE notifications (id TEXT, type TEXT, source_type TEXT, source_id TEXT, card_id TEXT, emoji TEXT, board_id TEXT, user_id TEXT, actor_id TEXT, read INTEGER, created_at TEXT);
+      CREATE TABLE notifications (id TEXT, type TEXT, source_type TEXT, source_id TEXT, card_id TEXT, emoji TEXT, board_id TEXT, user_id TEXT, actor_id TEXT, read INTEGER, created_at TEXT, list_title TEXT);
       CREATE TABLE users (id TEXT, nickname TEXT, name TEXT, email TEXT, avatar_url TEXT);
       CREATE TABLE boards (id TEXT, title TEXT);
       CREATE TABLE lists (id TEXT, board_id TEXT, title TEXT);
@@ -29,8 +31,8 @@ function rowsForCard({ notificationBoardId, cardBoardId, sourceType = 'card_desc
       INSERT INTO cards VALUES ('card', '${cardBoardId}-list', 'Private updated title', 'Private updated description');
       INSERT INTO comments VALUES ('comment', 'Private edited comment', NULL);
     `);
-    sqlite.query(`INSERT INTO notifications VALUES (?, 'mention', ?, ?, 'card', NULL, ?, 'recipient', 'actor', 0, '2026-01-01')`)
-      .run('notification', sourceType, sourceType === 'comment' ? 'comment' : 'card', notificationBoardId);
+    sqlite.query(`INSERT INTO notifications VALUES (?, ?, ?, ?, 'card', NULL, ?, 'recipient', 'actor', 0, '2026-01-01', ?)`)
+      .run('notification', notificationType, sourceType, sourceType === 'comment' ? 'comment' : 'card', notificationBoardId, storedListTitle);
     const { sql, bindings } = buildNotificationListQuery(builder, 'recipient', 20).toSQL();
     return sqlite.query(sql).all(...bindings) as Array<Record<string, unknown>>;
   } finally {
@@ -40,6 +42,14 @@ function rowsForCard({ notificationBoardId, cardBoardId, sourceType = 'card_desc
 }
 
 describe('notification list board privacy', () => {
+  it('keeps the creation-time move title instead of the current list title', () => {
+    const [row] = rowsForCard({ notificationBoardId: 'destination', cardBoardId: 'destination', notificationType: 'card_moved', storedListTitle: 'Original destination' });
+    expect(row.list_title).toBe('Original destination');
+  });
+  it('does not invent historical move titles from the current list', () => {
+    const [row] = rowsForCard({ notificationBoardId: 'destination', cardBoardId: 'destination', notificationType: 'card_moved' });
+    expect(row.list_title).toBeNull();
+  });
   it('does not show current card content or private destination list after a cross-board move', () => {
     const [row] = rowsForCard({ notificationBoardId: 'source', cardBoardId: 'destination' });
     expect(row.id).toBe('notification');

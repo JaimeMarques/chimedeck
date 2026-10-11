@@ -15,6 +15,8 @@ const boards: Row[] = [];
 const inserted: Row[] = [];
 const updated: Row[] = [];
 const dispatched: Row[] = [];
+let limitBlocked = false;
+const quotaCalls: Array<{ key: string; usage: number }> = [];
 
 function matches(row: Row, where: Row): boolean {
   return Object.entries(where).every(([key, value]) => row[key.replace(/^bm\./, '')] === value);
@@ -22,7 +24,7 @@ function matches(row: Row, where: Row): boolean {
 
 // Minimal Knex-style chain covering only the calls this handler makes.
 function dbStub(table: string) {
-  const state: { where: Row; notRole?: string } = { where: {} };
+  const state: { where: Row; notRole?: string; count?: boolean } = { where: {} };
   const rows = () => {
     const source = table.startsWith('board_members')
       ? boardMembers
@@ -48,7 +50,11 @@ function dbStub(table: string) {
     join: () => builder,
     select: () => builder,
     then: (resolve: (value: Row[]) => unknown) => Promise.resolve(rows()).then(resolve),
-    first: () => Promise.resolve(rows()[0]),
+    count: () => {
+      state.count = true;
+      return builder;
+    },
+    first: () => Promise.resolve(state.count ? { count: rows().length } : rows()[0]),
     insert(row: Row) {
       // Model the real UNIQUE (board_id, user_id) constraint so the handler's
       // onConflict(...).ignore() path is exercised rather than stubbed away:
@@ -103,6 +109,16 @@ await mock.module('../../../../../../mods/events/dispatch', () => ({
   },
 }));
 
+await mock.module('../../../../mods/resourceLimitGuard', () => ({
+  prepareBoardLimitGuard: () =>
+    Promise.resolve((key: string, usage: number) => {
+      quotaCalls.push({ key, usage });
+      return limitBlocked
+        ? Response.json({ error: { code: 'limit-reached' } }, { status: 402 })
+        : null;
+    }),
+}));
+
 const { handleAddBoardMember } = await import('../../create');
 
 function request(body: unknown): Request {
@@ -126,6 +142,8 @@ function reset(): void {
   inserted.length = 0;
   updated.length = 0;
   dispatched.length = 0;
+  quotaCalls.length = 0;
+  limitBlocked = false;
   memberships.push(
     { user_id: 'user-1', workspace_id: 'ws-1', role: 'ADMIN' },
     { user_id: 'user-2', workspace_id: 'ws-1', role: 'MEMBER' }
@@ -191,6 +209,15 @@ async function run(): Promise<void> {
   assert.equal(res.status, 422);
   assert.equal(((await res.json()) as { name?: string }).name, 'user-not-workspace-member');
   assert.equal(inserted.length, 0);
+
+  // 7. Upstream quota rejects a valid add without weakening role checks or inserting.
+  reset();
+  limitBlocked = true;
+  res = await handleAddBoardMember(request({ userId: 'user-2' }), 'board-1');
+  assert.equal(res.status, 402);
+  assert.equal(inserted.length, 0);
+  assert.equal(dispatched.length, 0);
+  assert.deepEqual(quotaCalls, [{ key: 'maxInvitedMembersPerBoard', usage: 0 }]);
 
   // Email resolution requires real SQL joins/distinct and workspace locking;
   // its coverage lives in the CI-gated tests/db/addBoardMemberByEmail.ts.

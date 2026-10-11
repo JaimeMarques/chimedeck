@@ -1,7 +1,13 @@
 import axios, { isAxiosError, type InternalAxiosRequestConfig } from 'axios';
-import { shouldAttachAccessToken, shouldAttemptAuthRecovery } from './requestPolicy';
+import {
+  shouldAttachAccessToken,
+  shouldAttemptAuthRecovery,
+} from './requestPolicy';
 import type { AuthResponse } from '~/extensions/Auth/api/auth';
-import { isRetryableRequestError, RetryableRecoveryError } from './recoveryErrors';
+import {
+  isRetryableRequestError,
+  RetryableRecoveryError,
+} from './recoveryErrors';
 
 // Token getter is set lazily from main.tsx after the store is created.
 // This avoids a circular dependency between the API client and the Redux store.
@@ -17,7 +23,12 @@ let authRecoveryCallbacks: {
   canResume: () => boolean;
   onResume: () => void;
 } | null = null;
-let logoutRequest: { token: string | null; generation: number; promise: Promise<unknown> } | null = null;
+let logoutRequest: {
+  token: string | null;
+  generation: number;
+  promise: Promise<unknown>;
+} | null = null;
+let lastSubscriptionRedirectAt = 0;
 
 export const setTokenGetter = (fn: () => string | null) => {
   tokenGetter = fn;
@@ -28,13 +39,17 @@ export const setClearAuthCallback = (fn: () => void) => {
   clearAuthCallback = fn;
 };
 
-export const setCredentialsCallback = (fn: (credentials: AuthResponse) => void) => {
+export const setCredentialsCallback = (
+  fn: (credentials: AuthResponse) => void,
+) => {
   credentialsCallback = fn;
 };
 
 export class AuthRecoveryCancelledError extends Error {}
 
-export function setAuthRecoveryCallbacks(callbacks: NonNullable<typeof authRecoveryCallbacks>) {
+export function setAuthRecoveryCallbacks(
+  callbacks: NonNullable<typeof authRecoveryCallbacks>,
+) {
   authRecoveryCallbacks = callbacks;
 }
 
@@ -48,8 +63,14 @@ export function cancelAuthRecovery() {
   authRecoveryCallbacks?.onSuspend();
   // [why] A failed logout can restore its unchanged session, never its old refresh.
   return () => {
-    if (previouslyBlocked || !previousToken || generation !== authGeneration
-      || tokenGetter?.() !== previousToken || authRecoveryCallbacks?.canResume() === false) return;
+    if (
+      previouslyBlocked ||
+      !previousToken ||
+      generation !== authGeneration ||
+      tokenGetter?.() !== previousToken ||
+      authRecoveryCallbacks?.canResume() === false
+    )
+      return;
     authRecoveryBlocked = false;
     authRecoveryCallbacks?.onResume();
   };
@@ -65,17 +86,29 @@ export function allowAuthRecovery() {
 /** A same-session double click shares one cancellation and one DELETE. */
 export function logoutCurrentSession(): Promise<unknown> {
   const token = tokenGetter?.() ?? null;
-  if (logoutRequest?.token === token && logoutRequest.generation === authGeneration) return logoutRequest.promise;
+  if (
+    logoutRequest?.token === token &&
+    logoutRequest.generation === authGeneration
+  )
+    return logoutRequest.promise;
   const restoreAfterFailure = cancelAuthRecovery();
   const generation = authGeneration;
-  const promise = apiClient.delete('/auth/session').catch((error: unknown) => {
-    // [why] The logout thunk retains auth only for an explicit non-401 response.
-    // Network/no-response failures intentionally complete local logout.
-    if (isAxiosError(error) && error.response && error.response.status !== 401) restoreAfterFailure();
-    throw error;
-  }).finally(() => {
-    if (logoutRequest?.promise === promise) logoutRequest = null;
-  });
+  const promise = apiClient
+    .delete('/auth/session')
+    .catch((error: unknown) => {
+      // [why] The logout thunk retains auth only for an explicit non-401 response.
+      // Network/no-response failures intentionally complete local logout.
+      if (
+        isAxiosError(error) &&
+        error.response &&
+        error.response.status !== 401
+      )
+        restoreAfterFailure();
+      throw error;
+    })
+    .finally(() => {
+      if (logoutRequest?.promise === promise) logoutRequest = null;
+    });
   logoutRequest = { token, generation, promise };
   return promise;
 }
@@ -85,10 +118,18 @@ export function renewAccessToken(): Promise<string> {
   if (refreshRequestPromise) return refreshRequestPromise;
   const generation = authGeneration;
   const previousToken = tokenGetter?.() ?? null;
-  if (authRecoveryBlocked) return Promise.reject(new AuthRecoveryCancelledError('Session already ended'));
-  const request = apiClient.post<unknown, { data: unknown }>('/auth/refresh')
+  if (authRecoveryBlocked)
+    return Promise.reject(
+      new AuthRecoveryCancelledError('Session already ended'),
+    );
+  const request = apiClient
+    .post<unknown, { data: unknown }>('/auth/refresh')
     .then((response) => {
-      if (generation !== authGeneration || authRecoveryBlocked || (tokenGetter?.() ?? null) !== previousToken) {
+      if (
+        generation !== authGeneration ||
+        authRecoveryBlocked ||
+        (tokenGetter?.() ?? null) !== previousToken
+      ) {
         throw new AuthRecoveryCancelledError('Session changed during renewal');
       }
       const credentials = response.data;
@@ -98,13 +139,22 @@ export function renewAccessToken(): Promise<string> {
       credentialsCallback?.(credentials);
       didHandleSessionExpiry = false;
       return credentials.accessToken;
-    }).catch((error: unknown) => {
-      if (generation !== authGeneration || authRecoveryBlocked || (tokenGetter?.() ?? null) !== previousToken) {
+    })
+    .catch((error: unknown) => {
+      if (
+        generation !== authGeneration ||
+        authRecoveryBlocked ||
+        (tokenGetter?.() ?? null) !== previousToken
+      ) {
         throw new AuthRecoveryCancelledError('Session changed during renewal');
       }
-      if (isRetryableRequestError(error)) throw new RetryableRecoveryError('Session renewal temporarily unavailable');
+      if (isRetryableRequestError(error))
+        throw new RetryableRecoveryError(
+          'Session renewal temporarily unavailable',
+        );
       throw error;
-    }).finally(() => {
+    })
+    .finally(() => {
       if (refreshRequestPromise === request) refreshRequestPromise = null;
     });
   refreshRequestPromise = request;
@@ -125,7 +175,11 @@ export const apiClient = axios.create({
 // make them behave like protected routes.
 apiClient.interceptors.request.use((config) => {
   const token = tokenGetter?.() ?? null;
-  if (token && !config.headers.Authorization && shouldAttachAccessToken({ url: config.url, method: config.method })) {
+  if (
+    token &&
+    !config.headers.Authorization &&
+    shouldAttachAccessToken({ url: config.url, method: config.method })
+  ) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -143,14 +197,39 @@ apiClient.interceptors.response.use(
       throw toError(error);
     }
 
-    const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    const subscriptionError = extractSubscriptionError(error.response?.data);
+    if (subscriptionError) {
+      const now = Date.now();
+      if (now - lastSubscriptionRedirectAt < 2000) {
+        throw toError(error);
+      }
+
+      const currentPath = globalThis.location.pathname;
+      const billingTarget = subscriptionError.upgradeUrl;
+      const alreadyOnBilling = billingTarget
+        ? currentPath.startsWith(billingTarget)
+        : false;
+
+      if (!alreadyOnBilling) {
+        lastSubscriptionRedirectAt = now;
+        globalThis.alert(subscriptionError.message);
+        globalThis.location.assign(subscriptionError.upgradeUrl);
+      }
+      throw toError(error);
+    }
+
+    const originalRequest = error.config as
+      (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     const shouldRecover = isExpiredAccessTokenError(error);
 
     if (
-      !shouldRecover
-      || !originalRequest
-      || originalRequest._retry
-      || !shouldAttemptAuthRecovery({ url: originalRequest.url, method: originalRequest.method })
+      !shouldRecover ||
+      !originalRequest ||
+      originalRequest._retry ||
+      !shouldAttemptAuthRecovery({
+        url: originalRequest.url,
+        method: originalRequest.method,
+      })
     ) {
       throw toError(error);
     }
@@ -160,10 +239,17 @@ apiClient.interceptors.response.use(
     let token: string;
     try {
       const currentToken = tokenGetter?.();
-      token = currentToken && originalRequest.headers.Authorization !== `Bearer ${currentToken}`
-        ? currentToken : await renewAccessToken();
+      token =
+        currentToken &&
+        originalRequest.headers.Authorization !== `Bearer ${currentToken}`
+          ? currentToken
+          : await renewAccessToken();
     } catch (renewalError) {
-      if (renewalError instanceof AuthRecoveryCancelledError || renewalError instanceof RetryableRecoveryError) throw renewalError;
+      if (
+        renewalError instanceof AuthRecoveryCancelledError ||
+        renewalError instanceof RetryableRecoveryError
+      )
+        throw renewalError;
       if (!didHandleSessionExpiry) {
         didHandleSessionExpiry = true;
         cancelAuthRecovery();
@@ -181,14 +267,27 @@ apiClient.interceptors.response.use(
 function isAuthResponse(value: unknown): value is AuthResponse {
   if (!value || typeof value !== 'object') return false;
   const response = value as { accessToken?: unknown; user?: unknown };
-  if (typeof response.accessToken !== 'string' || !response.accessToken
-    || !response.user || typeof response.user !== 'object') return false;
-  const user = response.user as { id?: unknown; name?: unknown; email?: unknown };
-  return typeof user.id === 'string' && typeof user.name === 'string' && typeof user.email === 'string';
+  if (
+    typeof response.accessToken !== 'string' ||
+    !response.accessToken ||
+    !response.user ||
+    typeof response.user !== 'object'
+  )
+    return false;
+  const user = response.user as {
+    id?: unknown;
+    name?: unknown;
+    email?: unknown;
+  };
+  return (
+    typeof user.id === 'string' &&
+    typeof user.name === 'string' &&
+    typeof user.email === 'string'
+  );
 }
 
 function isAxiosErrorLike(
-  err: unknown
+  err: unknown,
 ): err is { response?: { status?: number; data?: unknown }; config?: unknown } {
   return typeof err === 'object' && err !== null && 'config' in err;
 }
@@ -210,6 +309,34 @@ function getApiErrorMessage(data: unknown): string | null {
   if (!maybeError || typeof maybeError !== 'object') return null;
   const message = (maybeError as { message?: unknown }).message;
   return typeof message === 'string' ? message : null;
+}
+
+function extractSubscriptionError(
+  data: unknown,
+): { message: string; upgradeUrl: string } | null {
+  if (!data || typeof data !== 'object') return null;
+  const maybeError = (data as { error?: unknown }).error;
+  if (!maybeError || typeof maybeError !== 'object') return null;
+
+  const code = (maybeError as { code?: unknown }).code;
+  if (code !== 'subscription-payment-required') return null;
+
+  const message = (maybeError as { message?: unknown }).message;
+  const maybeData = (maybeError as { data?: unknown }).data;
+  const upgradeUrl =
+    typeof maybeData === 'object' && maybeData !== null
+      ? (maybeData as { upgradeUrl?: unknown }).upgradeUrl
+      : null;
+
+  if (
+    typeof message !== 'string' ||
+    typeof upgradeUrl !== 'string' ||
+    upgradeUrl.length === 0
+  ) {
+    return null;
+  }
+
+  return { message, upgradeUrl };
 }
 
 export default apiClient;

@@ -17,7 +17,11 @@ import type {
 
 // ---------- List ----------
 
-export async function listAttachments({ cardId }: { cardId: string }): Promise<{ data: Attachment[] }> {
+export async function listAttachments({
+  cardId,
+}: {
+  cardId: string;
+}): Promise<{ data: Attachment[] }> {
   return apiClient.get(`/cards/${cardId}/attachments`);
 }
 
@@ -29,8 +33,15 @@ export async function requestUploadUrl({
   filename,
   mimeType,
   sizeBytes,
-}: { cardId: string } & UploadUrlRequest): Promise<{ data: UploadUrlResponse }> {
-  return apiClient.post(`/cards/${cardId}/attachments/upload-url`, { filename, mimeType, sizeBytes, uploadContext });
+}: { cardId: string } & UploadUrlRequest): Promise<{
+  data: UploadUrlResponse;
+}> {
+  return apiClient.post(`/cards/${cardId}/attachments/upload-url`, {
+    filename,
+    mimeType,
+    sizeBytes,
+    uploadContext,
+  });
 }
 
 export async function confirmUpload({
@@ -48,8 +59,15 @@ export async function startMultipart({
   filename,
   mimeType,
   sizeBytes,
-}: { cardId: string } & MultipartStartRequest): Promise<{ data: MultipartStartResponse }> {
-  return apiClient.post(`/cards/${cardId}/attachments/multipart/start`, { filename, mimeType, sizeBytes, uploadContext });
+}: { cardId: string } & MultipartStartRequest): Promise<{
+  data: MultipartStartResponse;
+}> {
+  return apiClient.post(`/cards/${cardId}/attachments/multipart/start`, {
+    filename,
+    mimeType,
+    sizeBytes,
+    uploadContext,
+  });
 }
 
 export async function getPartUrl({
@@ -58,7 +76,11 @@ export async function getPartUrl({
   key,
   partNumber,
 }: { cardId: string } & PartUrlRequest): Promise<{ data: PartUrlResponse }> {
-  return apiClient.post(`/cards/${cardId}/attachments/multipart/part-url`, { uploadId, key, partNumber });
+  return apiClient.post(`/cards/${cardId}/attachments/multipart/part-url`, {
+    uploadId,
+    key,
+    partNumber,
+  });
 }
 
 export async function completeMultipart({
@@ -67,7 +89,9 @@ export async function completeMultipart({
   key,
   attachmentId,
   parts,
-}: { cardId: string } & MultipartCompleteRequest): Promise<{ data: Attachment }> {
+}: { cardId: string } & MultipartCompleteRequest): Promise<{
+  data: Attachment;
+}> {
   return apiClient.post(`/cards/${cardId}/attachments/multipart/complete`, {
     uploadId,
     key,
@@ -85,7 +109,9 @@ export async function abortMultipart({
   uploadId: string;
   key: string;
 }): Promise<void> {
-  return apiClient.delete(`/cards/${cardId}/attachments/multipart/${uploadId}?key=${encodeURIComponent(key)}`);
+  return apiClient.delete(
+    `/cards/${cardId}/attachments/multipart/${uploadId}?key=${encodeURIComponent(key)}`,
+  );
 }
 
 // ---------- URL attachment ----------
@@ -94,12 +120,18 @@ export async function createUrlAttachment({
   cardId,
   url,
   name,
-}: { cardId: string } & Omit<UrlAttachmentRequest, 'type'>): Promise<{ data: Attachment }> {
+}: { cardId: string } & Omit<UrlAttachmentRequest, 'type'>): Promise<{
+  data: Attachment;
+}> {
   return apiClient.post(`/cards/${cardId}/attachments/url`, { url, name });
 }
 
 // Fetch minimal card info for the paste-URL preview (form-time detection).
-export async function fetchCardPreview({ cardId }: { cardId: string }): Promise<{
+export async function fetchCardPreview({
+  cardId,
+}: {
+  cardId: string;
+}): Promise<{
   data: { id: string; title: string };
   includes: {
     board: { id: string; title: string };
@@ -112,7 +144,11 @@ export async function fetchCardPreview({ cardId }: { cardId: string }): Promise<
 
 // ---------- Link preview ----------
 
-export async function fetchLinkPreview({ url }: { url: string }): Promise<{ data: { title: string; faviconUrl: string } }> {
+export async function fetchLinkPreview({
+  url,
+}: {
+  url: string;
+}): Promise<{ data: { title: string; faviconUrl: string } }> {
   return apiClient.get(`/link-preview?url=${encodeURIComponent(url)}`);
 }
 
@@ -134,6 +170,20 @@ export async function patchAttachment({
   attachmentId,
   url,
   alias,
-}: { attachmentId: string } & PatchAttachmentRequest): Promise<{ data: Attachment }> {
+}: { attachmentId: string } & PatchAttachmentRequest): Promise<{
+  data: Attachment;
+}> {
   return apiClient.patch(`/attachments/${attachmentId}`, { alias, url });
+}
+
+// ---------- Reorder ----------
+
+export async function reorderAttachments({
+  cardId,
+  order,
+}: {
+  cardId: string;
+  order: string[];
+}): Promise<{ data: Attachment[] }> {
+  return apiClient.post(`/cards/${cardId}/attachments/reorder`, { order });
 }

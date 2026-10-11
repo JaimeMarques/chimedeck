@@ -12,12 +12,6 @@ import { resolveCoverImageUrls } from '../../../common/cards/cover';
 import { resolveBackgroundUrl } from '../common/resolveBackgroundUrl';
 import { flags } from '../../../mods/flags';
 
-type ResolvedBoardRequest = BoardVisibilityScopedRequest & {
-  board: { id: string; visibility: string; background: string | null };
-};
-
-type BoardStarRow = { board_id: string; user_id: string };
-
 export async function handleGetBoard(req: Request, boardId: string): Promise<Response> {
   const visibilityError = await applyBoardVisibility(req, boardId);
   if (visibilityError) {
@@ -33,8 +27,8 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
     return visibilityError;
   }
 
-  const scopedReq = req as ResolvedBoardRequest;
-  const board = scopedReq.board;
+  const scopedReq = req as BoardVisibilityScopedRequest;
+  const board = scopedReq.board!;
   const resolvedBoardId = board.id;
 
   searchLog.boardAccessChecked({
@@ -55,9 +49,14 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
 
   const listIds = lists.map((l: { id: string }) => l.id);
   const incrementalEnabled = await flags.isEnabled('INCREMENTAL_BOARD_HYDRATION');
-  const requestedInitialCardsPerList = Number.parseInt(url.searchParams.get('initialCardsPerList') ?? '0', 10);
+  const requestedInitialCardsPerList = Number.parseInt(
+    url.searchParams.get('initialCardsPerList') ?? '0',
+    10
+  );
   const initialCardsPerList =
-    incrementalEnabled && Number.isFinite(requestedInitialCardsPerList) && requestedInitialCardsPerList > 0
+    incrementalEnabled &&
+    Number.isFinite(requestedInitialCardsPerList) &&
+    requestedInitialCardsPerList > 0
       ? Math.min(requestedInitialCardsPerList, 100)
       : null;
 
@@ -75,8 +74,12 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .where({ upload_context: 'card' })
       .select('card_id')
       .select(
-        db.raw(`SUM(CASE WHEN status = 'READY' AND referenced_card_id IS NULL THEN 1 ELSE 0 END) as attachment_count`),
-        db.raw(`SUM(CASE WHEN status = 'READY' AND referenced_card_id IS NOT NULL THEN 1 ELSE 0 END) as linked_card_count`),
+        db.raw(
+          `SUM(CASE WHEN status = 'READY' AND referenced_card_id IS NULL THEN 1 ELSE 0 END) as attachment_count`
+        ),
+        db.raw(
+          `SUM(CASE WHEN status = 'READY' AND referenced_card_id IS NOT NULL THEN 1 ELSE 0 END) as linked_card_count`
+        )
       )
       .groupBy('card_id')
       .as('ac');
@@ -85,7 +88,7 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .join('checklist_items as ci', 'ci.checklist_id', 'ch.id')
       .select('ch.card_id')
       .count('* as checklist_total')
-      .sum({ checklist_done: db.raw("CASE WHEN ci.checked = true THEN 1 ELSE 0 END") })
+      .sum({ checklist_done: db.raw('CASE WHEN ci.checked = true THEN 1 ELSE 0 END') })
       .groupBy('ch.card_id')
       .as('kc');
 
@@ -111,6 +114,7 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
         'c.cover_size',
         'c.created_at',
         'c.updated_at',
+        'c.is_template',
         db.raw(
           `COALESCE(json_agg(DISTINCT jsonb_build_object('id', l.id, 'name', l.name, 'color', l.color)) FILTER (WHERE l.id IS NOT NULL), '[]'::json) as labels`
         ),
@@ -121,7 +125,7 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
         db.raw('MAX(CAST(COALESCE(ac.attachment_count, 0) AS INTEGER)) AS attachment_count'),
         db.raw('MAX(CAST(COALESCE(ac.linked_card_count, 0) AS INTEGER)) AS linked_card_count'),
         db.raw('MAX(CAST(COALESCE(kc.checklist_total, 0) AS INTEGER)) AS checklist_total'),
-        db.raw('MAX(CAST(COALESCE(kc.checklist_done, 0) AS INTEGER)) AS checklist_done'),
+        db.raw('MAX(CAST(COALESCE(kc.checklist_done, 0) AS INTEGER)) AS checklist_done')
       )
       .leftJoin('card_labels as cl', 'cl.card_id', 'c.id')
       .leftJoin('labels as l', 'l.id', 'cl.label_id')
@@ -139,7 +143,10 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
     return cardsQuery;
   }
 
-  const cardHydration: Record<string, { loaded: number; total: number; hasMore: boolean; nextOffset: number | null }> = {};
+  const cardHydration: Record<
+    string,
+    { loaded: number; total: number; hasMore: boolean; nextOffset: number | null }
+  > = {};
 
   const cards = await (async () => {
     if (listIds.length === 0) return [];
@@ -155,7 +162,7 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .groupBy('list_id');
 
     const totalsByList = Object.fromEntries(
-      totalRows.map((row) => [row.list_id, Number(row.count)]),
+      totalRows.map((row) => [row.list_id, Number(row.count ?? 0)])
     ) as Record<string, number>;
 
     const rankedCardRows = await db
@@ -166,9 +173,9 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
           .select(
             'c.id',
             'c.list_id',
-            db.raw('ROW_NUMBER() OVER (PARTITION BY c.list_id ORDER BY c.position ASC) as rn'),
+            db.raw('ROW_NUMBER() OVER (PARTITION BY c.list_id ORDER BY c.position ASC) as rn')
           )
-          .as('ranked_cards'),
+          .as('ranked_cards')
       )
       .where('rn', '<=', initialCardsPerList)
       .select('id', 'list_id')
@@ -176,10 +183,13 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
       .orderBy('rn', 'asc');
 
     const initialCardIds = rankedCardRows.map((row: { id: string }) => row.id);
-    const loadedByList = rankedCardRows.reduce<Record<string, number>>((acc, row: { list_id: string }) => {
-      acc[row.list_id] = (acc[row.list_id] ?? 0) + 1;
-      return acc;
-    }, {});
+    const loadedByList = rankedCardRows.reduce<Record<string, number>>(
+      (acc, row: { list_id: string }) => {
+        acc[row.list_id] = (acc[row.list_id] ?? 0) + 1;
+        return acc;
+      },
+      {}
+    );
 
     listIds.forEach((listId) => {
       const loaded = loadedByList[listId] ?? 0;
@@ -198,17 +208,21 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
     return loadCards(initialCardIds);
   })();
 
-  const cardsWithResolvedMembers = cards.map((card) => ({
-    ...card,
-    members: buildAvatarProxyUrlsInCollection(
-      Array.isArray(card.members)
-        ? (card.members as Array<{ avatar_url?: string | null } & Record<string, unknown>>)
-        : []
-    ),
-  }));
+  const cardsWithResolvedMembers = await Promise.all(
+    cards.map(async (card) => ({
+      ...card,
+      members: buildAvatarProxyUrlsInCollection(
+        Array.isArray(card.members)
+          ? (card.members as Array<{ avatar_url?: string | null } & Record<string, unknown>>)
+          : []
+      ),
+    }))
+  );
 
   const cardsWithResolvedCovers = await resolveCoverImageUrls(
-    cardsWithResolvedMembers as unknown as Array<{ id: string; cover_attachment_id?: string | null } & Record<string, unknown>>,
+    cardsWithResolvedMembers as unknown as Array<
+      { id: string; cover_attachment_id?: string | null } & Record<string, unknown>
+    >
   );
 
   const includes = url.searchParams.get('include')?.split(',') ?? [];
@@ -236,18 +250,24 @@ export async function handleGetBoard(req: Request, boardId: string): Promise<Res
   const currentUserId = (scopedReq.currentUser as { id?: string } | undefined)?.id ?? null;
   let isStarred = false;
   if (currentUserId) {
-    const star = await db<BoardStarRow>('board_stars')
+    const star = await db('board_stars')
       .where({ board_id: resolvedBoardId, user_id: currentUserId })
-      .first<BoardStarRow | undefined>();
+      .first();
     isStarred = !!star;
   }
 
-  const backgroundUrl = resolveBackgroundUrl({ boardId: resolvedBoardId, backgroundUrl: board.background });
+  const backgroundUrl = resolveBackgroundUrl({
+    boardId: resolvedBoardId,
+    backgroundUrl: board.background,
+  });
 
   const includesResponse: {
     lists: unknown[];
     cards: unknown[];
-    card_hydration?: Record<string, { loaded: number; total: number; hasMore: boolean; nextOffset: number | null }>;
+    card_hydration?: Record<
+      string,
+      { loaded: number; total: number; hasMore: boolean; nextOffset: number | null }
+    >;
     activities?: unknown[];
   } = {
     lists,

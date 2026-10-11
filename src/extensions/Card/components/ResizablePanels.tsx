@@ -35,26 +35,39 @@ interface ResizablePanelsProps {
   className?: string;
 }
 
-export default function ResizablePanels({ left, right, className = '' }: ResizablePanelsProps) {
+export default function ResizablePanels({
+  left,
+  right,
+  className = '',
+}: ResizablePanelsProps) {
   const [ratio, setRatio] = useState<number>(loadRatio);
   const [isMobile, setIsMobile] = useState<boolean>(
-    typeof window !== 'undefined' ? window.innerWidth < MOBILE_BREAKPOINT : false,
+    typeof window !== 'undefined'
+      ? window.innerWidth < MOBILE_BREAKPOINT
+      : false,
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
   // Update mobile breakpoint on resize
   useEffect(() => {
-    const onResize = () => { setIsMobile(window.innerWidth < MOBILE_BREAKPOINT); };
+    const onResize = () => {
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    };
     window.addEventListener('resize', onResize);
-    return () => { window.removeEventListener('resize', onResize); };
+    return () => {
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
 
-  const clampRatio = useCallback((rawRatio: number, containerWidth: number): number => {
-    const minRatio = MIN_WIDTH_PX / containerWidth;
-    const maxRatio = 1 - minRatio;
-    return Math.min(maxRatio, Math.max(minRatio, rawRatio));
-  }, []);
+  const clampRatio = useCallback(
+    (rawRatio: number, containerWidth: number): number => {
+      const minRatio = MIN_WIDTH_PX / containerWidth;
+      const maxRatio = 1 - minRatio;
+      return Math.min(maxRatio, Math.max(minRatio, rawRatio));
+    },
+    [],
+  );
 
   const handleMove = useCallback(
     (clientX: number) => {
@@ -82,7 +95,8 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
         // Persist only on mouse-up
         const container = containerRef.current;
         if (container) {
-          const { left: containerLeft, width } = container.getBoundingClientRect();
+          const { left: containerLeft, width } =
+            container.getBoundingClientRect();
           saveRatio(clampRatio((ev.clientX - containerLeft) / width, width));
         }
         window.removeEventListener('mousemove', onMouseMove);
@@ -103,7 +117,8 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
       if (touch) handleMove(touch.clientX);
 
       const onTouchMove = (ev: TouchEvent) => {
-        if (dragging.current && ev.touches[0]) handleMove(ev.touches[0].clientX);
+        if (dragging.current && ev.touches[0])
+          handleMove(ev.touches[0].clientX);
       };
       const onTouchEnd = (ev: TouchEvent) => {
         dragging.current = false;
@@ -111,8 +126,11 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
         if (lastTouch) {
           const container = containerRef.current;
           if (container) {
-            const { left: containerLeft, width } = container.getBoundingClientRect();
-            saveRatio(clampRatio((lastTouch.clientX - containerLeft) / width, width));
+            const { left: containerLeft, width } =
+              container.getBoundingClientRect();
+            saveRatio(
+              clampRatio((lastTouch.clientX - containerLeft) / width, width),
+            );
           }
         }
         window.removeEventListener('touchmove', onTouchMove);
@@ -127,7 +145,9 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
 
   if (isMobile) {
     return (
-      <div className={`flex flex-col overflow-y-auto scrollbar-contrast ${className}`}>
+      <div
+        className={`flex flex-col overflow-y-auto scrollbar-contrast ${className}`}
+      >
         <div className="w-full flex-shrink-0">{left}</div>
         <div className="w-full flex-shrink-0">{right}</div>
       </div>
@@ -140,7 +160,10 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
   return (
     <div ref={containerRef} className={`flex overflow-hidden ${className}`}>
       {/* Left panel */}
-      <div style={{ width: leftPercent, minWidth: MIN_WIDTH_PX }} className="overflow-y-auto scrollbar-contrast">
+      <div
+        style={{ width: leftPercent, minWidth: MIN_WIDTH_PX }}
+        className="overflow-y-auto scrollbar-contrast"
+      >
         {left}
       </div>
 
@@ -157,11 +180,17 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
         onKeyDown={(e) => {
           const step = 0.01;
           if (e.key === 'ArrowLeft') {
-            const next = clampRatio(ratio - step, containerRef.current?.offsetWidth ?? 800);
+            const next = clampRatio(
+              ratio - step,
+              containerRef.current?.offsetWidth ?? 800,
+            );
             setRatio(next);
             saveRatio(next);
           } else if (e.key === 'ArrowRight') {
-            const next = clampRatio(ratio + step, containerRef.current?.offsetWidth ?? 800);
+            const next = clampRatio(
+              ratio + step,
+              containerRef.current?.offsetWidth ?? 800,
+            );
             setRatio(next);
             saveRatio(next);
           }
@@ -172,7 +201,10 @@ export default function ResizablePanels({ left, right, className = '' }: Resizab
       </div>
 
       {/* Right panel */}
-      <div style={{ width: rightPercent, minWidth: MIN_WIDTH_PX }} className="overflow-y-auto scrollbar-contrast">
+      <div
+        style={{ width: rightPercent, minWidth: MIN_WIDTH_PX }}
+        className="overflow-y-auto scrollbar-contrast"
+      >
         {right}
       </div>
     </div>

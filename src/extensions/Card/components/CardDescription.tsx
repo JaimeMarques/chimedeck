@@ -7,6 +7,9 @@ import { marked } from 'marked';
 import MentionInput from '~/common/components/MentionInput/MentionInput';
 import Button from '../../../common/components/Button';
 import { normalizeHttpUrlInput } from '~/common/utils/urlDisplayText';
+import { sanitizeUserGeneratedHtml } from '~/common/utils/sanitizeUserGeneratedHtml';
+import { escapeScriptTags } from '~/common/utils/escapeScriptTags';
+import translations from '../translations/en.json';
 
 /**
  * Add target="_blank" rel="noopener noreferrer" to external links that don't already
@@ -15,7 +18,7 @@ import { normalizeHttpUrlInput } from '~/common/utils/urlDisplayText';
 function addLinkTargetBlank(html: string): string {
   return html.replace(
     /<a(?=[^>]*\bhref="(?!#))(?![^>]*\btarget=)/gi,
-    '<a target="_blank" rel="noopener noreferrer"',
+    '<a target="_blank" rel="noopener noreferrer"'
   );
 }
 
@@ -33,7 +36,9 @@ function normalizePreviewLinkHref(rawHref: string): string {
   const hrefCandidate = (markdownHrefMatch?.[1] ?? decoded).trim();
   const unwrapped = hrefCandidate.replace(/^<([^>]+)>$/, '$1').trim();
 
-  const embeddedUrls = Array.from(unwrapped.matchAll(/https?:\/\/[^\s<>)\]]+/gi)).map((match) => match[0]);
+  const embeddedUrls = Array.from(unwrapped.matchAll(/https?:\/\/[^\s<>)\]]+/gi)).map(
+    (match) => match[0]
+  );
   const bestEmbeddedUrl = (() => {
     if (embeddedUrls.length === 0) return null;
 
@@ -64,12 +69,9 @@ interface Props {
   disabled?: boolean;
 }
 
-const SHOW_MORE_THRESHOLD = 400;
-
 const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(description);
-  const [expanded, setExpanded] = useState(false);
 
   // Sync external description changes when not editing
   useEffect(() => {
@@ -83,7 +85,7 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
   }, [disabled, description]);
 
   const handleSave = useCallback(() => {
-    onSave(draft);
+    onSave(escapeScriptTags(draft));
     setEditing(false);
   }, [draft, onSave]);
 
@@ -102,7 +104,7 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
         handleCancel();
       }
     },
-    [handleSave, handleCancel],
+    [handleSave, handleCancel]
   );
 
   const handleDescriptionClick = useCallback(
@@ -120,15 +122,16 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
       }
       handleEnterEdit();
     },
-    [handleEnterEdit],
+    [handleEnterEdit]
   );
 
-  const previewHtml = addLinkTargetBlank(marked.parse(draft || '') as string);
+  const previewHtml = sanitizeUserGeneratedHtml(
+    addLinkTargetBlank(marked.parse(draft || '') as string)
+  );
   const isEmpty = !draft.trim();
-  const isLong = draft.length > SHOW_MORE_THRESHOLD;
 
   return (
-    <section aria-label="Description">
+    <section aria-label={translations['card.description.sectionAria']}>
       <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
         Description
       </h3>
@@ -142,16 +145,11 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
             onKeyDown={handleKeyDown}
             placeholder="Add a more detailed description…"
             className="w-full bg-bg-overlay border border-border rounded-lg p-3 text-base text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary min-h-[120px] font-mono"
-            aria-label="Card description editor"
+            aria-label={translations['card.description.editorAria']}
             autoFocus
           />
           <div className="flex gap-2 mt-2">
-            <Button
-              variant="primary"
-              size="sm"
-              type="button"
-              onClick={handleSave}
-            >
+            <Button variant="primary" size="sm" type="button" onClick={handleSave}>
               Save
             </Button>
             <button
@@ -165,23 +163,21 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
         </div>
       ) : (
         <div>
-          <div className="relative">
+          <div>
             {/* Click-to-edit region — cursor signals editability */}
             <div
               role="button"
               tabIndex={disabled ? -1 : 0}
-              aria-label={isEmpty ? 'Add a description (click to edit)' : 'Description (click to edit)'}
+              aria-label={
+                isEmpty ? 'Add a description (click to edit)' : 'Description (click to edit)'
+              }
               className={[
                 'rounded-lg p-3 min-h-[80px] transition-colors',
-                disabled
-                  ? 'cursor-default'
-                  : 'cursor-text hover:bg-bg-overlay',
+                disabled ? 'cursor-default' : 'cursor-text hover:bg-bg-overlay',
                 isEmpty
                   ? 'text-muted text-sm italic bg-bg-overlay'
                   : 'prose dark:prose-invert prose-sm max-w-none text-base break-words [&_a]:break-all',
-                isLong && !expanded ? 'overflow-hidden' : '',
               ].join(' ')}
-              style={isLong && !expanded ? { maxHeight: '12rem' } : undefined}
               onClick={handleDescriptionClick}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -194,22 +190,7 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
             >
               {isEmpty ? 'Add a more detailed description…' : undefined}
             </div>
-            {/* Gradient overlay when truncated */}
-            {isLong && !expanded && (
-              <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-white/80 to-transparent rounded-b-lg pointer-events-none" />
-            )}
           </div>
-          {isLong && (
-            <button
-              type="button"
-              className="mt-2 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-              onClick={() => {
-                setExpanded((e) => !e);
-              }}
-            >
-              {expanded ? 'Show less ↑' : 'Show more ↓'}
-            </button>
-          )}
         </div>
       )}
     </section>
@@ -217,4 +198,3 @@ const CardDescription = ({ boardId, description, onSave, disabled }: Props) => {
 };
 
 export default CardDescription;
-

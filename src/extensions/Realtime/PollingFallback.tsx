@@ -34,8 +34,12 @@ export function usePollingFallback({
   // duplicates if WS reconnects while a poll is in flight.
   const deliveredRef = useRef<Set<number>>(new Set());
 
-  useEffect(() => { lastSeqRef.current = lastSequence; }, [lastSequence]);
-  useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => {
+    lastSeqRef.current = lastSequence;
+  }, [lastSequence]);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   const poll = useCallback(async () => {
     if (!activeRef.current) return;
@@ -45,9 +49,9 @@ export function usePollingFallback({
         return;
       }
       // apiClient response interceptor auto-unwraps to response.data
-      const result = (await apiClient.get(
-        `/boards/${boardId}/events?since=${String(lastSeqRef.current)}`
-      )) as { data: RealtimeEvent[]; metadata: { hasMore: boolean; latestSequence: string } };
+      const result = await apiClient.get(
+        `/boards/${boardId}/events?since=${lastSeqRef.current}`,
+      );
 
       const events = result.data;
       if (!events || events.length === 0) return;
@@ -82,7 +86,12 @@ export function usePollingFallback({
 
     // Fire an immediate poll then set up the recurring interval
     void poll();
-    intervalRef.current = setInterval(() => { void poll(); }, fetchSnapshot ? SNAPSHOT_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
+    intervalRef.current = setInterval(
+      () => {
+        void poll();
+      },
+      fetchSnapshot ? SNAPSHOT_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
+    );
 
     return () => {
       if (intervalRef.current !== null) {

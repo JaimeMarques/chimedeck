@@ -29,6 +29,7 @@
   "attachments.inline.uploading.label": "Uploading {fileName}",
   "attachments.progressBar.label": "Uploading…",
   "attachments.panel.title": "Attachments",
+  "attachments.reorder.failed": "Couldn't save the new attachment order",
   "attachments.panel.attachFile": "Attach file",
   "attachments.panel.empty": "No attachments yet. Drop a file or click \"Attach file\".",
   "attachments.panel.imagesSection": "Images",
@@ -51,5 +52,7 @@
   "attachment.rename.save": "Save",
   "attachment.rename.cancel": "Cancel rename",
   "attachment.comment.insert": "Comment",
-  "attachment.item.action.comment.ariaLabel": "Insert attachment link into comment"
+  "attachment.item.action.comment.ariaLabel": "Insert attachment link into comment",
+  "attachments.externalLink.optionsAria": "Link options",
+  "attachments.cardAttachment.optionsAria": "Card attachment options"
 }

@@ -14,6 +14,7 @@ let notificationPreferencesEnabled = false;
 let webhooksEnabled = false;
 const guardFailure = new Error('guard read failed');
 let insertedRow: Record<string, unknown> | null = null;
+let duplicateNotification = false;
 
 void mock.module('../../../../../common/db', () => {
   const db = (table: string) => {
@@ -89,6 +90,7 @@ function reset() {
   emailCalls.length = 0;
   webhookCalls.length = 0;
   insertedRow = null;
+  duplicateNotification = false;
   failingTable = '';
   notificationPreferencesEnabled = false;
   webhooksEnabled = false;
@@ -103,9 +105,13 @@ const trx = ((table: string) => {
       insertedRow = data;
       return this;
     },
-    returning() {
+    onConflict(columns: string[]) {
+      assert.deepEqual(columns, ['user_id', 'type', 'source_type', 'source_id']);
+      return this;
+    },
+    ignore() {
       calls.push({ table, insert: insertedRow });
-      return Promise.resolve([{ id: 'notif-1', ...insertedRow }]);
+      return Promise.resolve(duplicateNotification ? [] : [{ id: 'notif-1', ...insertedRow }]);
     },
   };
 }) as never;
@@ -264,4 +270,14 @@ assert.equal(webhookCalls.length, 1, 'webhook must be dispatched once per mentio
 const webhookPayload = (webhookCalls[0] as { payload: { mentionedUserIds: string[] } }).payload;
 assert.deepEqual(webhookPayload.mentionedUserIds, ['user-a', 'user-b']);
 
-console.info('real createNotifications handler: guards, preferences, insert payload shape and webhook fan-out verified');
+// --- 9. Concurrent duplicate loses its insert without duplicate WS/email delivery.
+reset();
+duplicateNotification = true;
+await createNotificationsForMentions({
+  trx, addedUserIds: ['user-a'], actorId: 'actor-1', sourceType: 'comment',
+  sourceId: 'comment-1', cardId: 'card-1', boardId: 'board-1',
+});
+assert.equal(publishCalls.length, 0);
+assert.equal(emailCalls.length, 0);
+
+console.info('real createNotifications handler: guards, preferences, deduplicated insert payload and webhook fan-out verified');

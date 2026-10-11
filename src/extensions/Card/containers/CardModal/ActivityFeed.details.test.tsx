@@ -22,6 +22,8 @@ const attachmentSpy = spyOn(attachmentApi, 'listAttachments').mockResolvedValue(
 const React = (await import('react')).default;
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const { default: ActivityFeed } = await import('./ActivityFeed');
+const { Provider } = await import('react-redux');
+const { store } = await import('~/store');
 
 const comment: CommentData = {
   id: 'comment-1', card_id: 'card-1', user_id: 'user-1',
@@ -36,10 +38,10 @@ const activities: ActivityData[] = ['card_created', 'card_moved', 'card.due_date
 }));
 
 async function mount(comments: CommentData[] = [comment], cardId = 'card-1') {
-  const view = render(React.createElement(ActivityFeed, {
+  const view = render(React.createElement(Provider, { store, children: React.createElement(ActivityFeed, {
     cardId, comments, activities, currentUserId: 'user-2', canAddComment: false,
     onAddComment: async () => {}, onEditComment: async () => {}, onDeleteComment: async () => {},
-  }));
+  }) }));
   await act(async () => {});
   return view;
 }

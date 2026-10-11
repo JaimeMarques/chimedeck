@@ -13,6 +13,7 @@ import {
 import { requireBoardAccess, type BoardScopedRequest } from '../../middlewares/requireBoardAccess';
 import { writeEvent } from '../../../../mods/events/index';
 import type { GuestType } from '../../types';
+import { prepareBoardLimitGuard } from '../../mods/resourceLimitGuard';
 import { getCurrentWorkspaceRole } from '../members/authorization';
 import { lockBoardMemberMutations } from '../members/lock';
 import { lockWorkspaceMembershipMutations } from '../../../workspace/api/members/lock';
@@ -37,7 +38,9 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-export async function handleInviteGuestByEmail(req: Request, boardId: string): Promise<Response> {
+export async function handleInviteGuestByEmail(
+  req: Request, boardId: string, targetUserId?: string,
+): Promise<Response> {
   const authError = await authenticate(req);
   if (authError) return authError;
 
@@ -84,7 +87,8 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
   // Prevent inviting existing workspace members (non-GUEST) as guests.
   const existingMember = await db('memberships')
     .join('users', 'memberships.user_id', 'users.id')
-    .where({ 'users.email': normalizedEmail, 'memberships.workspace_id': board.workspace_id })
+    .where(targetUserId ? { 'users.id': targetUserId } : { 'users.email': normalizedEmail })
+    .andWhere({ 'memberships.workspace_id': board.workspace_id })
     .whereNot('memberships.role', 'GUEST')
     .first() as ExistingRow | undefined;
 
@@ -96,7 +100,12 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
   }
 
   // Resolve or create user.
-  let user = (await db('users').where({ email: normalizedEmail }).first()) as UserRow | undefined;
+  // Internal userId invitations must not re-resolve by a case-folded email:
+  // legacy mixed-case/colliding accounts can otherwise grant the wrong identity.
+  let user = (await db('users').where(targetUserId ? { id: targetUserId } : { email: normalizedEmail }).first()) as UserRow | undefined;
+  if (!user && targetUserId) {
+    return Response.json({ error: { code: 'user-not-found', message: 'User not found' } }, { status: 404 });
+  }
   if (!user) {
     // [why] Stub account: minimal row so the invite can be stored.
     // The user can claim the account later via a future invite-acceptance flow.
@@ -126,6 +135,8 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
       { status: 409 },
     );
   }
+
+  const guardLimit = await prepareBoardLimitGuard(board.workspace_id);
 
   // Get or create GUEST workspace membership under the workspace/board lock hierarchy.
   const mutationError = await db.transaction(async (trx) => {
@@ -169,6 +180,11 @@ export async function handleInviteGuestByEmail(req: Request, boardId: string): P
         { status: 409 },
       );
     }
+    // Check the upstream guest quota only after fresh authorization and duplicate checks.
+    const guestCount = await trx('board_guest_access').where({ board_id: boardId }).count('id as count').first();
+    const limitError = guardLimit('maxGuestsPerBoard', Number(guestCount?.count ?? 0));
+    if (limitError) return limitError;
+
     if (!freshMembership) {
       await trx('memberships').insert({
         user_id: userId,

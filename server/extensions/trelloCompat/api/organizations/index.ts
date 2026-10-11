@@ -68,7 +68,7 @@ async function parseBody(req: Request): Promise<Record<string, unknown>> {
 
   try {
     const parsed = JSON.parse(text) as unknown;
-    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {};
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
   } catch {
     return Object.fromEntries(new URLSearchParams(text).entries());
   }
@@ -89,9 +89,9 @@ function hasMinRole(role: MembershipRole | null, minRole: MembershipRole): boole
 }
 
 async function getCallerRole(userId: string, workspaceId: string): Promise<MembershipRole | null> {
-  const memberships = await db('memberships')
+  const memberships = (await db('memberships')
     .where({ user_id: userId, workspace_id: workspaceId })
-    .select('role') as Array<{ role: string }>;
+    .select('role')) as Array<{ role: string }>;
 
   let highest: MembershipRole | null = null;
   for (const membership of memberships) {
@@ -103,27 +103,24 @@ async function getCallerRole(userId: string, workspaceId: string): Promise<Membe
 }
 
 async function listOrgMembershipRows(workspaceId: string): Promise<MembershipRow[]> {
-  return await db('memberships')
+  return (await db('memberships')
     .where({ workspace_id: workspaceId })
-    .orderBy('user_id', 'asc') as MembershipRow[];
+    .orderBy('user_id', 'asc')) as MembershipRow[];
 }
 
 async function listSerializedBoardMemberships(boardId: string) {
-  const boardMembers = await db('board_members')
+  const boardMembers = (await db('board_members')
     .where({ board_id: boardId })
-    .orderBy('created_at', 'asc') as Array<{ id: string; user_id: string; role: string }>;
-  const guests = await db('board_guest_access')
+    .orderBy('created_at', 'asc')) as Array<{ id: string; user_id: string; role: string }>;
+  const guests = (await db('board_guest_access')
     .where({ board_id: boardId })
-    .orderBy('granted_at', 'asc') as Array<{ id: string; user_id: string }>;
+    .orderBy('granted_at', 'asc')) as Array<{ id: string; user_id: string }>;
 
   const memberships = boardMembers.map((membership) => ({
     id: membership.id,
     idMember: membership.user_id,
-    memberType: (membership.role === 'ADMIN'
-      ? 'admin'
-      : membership.role === 'VIEWER'
-        ? 'observer'
-        : 'normal') as 'admin' | 'normal' | 'observer',
+    memberType: (membership.role === 'ADMIN' ? 'admin' : membership.role === 'VIEWER' ? 'observer' : 'normal') as
+      'admin' | 'normal' | 'observer',
     unconfirmed: false as const,
     deactivated: false as const,
   }));
@@ -147,7 +144,10 @@ function trelloTypeToWorkspaceRole(value: unknown): Role | null {
   return null;
 }
 
-function serializeOrgMembership(workspaceId: string, membership: { user_id: string; role: string }) {
+function serializeOrgMembership(
+  workspaceId: string,
+  membership: { user_id: string; role: string }
+) {
   const memberType = workspaceRoleToMemberType(membership.role);
   return {
     id: `${workspaceId}-${membership.user_id}`,
@@ -158,7 +158,10 @@ function serializeOrgMembership(workspaceId: string, membership: { user_id: stri
   };
 }
 
-export async function organizationsRouter(req: AuthenticatedRequest, path: string): Promise<Response | null> {
+export async function organizationsRouter(
+  req: AuthenticatedRequest,
+  path: string
+): Promise<Response | null> {
   const user = getTrelloAuthUser(req);
   if (!user) return TRELLO_PERMISSION_DENIED();
 
@@ -184,12 +187,16 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
       role: 'OWNER',
     });
 
-    const created = await db('workspaces').where({ id: workspaceId }).first() as WorkspaceRow | undefined;
+    const created = (await db('workspaces').where({ id: workspaceId }).first()) as
+      | WorkspaceRow
+      | undefined;
     if (!created) return TRELLO_ORGANIZATION_NOT_FOUND();
-    return Response.json(serializeOrganization({
-      ...created,
-      memberships: [{ user_id: user.id, role: 'OWNER' }],
-    }));
+    return Response.json(
+      serializeOrganization({
+        ...created,
+        memberships: [{ user_id: user.id, role: 'OWNER' }],
+      })
+    );
   }
 
   const match = pathname.match(/^\/organizations\/([^/]+)(?:\/(.*))?$/);
@@ -197,7 +204,9 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
 
   const organizationId = match[1] as string;
   const subPath = match[2] ?? '';
-  const workspace = await db('workspaces').where({ id: organizationId }).first() as WorkspaceRow | undefined;
+  const workspace = (await db('workspaces').where({ id: organizationId }).first()) as
+    | WorkspaceRow
+    | undefined;
   if (!workspace) return TRELLO_ORGANIZATION_NOT_FOUND();
 
   const callerRole = await getCallerRole(user.id, workspace.id);
@@ -206,10 +215,12 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
   if (subPath === '' && req.method === 'GET') {
     if (!hasMinRole(callerRole, 'VIEWER')) return TRELLO_PERMISSION_DENIED();
     const memberships = await listOrgMembershipRows(workspace.id);
-    return Response.json(serializeOrganization({
-      ...workspace,
-      memberships: memberships.filter((membership) => membership.role !== 'GUEST'),
-    }));
+    return Response.json(
+      serializeOrganization({
+        ...workspace,
+        memberships: memberships.filter((membership) => membership.role !== 'GUEST'),
+      })
+    );
   }
 
   if (subPath === '' && req.method === 'PUT') {
@@ -223,13 +234,17 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
       await db('workspaces').where({ id: workspace.id }).update({ name: displayName.trim() });
     }
 
-    const updated = await db('workspaces').where({ id: workspace.id }).first() as WorkspaceRow | undefined;
+    const updated = (await db('workspaces').where({ id: workspace.id }).first()) as
+      | WorkspaceRow
+      | undefined;
     if (!updated) return TRELLO_ORGANIZATION_NOT_FOUND();
     const memberships = await listOrgMembershipRows(workspace.id);
-    return Response.json(serializeOrganization({
-      ...updated,
-      memberships: memberships.filter((membership) => membership.role !== 'GUEST'),
-    }));
+    return Response.json(
+      serializeOrganization({
+        ...updated,
+        memberships: memberships.filter((membership) => membership.role !== 'GUEST'),
+      })
+    );
   }
 
   if (subPath === '' && req.method === 'DELETE') {
@@ -246,24 +261,30 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
 
   if (subPath === 'boards' && req.method === 'GET') {
     if (!hasMinRole(callerRole, 'VIEWER')) return TRELLO_PERMISSION_DENIED();
-    const boards = await db('boards').where({ workspace_id: workspace.id }).orderBy('created_at', 'asc') as BoardRow[];
+    const boards = (await db('boards')
+      .where({ workspace_id: workspace.id })
+      .orderBy('created_at', 'asc')) as BoardRow[];
     const serialized = [];
     for (const board of boards) {
       const memberships = await listSerializedBoardMemberships(board.id);
       const creator = memberships.find((membership) => membership.memberType === 'admin');
-      serialized.push(serializeBoard({
-        ...board,
-        memberships,
-        idMemberCreator: creator?.idMember ?? '',
-      }));
+      serialized.push(
+        serializeBoard({
+          ...board,
+          memberships,
+          idMemberCreator: creator?.idMember ?? '',
+        })
+      );
     }
     return Response.json(serialized);
   }
 
   if (subPath === 'members' && req.method === 'GET') {
     if (!hasMinRole(callerRole, 'VIEWER')) return TRELLO_PERMISSION_DENIED();
-    const memberships = (await listOrgMembershipRows(workspace.id)).filter((membership) => membership.role !== 'GUEST');
-    const users = await db('users') as UserRow[];
+    const memberships = (await listOrgMembershipRows(workspace.id)).filter(
+      (membership) => membership.role !== 'GUEST'
+    );
+    const users = (await db('users')) as UserRow[];
     const usersById = new Map(users.map((row) => [row.id, row]));
 
     const result = [];
@@ -272,13 +293,15 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
       if (!member) continue;
       const fallbackName = member.email.split('@')[0] ?? member.email;
       const memberType = workspaceRoleToMemberType(membership.role);
-      result.push(serializeMember({
-        id: member.id,
-        email: member.email,
-        name: member.name ?? fallbackName,
-        avatar_url: member.avatar_url ?? null,
-        memberType: memberType === 'ghost' ? 'normal' : memberType,
-      }));
+      result.push(
+        serializeMember({
+          id: member.id,
+          email: member.email,
+          name: member.name ?? fallbackName,
+          avatar_url: member.avatar_url ?? null,
+          memberType: memberType === 'ghost' ? 'normal' : memberType,
+        })
+      );
     }
     return Response.json(result);
   }
@@ -288,7 +311,8 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
     const body = await parseBody(req);
     const email = getInput(url, body, 'email');
     const type = getInput(url, body, 'type');
-    if (typeof email !== 'string' || !email.trim()) return trelloError('invalid value for email', 400);
+    if (typeof email !== 'string' || !email.trim())
+      return trelloError('invalid value for email', 400);
     const role = trelloTypeToWorkspaceRole(type);
     if (!role) return trelloError('invalid value for type', 400);
 
@@ -312,8 +336,12 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
 
   if (subPath === 'memberships' && req.method === 'GET') {
     if (!hasMinRole(callerRole, 'VIEWER')) return TRELLO_PERMISSION_DENIED();
-    const memberships = (await listOrgMembershipRows(workspace.id)).filter((membership) => membership.role !== 'GUEST');
-    return Response.json(memberships.map((membership) => serializeOrgMembership(workspace.id, membership)));
+    const memberships = (await listOrgMembershipRows(workspace.id)).filter(
+      (membership) => membership.role !== 'GUEST'
+    );
+    return Response.json(
+      memberships.map((membership) => serializeOrgMembership(workspace.id, membership))
+    );
   }
 
   const membershipMatch = subPath.match(/^memberships\/([^/]+)$/);
@@ -323,9 +351,9 @@ export async function organizationsRouter(req: AuthenticatedRequest, path: strin
     const userId = membershipId.startsWith(`${workspace.id}-`)
       ? membershipId.slice(`${workspace.id}-`.length)
       : membershipId;
-    const membership = await db('memberships')
+    const membership = (await db('memberships')
       .where({ workspace_id: workspace.id, user_id: userId })
-      .first() as MembershipRow | undefined;
+      .first()) as MembershipRow | undefined;
     if (!membership || membership.role === 'GUEST') return TRELLO_NOT_FOUND();
     return Response.json(serializeOrgMembership(workspace.id, membership));
   }

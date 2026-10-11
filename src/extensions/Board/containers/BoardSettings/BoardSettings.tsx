@@ -12,6 +12,7 @@ import BackgroundPicker from './BackgroundPicker';
 import BoardLabelsPanel from './BoardLabelsPanel';
 import BoardNotificationToggle from './BoardNotificationToggle';
 import BoardNotificationTypePreferences from './BoardNotificationTypePreferences';
+import GithubProjectUrlSetting from './GithubProjectUrlSetting';
 import StateTransitionsSettingsEntry from '~/extensions/StateTransitions/components/StateTransitionsSettingsEntry';
 import { boardPath } from '~/common/routing/shortUrls';
 
@@ -25,9 +26,18 @@ interface Props {
   isBoardParticipant?: boolean;
   /** Matches PATCH /boards/:id: workspace ADMIN or OWNER. */
   canManageBoard?: boolean;
+  /** When true, the user can manage board integrations (e.g., OWNER/ADMIN). */
+  canManageIntegrations?: boolean;
 }
 
-const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoardParticipant = true, canManageBoard = false }: Props) => {
+const BoardSettings = ({
+  onClose,
+  isGuest = false,
+  isViewerGuest = false,
+  isBoardParticipant = true,
+  canManageBoard = false,
+  canManageIntegrations = false,
+}: Props) => {
   const navigate = useNavigate();
   const { boardId } = useParams<{ boardId: string }>();
   const board = useAppSelector(selectBoard);
@@ -38,7 +48,8 @@ const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoar
     (board as { visibility?: BoardVisibility } | null)?.visibility ?? 'PRIVATE',
   );
   const [saving, setSaving] = useState(false);
-  const [boardNotificationsEnabled, setBoardNotificationsEnabled] = useState(true);
+  const [boardNotificationsEnabled, setBoardNotificationsEnabled] =
+    useState(true);
 
   // Sync local state when the board is loaded (e.g. after initial fetch).
   useEffect(() => {
@@ -51,10 +62,16 @@ const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoar
     setVisibility(newVisibility); // optimistic update
     setSaving(true);
     try {
-      await patchBoardVisibility({ api: apiClient, boardId, visibility: newVisibility });
+      await patchBoardVisibility({
+        api: apiClient,
+        boardId,
+        visibility: newVisibility,
+      });
     } catch {
       // Rollback on failure.
-      const prev = (board as { visibility?: BoardVisibility } | null)?.visibility ?? 'PRIVATE';
+      const prev =
+        (board as { visibility?: BoardVisibility } | null)?.visibility ??
+        'PRIVATE';
       setVisibility(prev);
     } finally {
       setSaving(false);
@@ -140,9 +157,24 @@ const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoar
                     onClick={handlePluginsClick}
                     className="w-full text-left px-3 py-2 rounded text-sm text-subtle hover:bg-bg-surface flex items-center gap-2 transition-colors"
                   >
-                    <PuzzlePieceIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <PuzzlePieceIcon
+                      className="h-4 w-4 shrink-0"
+                      aria-hidden="true"
+                    />
                     <span>Plugins</span>
                   </button>
+                </div>
+              )}
+
+              {/* Integrations — GitHub Project URL (Admin only for write, visible to all members) */}
+              {!isGuest && (
+                <div className="border-t border-border pt-4">
+                  {boardId && (
+                    <GithubProjectUrlSetting
+                      boardId={boardId}
+                      disabled={!canManageIntegrations}
+                    />
+                  )}
                 </div>
               )}
             </>
@@ -161,28 +193,31 @@ const BoardSettings = ({ onClose, isGuest = false, isViewerGuest = false, isBoar
 
           {/* User settings — per-board notification preferences; only shown for board participants (members/guests). */}
           {isBoardParticipant && (
-          <div className={isGuest ? '' : 'border-t border-border pt-4'}>
-            <div className="flex items-center gap-2 mb-3">
-              <UserCircleIcon className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
-                User settings
-              </h3>
-            </div>
-            {boardId && (
-              <>
-                <BoardNotificationToggle
-                  boardId={boardId}
-                  onMasterEnabledChange={setBoardNotificationsEnabled}
+            <div className={isGuest ? '' : 'border-t border-border pt-4'}>
+              <div className="flex items-center gap-2 mb-3">
+                <UserCircleIcon
+                  className="h-4 w-4 shrink-0 text-muted"
+                  aria-hidden="true"
                 />
-                <div className="mt-4">
-                  <BoardNotificationTypePreferences
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  User settings
+                </h3>
+              </div>
+              {boardId && (
+                <>
+                  <BoardNotificationToggle
                     boardId={boardId}
-                    disabledByBoardNotifications={!boardNotificationsEnabled}
+                    onMasterEnabledChange={setBoardNotificationsEnabled}
                   />
-                </div>
-              </>
-            )}
-          </div>
+                  <div className="mt-4">
+                    <BoardNotificationTypePreferences
+                      boardId={boardId}
+                      disabledByBoardNotifications={!boardNotificationsEnabled}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>
       </div>

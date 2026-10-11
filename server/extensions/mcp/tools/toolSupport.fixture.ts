@@ -32,7 +32,10 @@ export interface Harness {
   requests: RecordedRequest[];
   // Replace the REST responder and clear recorded requests.
   respond(responder: Responder): void;
-  call(name: string, args?: Record<string, unknown>): Promise<{ result: CallToolResult; text: string; isError: boolean }>;
+  call(
+    name: string,
+    args?: Record<string, unknown>
+  ): Promise<{ result: CallToolResult; text: string; isError: boolean }>;
   // Call, assert success, return the parsed JSON text.
   ok(name: string, args?: Record<string, unknown>): Promise<unknown>;
   // Call, assert `Error: <code>`.
@@ -40,13 +43,18 @@ export interface Harness {
 }
 
 export const json = (data: unknown, status = 200) => Response.json(data, { status });
-export const html = () => new Response('<!doctype html><html></html>', { headers: { 'Content-Type': 'text/html' } });
+export const html = () =>
+  new Response('<!doctype html><html></html>', { headers: { 'Content-Type': 'text/html' } });
 // Error body carries the token so every error path also proves it is not echoed.
 export const apiError = (status: number, name?: string) =>
   Response.json({ ...(name ? { name } : {}), error: { message: TOKEN } }, { status });
 
 // The failure modes every single-GET tool must reject.
-export async function expectReadErrors(h: Harness, name: string, args?: Record<string, unknown>): Promise<void> {
+export async function expectReadErrors(
+  h: Harness,
+  name: string,
+  args?: Record<string, unknown>
+): Promise<void> {
   const cases: Array<[() => Response, string]> = [
     [() => apiError(404), 'http-404'],
     [() => apiError(403, 'forbidden'), 'forbidden'],
@@ -61,19 +69,28 @@ export async function expectReadErrors(h: Harness, name: string, args?: Record<s
   }
 }
 
-export function expectAnnotations(h: Harness, names: string[], annotations: Tool['annotations']): void {
+export function expectAnnotations(
+  h: Harness,
+  names: string[],
+  annotations: Tool['annotations']
+): void {
   for (const name of names) {
     const tool = h.tools.find((entry) => entry.name === name);
     assert.ok(tool, `${name} not registered`);
     for (const [key, value] of Object.entries(annotations ?? {})) {
-      assert.equal((tool.annotations as Record<string, unknown> | undefined)?.[key], value, `${name} ${key}`);
+      assert.equal(
+        (tool.annotations as Record<string, unknown> | undefined)?.[key],
+        value,
+        `${name} ${key}`
+      );
     }
   }
 }
 
 async function runScenario(register: Register, run: Scenario): Promise<void> {
   const requests: RecordedRequest[] = [];
-  let responder: Responder = () => Response.json({ error: { message: 'no responder' } }, { status: 599 });
+  let responder: Responder = () =>
+    Response.json({ error: { message: 'no responder' } }, { status: 599 });
   const rest = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -83,7 +100,7 @@ async function runScenario(register: Register, run: Scenario): Promise<void> {
       const recorded = {
         method: request.method,
         path: url.pathname + url.search,
-        body: raw ? JSON.parse(raw) as unknown : undefined,
+        body: raw ? (JSON.parse(raw) as unknown) : undefined,
         authorization: request.headers.get('authorization'),
       };
       requests.push(recorded);
@@ -100,7 +117,7 @@ async function runScenario(register: Register, run: Scenario): Promise<void> {
   await client.connect(clientTransport);
   try {
     const call: Harness['call'] = async (name, args = {}) => {
-      const result = await client.callTool({ name, arguments: args }) as CallToolResult;
+      const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
       const first = result.content[0];
       const text = first?.type === 'text' ? first.text : '';
       assert.ok(!JSON.stringify(result).includes(TOKEN), `${name} leaked the token`);
@@ -109,7 +126,10 @@ async function runScenario(register: Register, run: Scenario): Promise<void> {
     await run({
       tools: (await client.listTools()).tools,
       requests,
-      respond(next) { responder = next; requests.length = 0; },
+      respond(next) {
+        responder = next;
+        requests.length = 0;
+      },
       call,
       async ok(name, args) {
         const { text, isError } = await call(name, args);
@@ -122,7 +142,10 @@ async function runScenario(register: Register, run: Scenario): Promise<void> {
         assert.equal(text, `Error: ${code}`);
       },
     });
-    assert.ok(requests.every((entry) => entry.authorization === `Bearer ${TOKEN}`), 'caller token not used');
+    assert.ok(
+      requests.every((entry) => entry.authorization === `Bearer ${TOKEN}`),
+      'caller token not used'
+    );
   } finally {
     await client.close();
     await server.close();
@@ -135,13 +158,16 @@ async function runScenario(register: Register, run: Scenario): Promise<void> {
 export function defineToolScenarios(
   meta: ImportMeta,
   register: Register,
-  scenarios: Record<string, Scenario>,
+  scenarios: Record<string, Scenario>
 ): void {
   const flag = Bun.argv.indexOf('--scenario');
   if (flag === -1) {
     for (const name of Object.keys(scenarios)) {
       test(`${basename(meta.path)}: ${name}`, () => {
-        const child = Bun.spawnSync([process.execPath, meta.path, '--scenario', name], { stdout: 'pipe', stderr: 'pipe' });
+        const child = Bun.spawnSync([process.execPath, meta.path, '--scenario', name], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
         expect(child.stderr.toString()).toBe('');
         expect(child.exitCode).toBe(0);
         expect(child.stdout.toString()).toContain(`PASS ${name}`);
@@ -152,5 +178,7 @@ export function defineToolScenarios(
   const name = Bun.argv[flag + 1] ?? '';
   const run = scenarios[name];
   if (!run) throw new Error(`unknown scenario ${name}`);
-  void runScenario(register, run).then(() => { console.info(`PASS ${name}`); });
+  void runScenario(register, run).then(() => {
+    console.info(`PASS ${name}`);
+  });
 }

@@ -27,11 +27,19 @@ interface Discussion {
 }
 
 class ReadFailure extends Error {
-  constructor(readonly code: string) { super(code); }
+  constructor(readonly code: string) {
+    super(code);
+  }
 }
 
-async function readRows({ path, parentId, token }: {
-  path: string; parentId: string | null; token: string;
+async function readRows({
+  path,
+  parentId,
+  token,
+}: {
+  path: string;
+  parentId: string | null;
+  token: string;
 }): Promise<Discussion> {
   let response: Awaited<ReturnType<typeof apiCall<unknown>>>;
   try {
@@ -56,8 +64,13 @@ async function readRows({ path, parentId, token }: {
   const seen = new Set<string>();
   const cardId = data[0]?.card_id;
   for (const row of data) {
-    if (row.parent_id !== parentId || row.id === parentId || seen.has(row.id)
-      || row.card_id !== cardId || (parentId === null && row.reply_count === undefined)) {
+    if (
+      row.parent_id !== parentId ||
+      row.id === parentId ||
+      seen.has(row.id) ||
+      row.card_id !== cardId ||
+      (parentId === null && row.reply_count === undefined)
+    ) {
       throw new ReadFailure('bad-response');
     }
     seen.add(row.id);
@@ -68,14 +81,34 @@ async function readRows({ path, parentId, token }: {
   return { data, complete: issues.length === 0, issues };
 }
 
-async function readReplies({ commentId, token }: { commentId: string; token: string }): Promise<Discussion> {
+async function readReplies({
+  commentId,
+  token,
+}: {
+  commentId: string;
+  token: string;
+}): Promise<Discussion> {
   // [why] UUIDs from PostgreSQL are lowercase even when the input is uppercase.
   const parentId = commentId.toLowerCase();
-  return readRows({ path: `/api/v1/comments/${encodeURIComponent(parentId)}/replies`, parentId, token });
+  return readRows({
+    path: `/api/v1/comments/${encodeURIComponent(parentId)}/replies`,
+    parentId,
+    token,
+  });
 }
 
-async function readDiscussion({ cardId, token }: { cardId: string; token: string }): Promise<Discussion> {
-  const parents = await readRows({ path: `/api/v1/cards/${encodeURIComponent(cardId)}/comments`, parentId: null, token });
+async function readDiscussion({
+  cardId,
+  token,
+}: {
+  cardId: string;
+  token: string;
+}): Promise<Discussion> {
+  const parents = await readRows({
+    path: `/api/v1/cards/${encodeURIComponent(cardId)}/comments`,
+    parentId: null,
+    token,
+  });
   const data: Comment[] = [];
   const issues = [...parents.issues];
   const seen = new Set(parents.data.map((row) => row.id));
@@ -95,43 +128,73 @@ async function readDiscussion({ cardId, token }: { cardId: string; token: string
       for (const row of replies.data) seen.add(row.id);
       issues.push(...replies.issues);
       if (replies.data.length !== expected) {
-        issues.push({ code: 'reply-count-mismatch', parent_id: parent.id,
-          expected_reply_count: expected, actual_reply_count: replies.data.length });
+        issues.push({
+          code: 'reply-count-mismatch',
+          parent_id: parent.id,
+          expected_reply_count: expected,
+          actual_reply_count: replies.data.length,
+        });
       }
     } catch (error) {
-      issues.push({ code: error instanceof ReadFailure ? error.code : 'internal',
-        parent_id: parent.id, expected_reply_count: expected });
+      issues.push({
+        code: error instanceof ReadFailure ? error.code : 'internal',
+        parent_id: parent.id,
+        expected_reply_count: expected,
+      });
     }
   }
   return { data, complete: issues.length === 0, issues };
 }
 
-async function resultFor({ read, token }: { read: () => Promise<Discussion>; token: string }): Promise<CallToolResult> {
+async function resultFor({
+  read,
+  token,
+}: {
+  read: () => Promise<Discussion>;
+  token: string;
+}): Promise<CallToolResult> {
   try {
     const text = JSON.stringify(await read());
-    return { content: [{ type: 'text', text: token ? text.replaceAll(token, '<redacted>') : text }] };
+    return {
+      content: [{ type: 'text', text: token ? text.replaceAll(token, '<redacted>') : text }],
+    };
   } catch (error) {
     const code = error instanceof ReadFailure ? error.code : 'internal';
-    return { content: [{ type: 'text', text: `Error: ${token ? code.replaceAll(token, '<redacted>') : code}` }], isError: true };
+    return {
+      content: [
+        { type: 'text', text: `Error: ${token ? code.replaceAll(token, '<redacted>') : code}` },
+      ],
+      isError: true,
+    };
   }
 }
 
 export function registerDiscussionReaders(server: McpServer, token: string): void {
-  server.registerTool('get_comment_replies', {
-    description: 'Read all non-deleted direct replies to a comment, oldest first. Returns {data, complete, issues}; '
-      + 'check complete before treating results as exhaustive. Preserves parent_id. '
-      + 'Use a parent UUID from get_card_discussion. Does not verify that the input comment is top-level. '
-      + 'One reply level, no pagination.',
-    inputSchema: { commentId: z.uuid().describe('Parent comment UUID') },
-    annotations: { readOnlyHint: true },
-  }, ({ commentId }) => resultFor({ read: () => readReplies({ commentId, token }), token }));
+  server.registerTool(
+    'get_comment_replies',
+    {
+      description:
+        'Read all non-deleted direct replies to a comment, oldest first. Returns {data, complete, issues}; ' +
+        'check complete before treating results as exhaustive. Preserves parent_id. ' +
+        'Use a parent UUID from get_card_discussion. Does not verify that the input comment is top-level. ' +
+        'One reply level, no pagination.',
+      inputSchema: { commentId: z.uuid().describe('Parent comment UUID') },
+      annotations: { readOnlyHint: true },
+    },
+    ({ commentId }) => resultFor({ read: () => readReplies({ commentId, token }), token })
+  );
 
-  server.registerTool('get_card_discussion', {
-    description: 'Read a card discussion, including all non-deleted replies. Returns {data, complete, issues}; '
-      + 'check complete for failed threads, count mismatches or changed API metadata. '
-      + 'Flat data preserves parent_id: oldest-first parents, each followed by oldest-first replies. '
-      + 'No pagination; reads are not an atomic snapshot. Deleted reply bodies are unavailable.',
-    inputSchema: { cardId: z.string().min(1).describe('Card UUID or 8-character short ID') },
-    annotations: { readOnlyHint: true },
-  }, ({ cardId }) => resultFor({ read: () => readDiscussion({ cardId, token }), token }));
+  server.registerTool(
+    'get_card_discussion',
+    {
+      description:
+        'Read a card discussion, including all non-deleted replies. Returns {data, complete, issues}; ' +
+        'check complete for failed threads, count mismatches or changed API metadata. ' +
+        'Flat data preserves parent_id: oldest-first parents, each followed by oldest-first replies. ' +
+        'No pagination; reads are not an atomic snapshot. Deleted reply bodies are unavailable.',
+      inputSchema: { cardId: z.string().min(1).describe('Card UUID or 8-character short ID') },
+      annotations: { readOnlyHint: true },
+    },
+    ({ cardId }) => resultFor({ read: () => readDiscussion({ cardId, token }), token })
+  );
 }

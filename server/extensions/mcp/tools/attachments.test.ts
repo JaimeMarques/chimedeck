@@ -1,25 +1,49 @@
 import { strict as assert } from 'node:assert';
 import { MAX_DOWNLOAD_BYTES, registerAttachmentTools } from './attachments';
 import {
-  apiError, defineToolScenarios, expectAnnotations, expectReadErrors, html, json, type Harness, type RecordedRequest,
+  apiError,
+  defineToolScenarios,
+  expectAnnotations,
+  expectReadErrors,
+  html,
+  json,
+  type Harness,
+  type RecordedRequest,
 } from './toolSupport.fixture';
 
 const file = (fields: Record<string, unknown> = {}) => ({
-  id: 'a1', card_id: 'c1', name: 'shot.png', type: 'FILE', status: 'READY', external_url: null,
-  content_type: 'image/png', size_bytes: 4, view_url: '/api/v1/attachments/a1/view', ...fields,
+  id: 'a1',
+  card_id: 'c1',
+  name: 'shot.png',
+  type: 'FILE',
+  status: 'READY',
+  external_url: null,
+  content_type: 'image/png',
+  size_bytes: 4,
+  view_url: '/api/v1/attachments/a1/view',
+  ...fields,
 });
-const link = { id: 'a2', card_id: 'c1', name: 'Docs', type: 'URL', status: 'READY', external_url: null,
-  content_type: null, size_bytes: null, view_url: 'https://example.test/docs' };
+const link = {
+  id: 'a2',
+  card_id: 'c1',
+  name: 'Docs',
+  type: 'URL',
+  status: 'READY',
+  external_url: null,
+  content_type: null,
+  size_bytes: null,
+  view_url: 'https://example.test/docs',
+};
 const calls = (h: Harness) => h.requests.map(({ method, path, body }) => ({ method, path, body }));
 const get = (path: string) => ({ method: 'GET', path, body: undefined });
-const route = (write: () => Response, read: () => Response) =>
-  (r: RecordedRequest) => (r.method === 'GET' ? read() : write());
+const route = (write: () => Response, read: () => Response) => (r: RecordedRequest) =>
+  r.method === 'GET' ? read() : write();
 const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 const binary = (body: BodyInit, type = 'image/png', status = 200) =>
   new Response(body, { status, headers: { 'Content-Type': type } });
 // List GETs get `rows`, the /view GET gets `view`.
-const serve = (rows: unknown[], view: () => Response) =>
-  (r: RecordedRequest) => (r.path.endsWith('/view') ? view() : json({ data: rows }));
+const serve = (rows: unknown[], view: () => Response) => (r: RecordedRequest) =>
+  r.path.endsWith('/view') ? view() : json({ data: rows });
 
 defineToolScenarios(import.meta, registerAttachmentTools, {
   registration: (h) => {
@@ -34,16 +58,35 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
   },
   download_image: async (h) => {
     h.respond(serve([link, file()], () => binary(bytes, 'image/png; charset=binary')));
-    const { result, isError } = await h.call('download_attachment', { cardId: 'c1', attachmentId: 'a1' });
+    const { result, isError } = await h.call('download_attachment', {
+      cardId: 'c1',
+      attachmentId: 'a1',
+    });
     assert.equal(isError, false);
     assert.deepEqual(result.content, [
-      { type: 'text', text: JSON.stringify({ id: 'a1', name: 'shot.png', size_bytes: 4, content_type: 'image/png' }) },
+      {
+        type: 'text',
+        text: JSON.stringify({
+          id: 'a1',
+          name: 'shot.png',
+          size_bytes: 4,
+          content_type: 'image/png',
+        }),
+      },
       { type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType: 'image/png' },
     ]);
-    assert.deepEqual(calls(h), [get('/api/v1/cards/c1/attachments'), get('/api/v1/attachments/a1/view')]);
+    assert.deepEqual(calls(h), [
+      get('/api/v1/cards/c1/attachments'),
+      get('/api/v1/attachments/a1/view'),
+    ]);
   },
   download_resource: async (h) => {
-    const pdf = file({ id: 'a/3', name: 'doc.pdf', content_type: 'application/pdf', size_bytes: 3 });
+    const pdf = file({
+      id: 'a/3',
+      name: 'doc.pdf',
+      content_type: 'application/pdf',
+      size_bytes: 3,
+    });
     h.respond(serve([pdf], () => binary('PDF', 'application/pdf')));
     const { result } = await h.call('download_attachment', { cardId: 'c1', attachmentId: 'a/3' });
     const block = result.content[1];
@@ -74,9 +117,18 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
     h.respond(serve([file({ size_bytes: null })], () => binary(big)));
     await h.fail('download_attachment', args, 'attachment-too-large');
     // No Content-Length: the streamed byte count trips the cap.
-    h.respond(serve([file({ size_bytes: null })], () => binary(new ReadableStream({
-      pull(controller) { controller.enqueue(big); controller.close(); },
-    }))));
+    h.respond(
+      serve([file({ size_bytes: null })], () =>
+        binary(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(big);
+              controller.close();
+            },
+          })
+        )
+      )
+    );
     await h.fail('download_attachment', args, 'attachment-too-large');
   },
   download_errors: async (h) => {
@@ -99,37 +151,82 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
   },
   add_url_attachment: async (h) => {
     const args = { cardId: 'c1', url: 'https://example.test/docs', name: 'Docs' };
-    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [file(), link] })));
+    h.respond(
+      route(
+        () => json({ data: { id: 'a2' } }, 201),
+        () => json({ data: [file(), link] })
+      )
+    );
     assert.deepEqual(await h.ok('add_url_attachment', args), link);
     assert.deepEqual(calls(h), [
-      { method: 'POST', path: '/api/v1/cards/c1/attachments/url', body: { url: 'https://example.test/docs', name: 'Docs' } },
+      {
+        method: 'POST',
+        path: '/api/v1/cards/c1/attachments/url',
+        body: { url: 'https://example.test/docs', name: 'Docs' },
+      },
       get('/api/v1/cards/c1/attachments'),
     ]);
     // name omitted defaults to the URL; the server requires a name.
-    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [{ ...link, name: link.view_url }] })));
+    h.respond(
+      route(
+        () => json({ data: { id: 'a2' } }, 201),
+        () => json({ data: [{ ...link, name: link.view_url }] })
+      )
+    );
     await h.ok('add_url_attachment', { cardId: 'c1', url: 'https://example.test/docs' });
-    assert.deepEqual(calls(h)[0]?.body, { url: 'https://example.test/docs', name: 'https://example.test/docs' });
+    assert.deepEqual(calls(h)[0]?.body, {
+      url: 'https://example.test/docs',
+      name: 'https://example.test/docs',
+    });
     // Read back with another name or URL: not success.
     for (const wrong of [{ name: 'Other' }, { url: 'https://example.test/other' }]) {
-      h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [link] })));
+      h.respond(
+        route(
+          () => json({ data: { id: 'a2' } }, 201),
+          () => json({ data: [link] })
+        )
+      );
       await h.fail('add_url_attachment', { ...args, ...wrong }, 'readback-failed');
     }
-    h.respond(route(() => apiError(400, 'bad-request'), () => json({ data: [] })));
+    h.respond(
+      route(
+        () => apiError(400, 'bad-request'),
+        () => json({ data: [] })
+      )
+    );
     await h.fail('add_url_attachment', args, 'bad-request');
-    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => json({ data: [file()] })));
+    h.respond(
+      route(
+        () => json({ data: { id: 'a2' } }, 201),
+        () => json({ data: [file()] })
+      )
+    );
     await h.fail('add_url_attachment', args, 'readback-failed');
-    h.respond(route(() => json(null), () => json({ data: [link] })));
+    h.respond(
+      route(
+        () => json(null),
+        () => json({ data: [link] })
+      )
+    );
     await h.fail('add_url_attachment', args, 'invalid-response');
     h.respond(route(html, () => json({ data: [link] })));
     await h.fail('add_url_attachment', args, 'invalid-response');
-    h.respond(route(() => json({ data: { id: 'a2' } }, 201), () => apiError(404)));
+    h.respond(
+      route(
+        () => json({ data: { id: 'a2' } }, 201),
+        () => apiError(404)
+      )
+    );
     await h.fail('add_url_attachment', args, 'http-404');
   },
   delete_attachment: async (h) => {
     const args = { cardId: 'c1', attachmentId: 'a1' };
     let deleted = false;
     h.respond((r) => {
-      if (r.method === 'DELETE') { deleted = true; return json({ data: { id: 'a1' } }); }
+      if (r.method === 'DELETE') {
+        deleted = true;
+        return json({ data: { id: 'a1' } });
+      }
       return json({ data: deleted ? [link] : [file(), link] });
     });
     assert.deepEqual(await h.ok('delete_attachment', args), { deleted: true, id: 'a1' });
@@ -138,21 +235,45 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
       { method: 'DELETE', path: '/api/v1/attachments/a1', body: undefined },
       get('/api/v1/cards/c1/attachments'),
     ]);
-    h.respond(route(() => json({ data: { id: 'a1' } }), () => json({ data: [file()] })));
+    h.respond(
+      route(
+        () => json({ data: { id: 'a1' } }),
+        () => json({ data: [file()] })
+      )
+    );
     await h.fail('delete_attachment', args, 'delete-failed');
     // The route answers 200 {data: {id}}: null, HTML-200 or another id is invalid-response.
-    for (const bad of [() => json(null), html, () => json({ data: { id: 'a9' } }), () => new Response(null, { status: 204 })]) {
+    for (const bad of [
+      () => json(null),
+      html,
+      () => json({ data: { id: 'a9' } }),
+      () => new Response(null, { status: 204 }),
+    ]) {
       h.respond(route(bad, () => json({ data: [file()] })));
       await h.fail('delete_attachment', args, 'invalid-response');
     }
-    h.respond(route(() => apiError(403, 'forbidden'), () => json({ data: [file()] })));
+    h.respond(
+      route(
+        () => apiError(403, 'forbidden'),
+        () => json({ data: [file()] })
+      )
+    );
     await h.fail('delete_attachment', args, 'forbidden');
     h.respond(route(() => json({ data: { id: 'a1' } }), html));
     await h.fail('delete_attachment', args, 'invalid-response');
   },
   delete_attachment_not_in_card: async (h) => {
-    h.respond(route(() => json({ data: { id: 'a1' } }), () => json({ data: [link] })));
+    h.respond(
+      route(
+        () => json({ data: { id: 'a1' } }),
+        () => json({ data: [link] })
+      )
+    );
     await h.fail('delete_attachment', { cardId: 'c1', attachmentId: 'a1' }, 'not-in-card');
-    assert.deepEqual(calls(h).map((r) => r.method), ['GET'], 'no DELETE on an attachment from another card');
+    assert.deepEqual(
+      calls(h).map((r) => r.method),
+      ['GET'],
+      'no DELETE on an attachment from another card'
+    );
   },
 });

@@ -65,6 +65,17 @@ jobs:
           tests/db/moveAuthorizationConcurrency.ts
           tests/db/copyDestinationAndListDelete.ts
           tests/db/activityReadPrivacy.ts
+          tests/db/boardAiAuthorization.ts
+          server/extensions/board/mods/chat/assist/createBoardCard.ts
+          server/extensions/board/mods/chat/assist/createCardInTransaction.ts
+          server/extensions/board/mods/chat/assist/readAttachments.ts
+          server/extensions/board/mods/chat/assist/__tests__/readPrivacy.test.ts
+          server/extensions/board/mods/chat/assist/__tests__/fixtures/readPrivacy.ts
+          server/extensions/board/mods/chat/assist/searchCards.ts
+          server/extensions/board/mods/chat/assist/__tests__/searchPrivacy.test.ts
+          server/extensions/board/mods/chat/assist/__tests__/fixtures/searchPrivacy.ts
+          server/extensions/board/mods/chat/assist/__tests__/fixtures/searchPrivacyPg.ts
+          server/extensions/board/mods/specs
           tests/e2e/board-members.spec.ts
           server/mods/events/__tests__/policy.test.ts
           server/mods/events/__tests__/dispatch.test.ts
@@ -93,6 +104,21 @@ jobs:
         env:
           CHIMEDECK_TEST_SANDBOX: '1'
         run: bun run tests/db/activityReadPrivacy.ts
+      - name: Verify AI tool scope, fresh authorization and membership races on PostgreSQL
+        env:
+          CHIMEDECK_TEST_SANDBOX: '1'
+        # Fixed repository paths only; no event-provided text is interpolated into commands.
+        run: |
+          bun test server/extensions/board/mods/chat/assist/__tests__
+          bun test server/extensions/board/mods/specs/__tests__
+          bun test server/extensions/board/api/specs/__tests__/read.test.ts
+          bun test server/extensions/board/api/__tests__/specs.test.ts
+          bun run tests/db/boardAiAuthorization.ts
+          bun run server/extensions/board/mods/chat/assist/__tests__/fixtures/searchPrivacyPg.ts
+      - name: Verify comment-image privacy across AI attachment readers on PostgreSQL
+        env:
+          CHIMEDECK_TEST_SANDBOX: '1'
+        run: bun run tests/db/commentImageAccess.ts
       - name: Run board-member HTTP contracts against the real server
         shell: bash
         run: |
