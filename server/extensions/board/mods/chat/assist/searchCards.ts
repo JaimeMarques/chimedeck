@@ -1,6 +1,9 @@
 import { queryBoardSearch } from '../../../../search/mods/queryBoardSearch';
 import { resolveCardId } from '../../../../../common/ids/resolveEntityId';
 import { db } from '../../../../../common/db';
+import { canUserAccessBoard, type BoardAccessRow } from '../../../access';
+import { lockWorkspaceMembershipMutations } from '../../../../workspace/api/members/lock';
+import { lockBoardMemberMutations } from '../../../api/members/lock';
 import { s3ServerClient, s3Config } from '../../../../attachment/common/config/s3';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import type {
@@ -37,6 +40,7 @@ interface SearchCardsArguments {
 
 interface SearchCardsInput {
   boardId: string;
+  actorId: string;
   toolCall: BoardChatAssistToolCall;
   model: string;
   usage?: {
@@ -617,9 +621,52 @@ async function lookupCardById(query: string, boardId: string): Promise<CardByIdR
   return { message: `Found card by ID "${query}":\n${detail}`, contentParts };
 }
 
+async function authorizeSearch(input: SearchCardsInput): Promise<BoardChatAssistOutput | null> {
+  if (!input.actorId) {
+    return { status: 403, name: 'board-access-denied', message: 'Board access denied.' };
+  }
+  // This first read only routes the canonical workspace-before-board locks.
+  // It is not an authorization snapshot: re-read the board inside the lock.
+  const board = await searchCardsDeps
+    .db<BoardAccessRow>('boards')
+    .where({ id: input.boardId })
+    .select('workspace_id')
+    .first();
+  if (!board) {
+    return { status: 404, name: 'board-not-found', message: 'Board not found.' };
+  }
+  return searchCardsDeps.db.transaction(async (trx): Promise<BoardChatAssistOutput | null> => {
+    await lockWorkspaceMembershipMutations(trx, board.workspace_id);
+    await lockBoardMemberMutations(trx, input.boardId);
+    const currentBoard = await trx<BoardAccessRow>('boards')
+      .where({ id: input.boardId })
+      .select('id', 'workspace_id', 'visibility')
+      .forShare()
+      .first();
+    if (!currentBoard) {
+      return { status: 404, name: 'board-not-found', message: 'Board not found.' };
+    }
+    if (
+      currentBoard.workspace_id !== board.workspace_id ||
+      !(await canUserAccessBoard(input.actorId, currentBoard, trx))
+    ) {
+      return { status: 403, name: 'board-access-denied', message: 'Board access denied.' };
+    }
+    return null;
+  });
+}
+
 export async function searchCards(input: SearchCardsInput): Promise<BoardChatAssistOutput> {
   const normalized = normalizeSearchArguments(input.toolCall.function.arguments);
   if ('status' in normalized) return normalized;
+
+  // Provider latency invalidates earlier access. The short locked transaction
+  // defines the read's authorization point: prior revocations deny it; a read
+  // authorized before an overlapping revocation may finish. Release the locks
+  // before pooled search/S3 work, rather than retaining a connection while
+  // those helpers need another one. No provider/S3 await is inside the lock.
+  const denied = await authorizeSearch(input);
+  if (denied) return denied;
 
   // [why] Try direct ID lookup first — if the query looks like a card ID,
   // resolve it directly rather than relying on full-text search which can't

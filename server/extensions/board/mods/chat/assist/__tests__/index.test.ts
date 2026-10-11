@@ -7,13 +7,7 @@ let completionQueue: BoardChatAssistOutput[];
 let completionCalls: Array<{ messages: unknown[]; tools?: unknown[] }> = [];
 let createBoardCardCalls: Array<unknown> = [];
 let recentMessagesCalls: Array<{ boardId: string; limit: number }> = [];
-let writeMessageCalls: Array<{
-  boardId: string;
-  sessionId: string;
-  authorId: string | null;
-  content: string;
-  isAssistant: boolean;
-}> = [];
+let writeMessageCalls: Array<Parameters<typeof boardChatAssistDeps.writeBoardChatMessage>[0]> = [];
 
 const assistModule = await import('../index');
 const { assistBoardChat, boardChatAssistDeps } = assistModule;
@@ -33,24 +27,24 @@ beforeEach(() => {
   recentMessagesCalls = [];
   writeMessageCalls = [];
 
-  boardChatAssistDeps.fetchRecentBoardMessages = async ({ boardId, limit }) => {
+  boardChatAssistDeps.fetchRecentBoardMessages = ({ boardId, limit }) => {
     recentMessagesCalls.push({ boardId, limit });
-    return [];
+    return Promise.resolve([]);
   };
-  boardChatAssistDeps.requestBoardChatAssistCompletion = async (input) => {
+  boardChatAssistDeps.requestBoardChatAssistCompletion = (input) => {
     completionCalls.push(input);
     const next = completionQueue.shift();
     if (!next) {
-      return {
+      return Promise.resolve({
         status: 200,
         data: { model: 'gpt-test', message: 'Done.' },
-      };
+      });
     }
-    return next;
+    return Promise.resolve(next);
   };
-  boardChatAssistDeps.createBoardCard = async (input) => {
+  boardChatAssistDeps.createBoardCard = (input) => {
     createBoardCardCalls.push(input);
-    return {
+    return Promise.resolve({
       status: 200,
       data: {
         model: 'gpt-test',
@@ -69,30 +63,34 @@ beforeEach(() => {
           listName: 'Backlog',
         },
       },
-    };
+    });
   };
-  boardChatAssistDeps.searchCards = async () => ({
-    status: 200,
-    data: { model: 'gpt-test', message: 'No cards found.' },
-  });
-  boardChatAssistDeps.dispatchEvent = async () => ({
-    id: 'evt-1',
-    type: 'test',
-    board_id: null,
-    entity_id: 'entity-1',
-    actor_id: 'user-1',
-    payload: {},
-    sequence: 1n,
-    created_at: new Date(),
-  });
-  boardChatAssistDeps.writeBoardChatMessage = async (input) => {
+  boardChatAssistDeps.searchCards = () =>
+    Promise.resolve({
+      status: 200,
+      data: { model: 'gpt-test', message: 'No cards found.' },
+    });
+  boardChatAssistDeps.dispatchEvent = () =>
+    Promise.resolve({
+      id: 'evt-1',
+      type: 'test',
+      board_id: null,
+      entity_id: 'entity-1',
+      actor_id: 'user-1',
+      payload: {},
+      sequence: 1n,
+      created_at: new Date(),
+    });
+  boardChatAssistDeps.writeBoardChatMessage = (input) => {
     writeMessageCalls.push(input);
-    return {
+    return Promise.resolve({
       status: 201,
       data: {
         thread: {
           id: 'thread-1',
           board_id: input.boardId,
+          name: 'Test session',
+          created_by: 'user-1',
           created_at: '',
           updated_at: '',
           last_message_at: '',
@@ -110,7 +108,7 @@ beforeEach(() => {
         vector: null,
         queuedForEmbeddingRetry: false,
       },
-    };
+    });
   };
 });
 
@@ -129,7 +127,7 @@ describe('assistBoardChat', () => {
     expect(result.status).toBe(200);
     expect(result.data?.message).toBe('Plain text reply');
     expect(completionCalls).toHaveLength(1);
-    expect(completionCalls[0]?.tools).toHaveLength(6);
+    expect(completionCalls[0]?.tools).toHaveLength(7);
     expect(createBoardCardCalls).toHaveLength(0);
     expect(recentMessagesCalls).toEqual([{ boardId: 'board-1', limit: 3 }]);
     // [why] AI response is now persisted as a chat message with isAssistant flag

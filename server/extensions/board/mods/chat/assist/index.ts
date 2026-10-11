@@ -205,6 +205,7 @@ async function executeOneToolCall(
   if (toolName === 'search_cards') {
     const result = await deps.searchCards({
       boardId: ctx.boardId,
+      actorId: ctx.actorId,
       toolCall,
       model,
       ...maybeUsage(usage),
@@ -357,7 +358,7 @@ function broadcastProgress(
     payload: { sessionId, ...progress },
     emittedAt: Date.now(),
   });
-  broadcast({ boardId, message: payload });
+  void broadcast({ boardId, message: payload });
 }
 
 // [why] Broadcast proposed documents to all connected clients so they
