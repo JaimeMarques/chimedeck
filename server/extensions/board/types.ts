@@ -1,5 +1,6 @@
 // Shared types for the board feature.
 import type { AssistProviderConfig } from './mods/chat/providerConfig';
+import type { SpecsManifest as CanonicalSpecsManifest } from './mods/specs/manifest';
 
 export type MonetizationType = 'pre-paid' | 'pay-to-paid';
 export type BoardVisibility = 'PUBLIC' | 'PRIVATE' | 'WORKSPACE';
@@ -226,6 +227,19 @@ export type BoardChatAssistProviderConfig = AssistProviderConfig;
 export interface BoardChatAssistProviderInput {
   messages: BoardChatAssistMessage[];
   tools?: BoardChatAssistToolDefinition[];
+}
+
+export type SpecsManifest = CanonicalSpecsManifest;
+
+export interface SpecsManifestCacheEntry {
+  manifest: SpecsManifest;
+  repoPath: string;
+  cachedAtMs: number;
+}
+
+export interface PutSpecsFileBody {
+  path: string;
+  content: string;
 }
 
 export interface SpecsFileResult {

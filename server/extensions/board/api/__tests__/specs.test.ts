@@ -391,7 +391,7 @@ describe('GET /api/v1/boards/:boardId/specs/files', () => {
   });
 
   it('returns 403 with the access-denied hint when the manifest cannot be loaded', async () => {
-    specsLoadDeps.downloadRepositoryFromProjectUrl = async () => {
+    specsReadDeps.downloadRepositoryFromProjectUrl = async () => {
       throw new Error('github-repository-download-failed');
     };
     const res = await handleReadSpecsFile(

@@ -8,6 +8,11 @@
   "include": [
     "../server/extensions/board/mods/specs/__tests__/files.test.ts",
     "../server/extensions/board/mods/chat/assist/__tests__/provider.test.ts",
+    "../server/extensions/board/mods/chat/assist/__tests__/searchPrivacy.test.ts",
+    "../server/extensions/board/mods/chat/assist/__tests__/fixtures/searchPrivacy.ts",
+    "../server/extensions/board/mods/chat/assist/__tests__/fixtures/searchPrivacyPg.ts",
+    "../server/extensions/board/mods/specs/__tests__/containment.test.ts",
+    "../server/extensions/board/mods/specs/__tests__/entryPoints.fixture.ts",
     "db/boardAiAuthorization.ts",
     "db/concurrentBoardMemberAdd.ts",
     "db/addBoardMemberByEmail.ts",
