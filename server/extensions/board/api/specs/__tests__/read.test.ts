@@ -161,6 +161,7 @@ describe('GET /api/v1/boards/:boardId/specs/files — success', () => {
     specsReadDeps.readSpecsFile = async () => ({
       content: '# Hello World',
       etag: 'etag-file-content',
+      sizeBytes: Buffer.byteLength('# Hello World', 'utf8'),
     });
 
     const res = await handleReadSpecsFile(makeReadRequest('specs/overview.md'), 'board-1');

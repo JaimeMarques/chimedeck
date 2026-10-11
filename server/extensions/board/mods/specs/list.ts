@@ -1,58 +1,48 @@
-// Lists all markdown files under specs/ in a cloned repository worktree.
-// Used by the board chat assistant to discover existing documentation before
-// proposing edits or new files.
-import type { Dirent } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+// Enumerate specs only, without following repository symlinks.
+import { realpathSync } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { isMissing, withDirectory } from './filesystem';
 
 export interface ListSpecsFilesInput {
   repoPath: string;
+  includeHidden?: boolean;
 }
-
 export interface SpecsFileEntry {
   path: string;
   sizeBytes: number;
 }
 
-// [why] Recursively walk specs/ directory collecting all .md files.
-// Uses a breadth-first approach to avoid deep recursion issues.
-async function walkSpecsDir(repoPath: string): Promise<SpecsFileEntry[]> {
-  const specsRoot = join(repoPath, 'specs');
+export async function listSpecsFiles({
+  repoPath,
+  includeHidden = true,
+}: ListSpecsFilesInput): Promise<SpecsFileEntry[]> {
+  const root = realpathSync(repoPath);
   const entries: SpecsFileEntry[] = [];
-  const dirs: string[] = [specsRoot];
-
+  const dirs = ['specs'];
   while (dirs.length > 0) {
-    const currentDir = dirs.shift();
-    if (currentDir === undefined) break;
-    let items: Dirent[];
+    const current = dirs.shift();
+    if (current === undefined) break;
     try {
-      items = await readdir(currentDir, { withFileTypes: true });
-    } catch {
-      // Directory doesn't exist or is inaccessible — skip
-      continue;
-    }
-
-    for (const item of items) {
-      const fullPath = join(currentDir, item.name);
-      if (item.isDirectory()) {
-        dirs.push(fullPath);
-      } else if (item.isFile() && item.name.endsWith('.md')) {
-        try {
-          const info = await stat(fullPath);
-          entries.push({
-            path: relative(repoPath, fullPath),
-            sizeBytes: info.size,
+      await withDirectory(join(root, current), false, async (directory) => {
+        const items = await readdir(directory, { withFileTypes: true });
+        for (const item of items) {
+          if (!includeHidden && item.name.startsWith('.')) continue;
+          // lstat, not stat: a leaf swapped for a symlink cannot be followed.
+          const info = await lstat(join(directory, item.name)).catch((error: unknown) => {
+            if (isMissing(error)) return null;
+            throw error;
           });
-        } catch {
-          // File disappeared between readdir and stat — skip
+          if (!info || info.isSymbolicLink()) continue;
+          const path = `${current}/${item.name}`;
+          if (info.isDirectory()) dirs.push(path);
+          else if (info.isFile() && item.name.endsWith('.md'))
+            entries.push({ path, sizeBytes: info.size });
         }
-      }
+      });
+    } catch (error) {
+      if (!isMissing(error)) throw error;
     }
   }
-
   return entries;
-}
-
-export async function listSpecsFiles({ repoPath }: ListSpecsFilesInput): Promise<SpecsFileEntry[]> {
-  return walkSpecsDir(repoPath);
 }

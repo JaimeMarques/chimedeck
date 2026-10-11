@@ -1,4 +1,5 @@
 import { createGithubRepositoryGit } from '../githubRepository/git';
+import { normalizeSpecsFilePath, resolveSpecsFilePath } from './resolvePath';
 
 export interface CommitSpecsChangesInput {
   repoPath: string;
@@ -25,13 +26,6 @@ export interface CommitSpecsChangesResult {
 
 function normalizeChangedFiles(changedFiles: string[]): string[] {
   return [...new Set(changedFiles.map((file) => file.trim()).filter((file) => file.length > 0))];
-}
-
-function assertSpecsMarkdownPath(filePath: string): void {
-  const normalized = filePath.replace(/^\/+/, '');
-  if (!normalized.startsWith('specs/') || !normalized.endsWith('.md')) {
-    throw new Error('specs-file-must-be-markdown');
-  }
 }
 
 function buildCommitBody({
@@ -66,13 +60,14 @@ export async function commitSpecsChanges({
   botAlias,
   pushToken = null,
 }: CommitSpecsChangesInput): Promise<CommitSpecsChangesResult> {
-  const files = normalizeChangedFiles(changedFiles);
+  const files = [...new Set(normalizeChangedFiles(changedFiles).map(normalizeSpecsFilePath))];
   if (files.length === 0) {
     throw new Error('missing-changed-files');
   }
 
   for (const file of files) {
-    assertSpecsMarkdownPath(file);
+    const resolved = resolveSpecsFilePath({ repoPath, filePath: file });
+    if (!resolved.ok) throw new Error(resolved.reason);
   }
 
   const commitBody = buildCommitBody({ message, actorId, boardId, botAlias, changedFiles: files });

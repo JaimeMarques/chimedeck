@@ -2,7 +2,8 @@
 // Used by the board chat assistant to remove obsolete documentation.
 // The file must be under specs/ and end with .md.
 import { unlink } from 'node:fs/promises';
-import { resolveSpecsFilePath } from './resolvePath';
+import { normalizeSpecsFilePath, resolveSpecsFilePath } from './resolvePath';
+import { withFileParent } from './filesystem';
 
 export interface DeleteSpecsFileInput {
   repoPath: string;
@@ -15,11 +16,6 @@ export interface DeleteSpecsFileResult {
   deleted: boolean;
 }
 
-function isAllowedSpecsMarkdownPath(filePath: string): boolean {
-  const normalized = filePath.replace(/^\/+/, '');
-  return normalized.startsWith('specs/') && normalized.endsWith('.md');
-}
-
 export async function deleteSpecsFile({
   repoPath,
   filePath,
@@ -29,13 +25,10 @@ export async function deleteSpecsFile({
     throw new Error(resolved.reason);
   }
 
-  const relativePath = filePath.replace(/^\/+/, '');
-  if (!isAllowedSpecsMarkdownPath(relativePath)) {
-    throw new Error('specs-file-must-be-markdown');
-  }
+  const relativePath = normalizeSpecsFilePath(filePath);
 
   try {
-    await unlink(resolved.absolutePath);
+    await withFileParent(resolved.absolutePath, false, (target) => unlink(target));
     return {
       path: relativePath,
       absolutePath: resolved.absolutePath,

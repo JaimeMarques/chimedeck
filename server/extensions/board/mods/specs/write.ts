@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { dirname } from 'node:path';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
-import { readSpecsFile } from './read';
-import { resolveSpecsFilePath } from './resolvePath';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { readSpecsHandle } from './read';
+import { isMissing, withFileParent } from './filesystem';
+import { normalizeSpecsFilePath, resolveSpecsFilePath } from './resolvePath';
 
 export interface WriteSpecsFileInput {
   repoPath: string;
@@ -18,11 +19,6 @@ export interface WriteSpecsFileResult {
   sha: string;
   sizeBytes: number;
   created: boolean;
-}
-
-function isAllowedSpecsMarkdownPath(filePath: string): boolean {
-  const normalized = filePath.replace(/^\/+/, '');
-  return normalized.startsWith('specs/') && normalized.endsWith('.md');
 }
 
 function normalizeEntityTag(value: string): string {
@@ -53,33 +49,38 @@ export async function writeSpecsFile({
     throw new Error(resolved.reason);
   }
 
-  const relativePath = filePath.replace(/^\/+/, '');
-  if (!isAllowedSpecsMarkdownPath(relativePath)) {
-    throw new Error('specs-file-must-be-markdown');
-  }
-
-  let created = true;
-  try {
-    await stat(resolved.absolutePath);
-    created = false;
-  } catch {
-    created = true;
-  }
-
-  if (!created) {
-    const current = await readSpecsFile({ absolutePath: resolved.absolutePath });
-    const matches = parseIfMatchHeader(ifMatch);
-    if (!matches) {
-      throw new Error('missing-specs-file-precondition');
-    }
-    if (!matches.has('*') && !matches.has(current.etag)) {
-      throw new Error('stale-specs-file-precondition');
-    }
-  }
+  const relativePath = normalizeSpecsFilePath(filePath);
 
   const buffer = Buffer.from(content, 'utf8');
-  await mkdir(dirname(resolved.absolutePath), { recursive: true });
-  await writeFile(resolved.absolutePath, buffer);
+  const created = await withFileParent(resolved.absolutePath, true, async (target) => {
+    let handle;
+    let created = false;
+    try {
+      handle = await open(target, constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+      handle = await open(
+        target,
+        constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o666
+      );
+      created = true;
+    }
+    try {
+      if (!created) {
+        const current = await readSpecsHandle(handle);
+        const matches = parseIfMatchHeader(ifMatch);
+        if (!matches) throw new Error('missing-specs-file-precondition');
+        if (!matches.has('*') && !matches.has(current.etag))
+          throw new Error('stale-specs-file-precondition');
+      }
+      await handle.truncate(0);
+      await handle.writeFile(buffer);
+      return created;
+    } finally {
+      await handle.close();
+    }
+  });
 
   const sha = computeSha(buffer);
   return {

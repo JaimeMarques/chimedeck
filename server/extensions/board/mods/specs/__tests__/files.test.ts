@@ -11,6 +11,7 @@ let repoPath: string;
 
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'chimedeck-specs-files-'));
+  await mkdir(join(repoPath, 'specs'));
 });
 
 afterEach(async () => {
@@ -38,7 +39,7 @@ describe('specs file helpers', () => {
   });
 
   it('reads UTF-8 content with byte size and a content-derived ETag', async () => {
-    const absolutePath = join(repoPath, 'guide.md');
+    const absolutePath = join(repoPath, 'specs', 'guide.md');
     const content = '# Olá 🌍\n';
     await writeFile(absolutePath, content);
 
@@ -54,7 +55,7 @@ describe('specs file helpers', () => {
   });
 
   it('accepts the file size limit and rejects files above it', async () => {
-    const absolutePath = join(repoPath, 'large.md');
+    const absolutePath = join(repoPath, 'specs', 'large.md');
     await writeFile(absolutePath, Buffer.alloc(MAX_FILE_SIZE_BYTES, 'x'));
     expect((await readSpecsFile({ absolutePath })).sizeBytes).toBe(MAX_FILE_SIZE_BYTES);
 
@@ -66,7 +67,7 @@ describe('specs file helpers', () => {
 
   it('rejects reads of missing files', async () => {
     const error: unknown = await readSpecsFile({
-      absolutePath: join(repoPath, 'missing.md'),
+      absolutePath: join(repoPath, 'specs', 'missing.md'),
     }).catch((error: unknown) => error);
     expect(error).toBeInstanceOf(Error);
   });

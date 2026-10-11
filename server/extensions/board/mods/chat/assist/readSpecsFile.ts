@@ -1,7 +1,7 @@
 // readSpecsFile — tool definition and handler for reading a specs markdown file
 // from the board's linked GitHub repository. Executes immediately (not a proposal).
 import { readSpecsFile } from '../../specs/read';
-import { resolveSpecsFilePath } from '../../specs/resolvePath';
+import { normalizeSpecsFilePath, resolveSpecsFilePath } from '../../specs/resolvePath';
 import { downloadRepositoryFromProjectUrl } from '../../githubRepository/downloadRepositoryFromProjectUrl';
 import type {
   BoardChatAssistToolDefinition,
@@ -108,8 +108,10 @@ export async function readSpecsFileTool({
     };
   }
 
-  const normalizedPath = normalized.path.replace(/^\/+/, '');
-  if (!normalizedPath.startsWith('specs/') || !normalizedPath.endsWith('.md')) {
+  let normalizedPath: string;
+  try {
+    normalizedPath = normalizeSpecsFilePath(normalized.path);
+  } catch {
     return {
       status: 422,
       name: 'invalid-specs-path',
