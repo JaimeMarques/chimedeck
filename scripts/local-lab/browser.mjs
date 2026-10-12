@@ -32,9 +32,25 @@ try {
   await page.locator('#login-password').fill(credentials.password);
   await page.getByRole('button', { name: /sign in/i }).click();
   await page.waitForURL('**/workspaces', { timeout: 15000 });
+  assert.equal(credentials.demoCards.length, 10);
+  await page.goto(`${credentials.frontendUrl}/b/labboard`);
+  for (const card of credentials.demoCards) {
+    const title = page.getByText(card.title, { exact: true });
+    await title.waitFor({ timeout: 15000 });
+    assert.equal(await title.count(), 1, 'One visible board card per seeded identity');
+    assert.ok(await title.isVisible());
+  }
   await page.goto(`${credentials.frontendUrl}/b/labboard?card=labcard1`);
   await page.getByText('Lab card', { exact: true }).last().waitFor({ timeout: 15000 });
   await page.getByText('Complete UTF-8 description', { exact: false }).waitFor({ timeout: 15000 });
+  await page.goto(`${credentials.frontendUrl}/b/labboard?card=labcar10`);
+  await page
+    .getByText('Lab demo: multilingual long text', { exact: true })
+    .last()
+    .waitFor({ timeout: 15000 });
+  await page
+    .getByText('END OF COMPLETE SYNTHETIC DESCRIPTION', { exact: false })
+    .waitFor({ timeout: 15000 });
   assert.equal(errors.length, 0, 'Local browser runtime error');
   await page.screenshot({ path: resolve(state, 'browser-smoke.png'), fullPage: true });
   await page.goto(`${credentials.frontendUrl}/developer/mcp`);
@@ -48,6 +64,8 @@ try {
       login: 'real password form',
       board: 'real private board',
       card: 'full UTF-8 description',
+      persistentDemoCards: 10,
+      longDescription: 'multilingual end marker rendered in opened card',
       docs: 'compact results and batch checklist reference',
       pageErrors: errors.length,
     }),

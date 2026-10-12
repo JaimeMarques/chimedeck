@@ -7,6 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { demoCards } from './demoFixtures';
 
 const state = Bun.env.LAB_STATE;
 if (!state) throw new Error('Explicit private lab state required');
@@ -25,6 +26,16 @@ const credentials = z
     workspaceId: z.string(),
     cardId: z.string(),
     listId: z.string(),
+    demoCards: z
+      .array(
+        z.object({
+          id: z.string(),
+          shortId: z.string(),
+          title: z.string(),
+          description: z.string(),
+        })
+      )
+      .length(10),
   })
   .parse(JSON.parse(await readFile(resolve(state, 'credentials.json'), 'utf8')));
 const identity = z
@@ -99,9 +110,52 @@ await hosted.connect(transport);
 clients.push(hosted);
 const call = async (client: Client, name: string, args: Record<string, unknown> = {}) =>
   parseResult((await client.callTool({ name, arguments: args })) as CallToolResult);
+const cardRows = z.object({ data: z.array(z.looseObject({ id: z.string(), title: z.string() })) });
+async function verifyDemoReads() {
+  assert.deepEqual(
+    credentials.demoCards.map(({ shortId, title, description }) => ({
+      shortId,
+      title,
+      description,
+    })),
+    demoCards.map(({ shortId, title, description }) => ({ shortId, title, description }))
+  );
+  for (const client of [admin, hosted]) {
+    for (const [tool, args] of [
+      ['list_cards', { listId: credentials.listId }],
+      ['search_cards', { workspaceId: credentials.workspaceId, query: 'Lab' }],
+    ] as const) {
+      for (const options of [{}, { includeDescription: true }, { view: 'full' }]) {
+        const rows = cardRows.parse(await call(client, tool, { ...args, ...options })).data;
+        assert.equal(rows.length, 10, `${tool}: persistent demo count`);
+        assert.deepEqual(
+          rows.map((row) => row.id).sort(),
+          credentials.demoCards.map((row) => row.id).sort()
+        );
+        for (const fixture of credentials.demoCards) {
+          const row = rows.find((value) => value.id === fixture.id);
+          assert.equal(row?.title, fixture.title);
+          if ('includeDescription' in options || 'view' in options)
+            assert.equal(row.description, fixture.description);
+          else assert.ok(!('description' in row), `${tool}: compact default omits description`);
+        }
+      }
+    }
+    for (const fixture of credentials.demoCards) {
+      for (const options of [{}, { view: 'full' }]) {
+        const card = z
+          .object({ data: z.looseObject({ id: z.string(), description: z.string() }) })
+          .parse(await call(client, 'get_card', { cardId: fixture.id, ...options })).data;
+        assert.equal(card.id, fixture.id);
+        assert.equal(card.description, fixture.description);
+      }
+    }
+  }
+}
 let createdCard: string | undefined;
 let createdBoard: string | undefined;
 try {
+  await verifyDemoReads();
   assert.equal((await call(admin, 'get_me')).id, credentials.admin.id);
   const [stdioTools, hostedTools] = await Promise.all([admin.listTools(), hosted.listTools()]);
   assert.equal(stdioTools.tools.length, 61);
@@ -438,6 +492,7 @@ try {
   createdCard = undefined;
   assert.ok((await rest(`/api/v1/boards/${createdBoard}`, 'DELETE', { confirm: true })).ok);
   createdBoard = undefined;
+  await verifyDemoReads();
   await writeFile(
     resolve(state, 'smoke-result.json'),
     JSON.stringify({
@@ -447,6 +502,9 @@ try {
       permissions: ['ADMIN', 'MEMBER', 'restricted GUEST'],
       upload: 'LocalStack real bytes',
       cleanup: 'roundtrip card deleted',
+      persistentDemoCards: 10,
+      demoReads:
+        'both transports: exact IDs/full texts, compact list/search omission, explicit description/full preservation before and after CRUD cleanup',
     }),
     { mode: 0o600 }
   );

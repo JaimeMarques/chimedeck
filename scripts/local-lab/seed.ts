@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { generateApiToken } from '../../server/extensions/apiToken/mods/generate';
+import { demoCards } from './demoFixtures';
 
 const url = new URL(Bun.env.DATABASE_URL ?? '');
 const marker = Bun.env.LAB_MARKER;
@@ -41,6 +42,10 @@ try {
     checklistId = randomUUID();
   const admin = users[0];
   if (!admin) throw new Error('Missing synthetic admin');
+  const seededCards = demoCards.map((fixture, index) => ({
+    ...fixture,
+    id: index === 0 ? cardId : randomUUID(),
+  }));
   const credentials: Record<string, unknown> = {
     marker,
     password,
@@ -49,6 +54,7 @@ try {
     listId,
     cardId,
     checklistId,
+    demoCards: seededCards,
     apiUrl: 'http://127.0.0.1:33000',
     frontendUrl: 'http://127.0.0.1:35173',
   };
@@ -82,15 +88,30 @@ try {
       }))
     );
     await trx('lists').insert({ id: listId, board_id: boardId, title: 'Lab Todo', position: 'a' });
-    await trx('cards').insert({
-      id: cardId,
-      list_id: listId,
-      title: 'Lab card',
-      description: 'Complete UTF-8 description — العربية 🐦',
-      position: 'a',
-      short_id: 'labcard1',
-      created_by: admin.id,
+    await trx('cards').insert(
+      seededCards.map((fixture, index) => ({
+        id: fixture.id,
+        list_id: listId,
+        title: fixture.title,
+        description: fixture.description,
+        position: String.fromCharCode(97 + index),
+        short_id: fixture.shortId,
+        created_by: admin.id,
+        due_date: fixture.dueDate ?? null,
+        amount: fixture.amount ?? null,
+        currency: fixture.currency ?? null,
+      }))
+    );
+    const labelId = randomUUID();
+    await trx('labels').insert({
+      id: labelId,
+      board_id: boardId,
+      name: 'Synthetic demo',
+      color: '#2563EB',
     });
+    await trx('card_labels').insert(
+      seededCards.slice(1, 4).map((fixture) => ({ card_id: fixture.id, label_id: labelId }))
+    );
     await trx('checklists').insert({
       id: checklistId,
       card_id: cardId,
