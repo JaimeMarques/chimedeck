@@ -8,7 +8,7 @@ const server = {
   registerTool: (
     name: string,
     config: { description: string; inputSchema: unknown },
-    _handler: unknown,
+    _handler: unknown
   ) => {
     toolName = name;
     toolDescription = config.description;
@@ -29,7 +29,7 @@ describe('registerEditDescription', () => {
     registerEditDescription(server as never, 'token-1');
 
     expect(toolName).toBe('edit_card_description');
-    expect(toolDescription).toBe("Update the description of an existing card.");
+    expect(toolDescription).toContain('sanitized');
     expect(handlerRegistered).toBeTrue();
   });
 });

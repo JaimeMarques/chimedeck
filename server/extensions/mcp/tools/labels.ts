@@ -1,11 +1,18 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  acknowledgedCreate,
+  children,
+  fields,
+  identity,
+  relationFields,
+  type Row,
+} from './results';
+import {
   ToolError,
   apiPath,
   dataOf,
   deleteNoContent,
-  expectFields,
   findRow,
   inParent,
   readCard,
@@ -25,11 +32,15 @@ const written = dataOf(z.looseObject({}));
 // Card read-back that must show the label attached (or detached).
 async function cardWithLabel(id: string, labelId: string, attached: boolean, token: string) {
   const card = await readCard(id, token);
-  const labels = z.array(rowWithId).safeParse(card.includes?.labels);
-  if (!labels.success) throw new ToolError('invalid-response');
-  if (labels.data.some((label) => label.id === labelId) !== attached)
+  const labels = children(card, 'labels');
+  if (labels.some((label) => identity(String(label.id)) === identity(labelId)) !== attached)
     throw new ToolError('readback-failed');
-  return card;
+  return {
+    id: card.data.id,
+    verified: true,
+    verified_fields: ['labels'],
+    observed: { child_id: labelId, present: attached },
+  };
 }
 
 export function registerLabelTools(server: McpServer, token: string): void {
@@ -45,7 +56,9 @@ export function registerLabelTools(server: McpServer, token: string): void {
   server.registerTool(
     'add_card_label',
     {
-      description: 'Add an existing board label to a card. Returns the card with its includes.',
+      description:
+        'Add an existing board label to a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (labels) and observed {child_id, present: true}, not a full card or includes.',
       inputSchema: {
         cardId,
         labelId: z.string().min(1).describe('ID of the label (see list_labels)'),
@@ -67,7 +80,9 @@ export function registerLabelTools(server: McpServer, token: string): void {
   server.registerTool(
     'remove_card_label',
     {
-      description: 'Remove a label from a card. Returns the card with its includes.',
+      description:
+        'Remove a label from a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (labels) and observed {child_id, present: false}, not a full card or includes.',
       inputSchema: { cardId, labelId: z.string().min(1).describe('ID of the label') },
     },
     (args) =>
@@ -89,17 +104,25 @@ export function registerLabelTools(server: McpServer, token: string): void {
     },
     (args) =>
       runTool(token, async () => {
-        const created = await request({
-          method: 'POST',
-          path: apiPath`/api/v1/boards/${args.boardId}/labels`,
-          body: { name: args.name, color: args.color },
-          token,
-          schema: dataOf(rowWithId),
-        });
-        const row = findRow(await boardLabels(args.boardId), 'id', created.data.id);
-        // Stored as name.trim() and the color verbatim (board/api/labels.ts).
-        expectFields(row, { name: args.name.trim(), color: args.color });
-        return row;
+        return acknowledgedCreate(
+          () =>
+            request({
+              method: 'POST',
+              path: apiPath`/api/v1/boards/${args.boardId}/labels`,
+              body: { name: args.name, color: args.color },
+              token,
+              schema: z.unknown(),
+            }),
+          async (ack) => {
+            const row = findRow(await boardLabels(args.boardId), 'id', String(ack.id));
+            return {
+              row,
+              selected: true,
+              extra: { label: fields(row, relationFields.labels ?? new Set()) as Row },
+            };
+          },
+          { name: args.name.trim(), color: args.color }
+        );
       })
   );
 

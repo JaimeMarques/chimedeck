@@ -47,13 +47,22 @@ async function writeErrors(h: Harness, name: string, args: Record<string, unknow
     )
   );
   await h.fail(name, args, 'api-error');
-  for (const bad of [() => json(null), html, () => json({ data: { id: 'x' } })]) {
+  const creation = name === 'create_checklist' || name === 'add_checklist_item';
+  const failedObservation = async (code: string, acknowledged: boolean) => {
+    if (!creation) return h.fail(name, args, code);
+    const result = (await h.ok(name, args)) as Record<string, unknown>;
+    assert.equal(result.verified, false);
+    assert.equal(result.request_outcome, acknowledged ? 'succeeded' : 'unknown');
+    assert.ok(result.verification_error);
+    if (acknowledged) assert.ok(result.id);
+  };
+  for (const bad of [() => json(null), html]) {
     h.respond(writeThen(bad, () => json(card)));
-    await h.fail(name, args, 'invalid-response');
+    await failedObservation('invalid-response', false);
   }
   for (const bad of [() => json(null), html, () => json({ data: card.data, includes: {} })]) {
     h.respond(writeThen(() => json({ data: row }, 201), bad));
-    await h.fail(name, args, 'invalid-response');
+    await failedObservation('invalid-response', true);
   }
   h.respond(
     writeThen(
@@ -61,14 +70,14 @@ async function writeErrors(h: Harness, name: string, args: Record<string, unknow
       () => apiError(403, 'forbidden')
     )
   );
-  await h.fail(name, args, 'forbidden');
+  await failedObservation('forbidden', true);
   h.respond(
     writeThen(
       () => json({ data: row }, 201),
       () => json(emptyCard)
     )
   );
-  await h.fail(name, args, 'readback-failed');
+  await failedObservation('readback-failed', true);
 }
 
 // Deletes read the card first (scope), DELETE by id, then read the card again.
@@ -89,7 +98,12 @@ async function deleteContract(
     }
     return deleted ? json(emptyCard) : before();
   });
-  assert.deepEqual(await h.ok(name, args), { deleted: true, id });
+  assert.deepEqual(await h.ok(name, args), {
+    deleted: true,
+    verified: true,
+    id,
+    card_id: 'card-1',
+  });
   assert.deepEqual(calls(h), [
     ['GET', '/api/v1/cards/card-1', undefined],
     ['DELETE', path, undefined],
@@ -129,6 +143,18 @@ async function notInCard(h: Harness, name: string, args: Record<string, unknown>
 }
 
 defineToolScenarios(import.meta, registerChecklistTools, {
+  wrong_acknowledged_target: async (h) => {
+    h.respond(() => json({ data: { ...it2, checked: true } }));
+    await h.fail('set_checklist_item', { itemId: 'it1', checked: true }, 'invalid-response');
+    assert.equal(h.requests.length, 1, 'wrong item ACK must not select another readback target');
+    h.respond(() => json({ data: { id: 'cl2', card_id: 'card-1', title: 'Todo' } }));
+    await h.fail('rename_checklist', { checklistId: 'cl1', title: 'Todo' }, 'invalid-response');
+    assert.equal(
+      h.requests.length,
+      1,
+      'wrong checklist ACK must not select another readback target'
+    );
+  },
   registration: (h) => {
     expectAnnotations(h, ['delete_checklist', 'delete_checklist_item'], { destructiveHint: true });
     expectAnnotations(
@@ -146,13 +172,17 @@ defineToolScenarios(import.meta, registerChecklistTools, {
     );
     // Read-back uses the response's card_id (UUID), not the short id the caller passed.
     assert.deepEqual(await h.ok('create_checklist', { cardId: 'short/1', title: 'Todo' }), {
+      id: 'cl1',
+      request_outcome: 'succeeded',
+      verified: true,
+      verified_fields: ['title'],
+      observed: {},
       checklist: cl1,
-      items: [it1],
-      card,
+      card_id: 'card-1',
     });
     assert.deepEqual(calls(h), [
       ['POST', '/api/v1/cards/short%2F1/checklists', { title: 'Todo' }],
-      ['GET', '/api/v1/cards/card-1', undefined],
+      ['GET', '/api/v1/cards/short%2F1', undefined],
     ]);
     await writeErrors(h, 'create_checklist', { cardId: 'card-1', title: 'Todo' }, cl1);
     h.respond(
@@ -161,7 +191,12 @@ defineToolScenarios(import.meta, registerChecklistTools, {
         () => json(card)
       )
     );
-    await h.fail('create_checklist', { cardId: 'card-1', title: 'Other' }, 'readback-failed');
+    assert.deepEqual(await h.ok('create_checklist', { cardId: 'card-1', title: 'Other' }), {
+      id: 'cl1',
+      request_outcome: 'succeeded',
+      verified: false,
+      verification_error: { code: 'readback-mismatch' },
+    });
   },
   add_checklist_item: async (h) => {
     h.respond(
@@ -171,8 +206,13 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       )
     );
     assert.deepEqual(await h.ok('add_checklist_item', { checklistId: 'cl1', title: 'one' }), {
+      id: 'it1',
+      request_outcome: 'succeeded',
+      verified: true,
+      verified_fields: ['title'],
+      observed: {},
       item: it1,
-      card,
+      card_id: 'card-1',
     });
     assert.deepEqual(calls(h), [
       ['POST', '/api/v1/checklists/cl1/items', { title: 'one' }],
@@ -185,7 +225,12 @@ defineToolScenarios(import.meta, registerChecklistTools, {
         () => json(card)
       )
     );
-    await h.fail('add_checklist_item', { checklistId: 'cl1', title: 'two' }, 'readback-failed');
+    assert.deepEqual(await h.ok('add_checklist_item', { checklistId: 'cl1', title: 'two' }), {
+      id: 'it1',
+      request_outcome: 'succeeded',
+      verified: false,
+      verification_error: { code: 'readback-mismatch' },
+    });
   },
   set_checklist_item: async (h) => {
     const bodies: Array<[Record<string, unknown>, unknown]> = [
@@ -210,7 +255,11 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       );
       assert.deepEqual(await h.ok('set_checklist_item', { itemId: 'it1', ...extra }), {
         item: { ...it1, ...extra },
-        card: after,
+        card_id: 'card-1',
+        id: 'it1',
+        verified: true,
+        verified_fields: Object.keys(extra),
+        observed: {},
       });
       assert.deepEqual(calls(h), [
         ['PATCH', '/api/v1/checklist-items/it1', body],
@@ -235,7 +284,7 @@ defineToolScenarios(import.meta, registerChecklistTools, {
           () => json(card)
         )
       );
-      await h.fail('set_checklist_item', { itemId: 'it1', ...wrong }, 'readback-failed');
+      await h.fail('set_checklist_item', { itemId: 'it1', ...wrong }, 'readback-mismatch');
     }
     // Trimmed as the server stores it.
     h.respond(
@@ -254,9 +303,12 @@ defineToolScenarios(import.meta, registerChecklistTools, {
       )
     );
     assert.deepEqual(await h.ok('rename_checklist', { checklistId: 'cl1', title: 'Todo' }), {
+      id: 'cl1',
+      verified: true,
+      verified_fields: ['title'],
+      observed: {},
       checklist: cl1,
-      items: [it1],
-      card,
+      card_id: 'card-1',
     });
     assert.deepEqual(calls(h), [
       ['PATCH', '/api/v1/checklists/cl1', { title: 'Todo' }],
@@ -269,7 +321,7 @@ defineToolScenarios(import.meta, registerChecklistTools, {
         () => json(card)
       )
     );
-    await h.fail('rename_checklist', { checklistId: 'cl1', title: 'Renamed' }, 'readback-failed');
+    await h.fail('rename_checklist', { checklistId: 'cl1', title: 'Renamed' }, 'readback-mismatch');
   },
   delete_checklist: (h) =>
     deleteContract(

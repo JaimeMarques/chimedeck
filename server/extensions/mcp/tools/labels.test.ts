@@ -18,6 +18,21 @@ const card = (labels: unknown[]) => ({
 const calls = (h: Harness) => h.requests.map(({ method, path, body }) => ({ method, path, body }));
 const empty = () => new Response(null, { status: 204 });
 
+async function creationFailure(
+  h: Harness,
+  args: Record<string, unknown>,
+  code: string,
+  id?: string
+) {
+  const result = await h.ok('create_label', args);
+  assert.deepEqual(result, {
+    ...(id === undefined ? {} : { id }),
+    request_outcome: id === undefined ? 'unknown' : 'succeeded',
+    verified: false,
+    verification_error: { code },
+  });
+}
+
 // Write-then-read tools: the write fails, null/HTML-200 answers, the read-back fails.
 async function writeErrors(h: Harness, name: string, args: Record<string, unknown>, write: string) {
   const isWrite = (r: RecordedRequest) => r.method === write;
@@ -29,13 +44,17 @@ async function writeErrors(h: Harness, name: string, args: Record<string, unknow
   h.respond(() => apiError(400, 'bad request'));
   await h.fail(name, args, 'api-error');
   h.respond(() => json(null));
-  await h.fail(name, args, 'invalid-response');
+  if (name === 'create_label') await creationFailure(h, args, 'invalid-response');
+  else await h.fail(name, args, 'invalid-response');
   h.respond(html);
-  await h.fail(name, args, 'invalid-response');
+  if (name === 'create_label') await creationFailure(h, args, 'invalid-response');
+  else await h.fail(name, args, 'invalid-response');
   h.respond((r) => (isWrite(r) ? done() : apiError(500)));
-  await h.fail(name, args, 'http-500');
+  if (name === 'create_label') await creationFailure(h, args, 'http-500', 'x');
+  else await h.fail(name, args, 'http-500');
   h.respond((r) => (isWrite(r) ? done() : html()));
-  await h.fail(name, args, 'invalid-response');
+  if (name === 'create_label') await creationFailure(h, args, 'invalid-response', 'x');
+  else await h.fail(name, args, 'invalid-response');
 }
 
 defineToolScenarios(import.meta, registerLabelTools, {
@@ -50,7 +69,12 @@ defineToolScenarios(import.meta, registerLabelTools, {
     h.respond((r) =>
       r.method === 'POST' ? json({ data: { card_id: 'c1', label_id: 'lb1' } }, 201) : json(after)
     );
-    assert.deepEqual(await h.ok('add_card_label', { cardId: 'c/1', labelId: 'lb1' }), after);
+    assert.deepEqual(await h.ok('add_card_label', { cardId: 'c/1', labelId: 'lb1' }), {
+      id: 'c1',
+      verified: true,
+      verified_fields: ['labels'],
+      observed: { child_id: 'lb1', present: true },
+    });
     assert.deepEqual(calls(h), [
       { method: 'POST', path: '/api/v1/cards/c%2F1/labels', body: { labelId: 'lb1' } },
       { method: 'GET', path: '/api/v1/cards/c%2F1', body: undefined },
@@ -67,7 +91,12 @@ defineToolScenarios(import.meta, registerLabelTools, {
   remove_card_label: async (h) => {
     const after = card([]);
     h.respond((r) => (r.method === 'DELETE' ? empty() : json(after)));
-    assert.deepEqual(await h.ok('remove_card_label', { cardId: 'c1', labelId: 'lb 1' }), after);
+    assert.deepEqual(await h.ok('remove_card_label', { cardId: 'c1', labelId: 'lb 1' }), {
+      id: 'c1',
+      verified: true,
+      verified_fields: ['labels'],
+      observed: { child_id: 'lb 1', present: false },
+    });
     assert.deepEqual(calls(h), [
       { method: 'DELETE', path: '/api/v1/cards/c1/labels/lb%201', body: undefined },
       { method: 'GET', path: '/api/v1/cards/c1', body: undefined },
@@ -83,26 +112,41 @@ defineToolScenarios(import.meta, registerLabelTools, {
         : json({ data: [{ id: 'other' }, { ...label, extra: 1 }] })
     );
     assert.deepEqual(await h.ok('create_label', { boardId: 'b1', name: 'Bug', color: '#f00' }), {
-      ...label,
-      extra: 1,
+      id: label.id,
+      request_outcome: 'succeeded',
+      verified: true,
+      verified_fields: ['name', 'color'],
+      observed: {},
+      label,
     });
     assert.deepEqual(calls(h), [
       { method: 'POST', path: '/api/v1/boards/b1/labels', body: { name: 'Bug', color: '#f00' } },
       { method: 'GET', path: '/api/v1/boards/b1/labels', body: undefined },
     ]);
     h.respond((r) => (r.method === 'POST' ? json({ data: label }) : json({ data: [] })));
-    await h.fail('create_label', { boardId: 'b1', name: 'Bug', color: '#f00' }, 'readback-failed');
+    await creationFailure(
+      h,
+      { boardId: 'b1', name: 'Bug', color: '#f00' },
+      'readback-failed',
+      label.id
+    );
     // Name compared trimmed, color exactly.
     h.respond((r) => (r.method === 'POST' ? json({ data: label }, 201) : json({ data: [label] })));
     await h.ok('create_label', { boardId: 'b1', name: ' Bug ', color: '#f00' });
-    await h.fail(
-      'create_label',
+    await creationFailure(
+      h,
       { boardId: 'b1', name: 'Feature', color: '#f00' },
-      'readback-failed'
+      'readback-mismatch',
+      label.id
     );
-    await h.fail('create_label', { boardId: 'b1', name: 'Bug', color: '#0f0' }, 'readback-failed');
+    await creationFailure(
+      h,
+      { boardId: 'b1', name: 'Bug', color: '#0f0' },
+      'readback-mismatch',
+      label.id
+    );
     h.respond(() => json({ data: {} }));
-    await h.fail('create_label', { boardId: 'b1', name: 'Bug', color: '#f00' }, 'invalid-response');
+    await creationFailure(h, { boardId: 'b1', name: 'Bug', color: '#f00' }, 'invalid-response');
     await writeErrors(h, 'create_label', { boardId: 'b1', name: 'Bug', color: '#f00' }, 'POST');
     // Empty name is rejected before any request.
     h.respond(() => json({ data: label }));

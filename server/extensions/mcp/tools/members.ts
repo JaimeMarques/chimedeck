@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { children, identity } from './results';
 import {
   ToolError,
   apiPath,
@@ -8,7 +9,6 @@ import {
   findRow,
   readCard,
   request,
-  rowWithId,
   rowsOf,
   runTool,
 } from './toolSupport';
@@ -27,11 +27,15 @@ const role = z.enum(['admin', 'member']);
 // Card read-back that must show the user assigned (or unassigned).
 async function cardWithMember(id: string, userId: string, assigned: boolean, token: string) {
   const card = await readCard(id, token);
-  const members = z.array(rowWithId).safeParse(card.includes?.members);
-  if (!members.success) throw new ToolError('invalid-response');
-  if (members.data.some((member) => member.id === userId) !== assigned)
+  const members = children(card, 'members');
+  if (members.some((member) => identity(String(member.id)) === identity(userId)) !== assigned)
     throw new ToolError('readback-failed');
-  return card;
+  return {
+    id: card.data.id,
+    verified: true,
+    verified_fields: ['members'],
+    observed: { child_id: userId, present: assigned },
+  };
 }
 
 export function registerMemberTools(server: McpServer, token: string): void {
@@ -50,7 +54,9 @@ export function registerMemberTools(server: McpServer, token: string): void {
   server.registerTool(
     'add_card_member',
     {
-      description: 'Assign a board member to a card. Returns the card with its includes.',
+      description:
+        'Assign a board member to a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (members) and observed {child_id, present: true}, not a full card or includes.',
       inputSchema: {
         cardId,
         userId: z.string().min(1).describe('User ID (see list_board_members)'),
@@ -72,7 +78,9 @@ export function registerMemberTools(server: McpServer, token: string): void {
   server.registerTool(
     'remove_card_member',
     {
-      description: 'Unassign a member from a card. Returns the card with its includes.',
+      description:
+        'Unassign a member from a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (members) and observed {child_id, present: false}, not a full card or includes.',
       inputSchema: { cardId, userId: z.string().min(1).describe('User ID') },
     },
     (args) =>

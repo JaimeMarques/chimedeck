@@ -3,12 +3,7 @@
 import { useNavigate } from 'react-router-dom';
 import config from '~/config';
 import Button from '~/common/components/Button';
-import {
-  CommandLineIcon,
-  KeyIcon,
-  BoltIcon,
-  ServerStackIcon,
-} from '@heroicons/react/24/outline';
+import { CommandLineIcon, KeyIcon, BoltIcon, ServerStackIcon } from '@heroicons/react/24/outline';
 import {
   Section,
   H2,
@@ -51,61 +46,28 @@ const McpDocsPage = () => {
             <NavItem href="#tool-create-board" label="create_board" />
             <NavItem href="#tool-create-list" label="create_list" />
             <NavItem href="#tool-create-card" label="create_card" />
-            <NavItem
-              href="#tool-edit-card-description"
-              label="edit_card_description"
-            />
+            <NavItem href="#tool-edit-card-description" label="edit_card_description" />
             <NavItem href="#tool-set-card-price" label="set_card_price" />
             <NavItem href="#tool-invite-to-board" label="invite_to_board" />
             <NavItem href="#tool-search-cards" label="search_cards" />
             <NavItem href="#tool-search-board" label="search_board" />
             <NavItem href="#tool-get-card" label="get_card" />
-            <NavItem
-              href="#tool-get-card-discussion"
-              label="get_card_discussion"
-            />
-            <NavItem
-              href="#tool-get-comment-replies"
-              label="get_comment_replies"
-            />
-            <NavItem
-              href="#tool-get-state-transitions"
-              label="get_state_transitions"
-            />
-            <NavItem
-              href="#tool-set-state-transitions"
-              label="set_state_transitions"
-            />
-            <NavItem
-              href="#tool-get-state-transition-rules"
-              label="get_state_transition_rules"
-            />
-            <NavItem
-              href="#tool-copy-state-transitions"
-              label="copy_state_transitions"
-            />
+            <NavItem href="#tool-get-card-discussion" label="get_card_discussion" />
+            <NavItem href="#tool-get-comment-replies" label="get_comment_replies" />
+            <NavItem href="#tool-get-state-transitions" label="get_state_transitions" />
+            <NavItem href="#tool-set-state-transitions" label="set_state_transitions" />
+            <NavItem href="#tool-get-state-transition-rules" label="get_state_transition_rules" />
+            <NavItem href="#tool-copy-state-transitions" label="copy_state_transitions" />
             <NavItem href="#tool-get-me" label="get_me" />
             <NavItem href="#tool-list-workspaces" label="list_workspaces" />
-            <NavItem
-              href="#tool-list-workspace-boards"
-              label="list_workspace_boards"
-            />
-            <NavItem
-              href="#tool-list-workspace-members"
-              label="list_workspace_members"
-            />
+            <NavItem href="#tool-list-workspace-boards" label="list_workspace_boards" />
+            <NavItem href="#tool-list-workspace-members" label="list_workspace_members" />
             <NavItem href="#tool-get-board" label="get_board" />
             <NavItem href="#tool-list-lists" label="list_lists" />
             <NavItem href="#tool-list-labels" label="list_labels" />
-            <NavItem
-              href="#tool-list-board-members"
-              label="list_board_members"
-            />
+            <NavItem href="#tool-list-board-members" label="list_board_members" />
             <NavItem href="#tool-list-cards" label="list_cards" />
-            <NavItem
-              href="#tool-list-archived-cards"
-              label="list_archived_cards"
-            />
+            <NavItem href="#tool-list-archived-cards" label="list_archived_cards" />
             <NavItem href="#tool-update-card" label="update_card" />
             <NavItem href="#tool-set-card-due" label="set_card_due" />
             <NavItem href="#tool-archive-card" label="archive_card" />
@@ -115,44 +77,24 @@ const McpDocsPage = () => {
             <NavItem href="#tool-edit-comment" label="edit_comment" />
             <NavItem href="#tool-delete-comment" label="delete_comment" />
             <NavItem href="#tool-get-attachments" label="get_attachments" />
-            <NavItem
-              href="#tool-download-attachment"
-              label="download_attachment"
-            />
-            <NavItem
-              href="#tool-add-url-attachment"
-              label="add_url_attachment"
-            />
+            <NavItem href="#tool-download-attachment" label="download_attachment" />
+            <NavItem href="#tool-add-url-attachment" label="add_url_attachment" />
             <NavItem href="#tool-delete-attachment" label="delete_attachment" />
             <NavItem href="#tool-add-card-label" label="add_card_label" />
             <NavItem href="#tool-remove-card-label" label="remove_card_label" />
             <NavItem href="#tool-create-label" label="create_label" />
             <NavItem href="#tool-delete-label" label="delete_label" />
             <NavItem href="#tool-add-card-member" label="add_card_member" />
-            <NavItem
-              href="#tool-remove-card-member"
-              label="remove_card_member"
-            />
+            <NavItem href="#tool-remove-card-member" label="remove_card_member" />
             <NavItem href="#tool-add-board-member" label="add_board_member" />
-            <NavItem
-              href="#tool-set-board-member-role"
-              label="set_board_member_role"
-            />
+            <NavItem href="#tool-set-board-member-role" label="set_board_member_role" />
             <NavItem href="#tool-create-checklist" label="create_checklist" />
-            <NavItem
-              href="#tool-add-checklist-item"
-              label="add_checklist_item"
-            />
-            <NavItem
-              href="#tool-set-checklist-item"
-              label="set_checklist_item"
-            />
+            <NavItem href="#tool-add-checklist-item" label="add_checklist_item" />
+            <NavItem href="#tool-set-checklist-item" label="set_checklist_item" />
+            <NavItem href="#tool-set-checklist-items" label="set_checklist_items" />
             <NavItem href="#tool-rename-checklist" label="rename_checklist" />
             <NavItem href="#tool-delete-checklist" label="delete_checklist" />
-            <NavItem
-              href="#tool-delete-checklist-item"
-              label="delete_checklist_item"
-            />
+            <NavItem href="#tool-delete-checklist-item" label="delete_checklist_item" />
             <NavItem href="#tool-rename-list" label="rename_list" />
             <NavItem href="#tool-archive-list" label="archive_list" />
             <NavItem href="#tool-delete-list" label="delete_list" />
@@ -178,12 +120,10 @@ const McpDocsPage = () => {
           <div className="flex items-center gap-3">
             <CommandLineIcon className="h-7 w-7 text-indigo-400" />
             <div>
-              <h1 className="text-2xl font-bold text-base">
-                MCP Server Developer Guide
-              </h1>
+              <h1 className="text-2xl font-bold text-base">MCP Server Developer Guide</h1>
               <p className="text-sm text-muted">
-                Connect AI assistants to ChimeDeck using the{' '}
-                <Code>Model Context Protocol</Code> (MCP).
+                Connect AI assistants to ChimeDeck using the <Code>Model Context Protocol</Code>{' '}
+                (MCP).
               </p>
             </div>
           </div>
@@ -193,10 +133,9 @@ const McpDocsPage = () => {
           {/* ── Overview ───────────────────────────────────── */}
           <Section id="overview">
             <InfoCallout className="mb-6">
-              The ChimeDeck MCP server lets AI assistants — Claude, Cursor, and
-              any MCP-compatible client — take actions inside ChimeDeck on your
-              behalf. It bridges MCP tool calls to ChimeDeck's REST API using
-              your personal API token.
+              The ChimeDeck MCP server lets AI assistants — Claude, Cursor, and any MCP-compatible
+              client — take actions inside ChimeDeck on your behalf. It bridges MCP tool calls to
+              ChimeDeck's REST API using your personal API token.
             </InfoCallout>
             <P>The server supports two transport modes:</P>
             <ol className="mb-4 space-y-2 text-sm text-subtle">
@@ -224,8 +163,8 @@ const McpDocsPage = () => {
               Authentication
             </H2>
             <P>
-              All MCP access requires a personal API token. Tokens are prefixed
-              with <Code>hf_</Code> and are generated in User Settings.
+              All MCP access requires a personal API token. Tokens are prefixed with{' '}
+              <Code>hf_</Code> and are generated in User Settings.
             </P>
 
             <H3>Generate a token</H3>
@@ -245,8 +184,8 @@ const McpDocsPage = () => {
               ))}
             </ol>
             <WarnCallout>
-              <strong>Keep your token secret.</strong> Treat it like a password.
-              Anyone who has it can perform any action on your behalf.
+              <strong>Keep your token secret.</strong> Treat it like a password. Anyone who has it
+              can perform any action on your behalf.
             </WarnCallout>
 
             <H3>Using the token</H3>
@@ -258,9 +197,7 @@ const McpDocsPage = () => {
                   cells: [
                     {
                       key: 'transport',
-                      content: (
-                        <Badge color="bg-bg-overlay text-subtle">stdio</Badge>
-                      ),
+                      content: <Badge color="bg-bg-overlay text-subtle">stdio</Badge>,
                     },
                     {
                       key: 'how',
@@ -287,8 +224,7 @@ const McpDocsPage = () => {
                       key: 'how',
                       content: (
                         <>
-                          <Code>Authorization: Bearer hf_your_token_here</Code>{' '}
-                          request header
+                          <Code>Authorization: Bearer hf_your_token_here</Code> request header
                         </>
                       ),
                     },
@@ -307,16 +243,15 @@ const McpDocsPage = () => {
               Connecting
             </H2>
             <P>
-              The ChimeDeck MCP server runs as a remote HTTP endpoint — you do
-              not need to install anything locally. Point your AI client at the
-              server URL and supply your API token as a bearer header.
+              The ChimeDeck MCP server runs as a remote HTTP endpoint — you do not need to install
+              anything locally. Point your AI client at the server URL and supply your API token as
+              a bearer header.
             </P>
 
             <H3>Claude Desktop</H3>
             <P>
-              Edit <Code>~/.claude/claude_desktop_config.json</Code> (create it
-              if it does not exist) and add the <Code>chimedeck</Code> entry
-              under <Code>mcpServers</Code>:
+              Edit <Code>~/.claude/claude_desktop_config.json</Code> (create it if it does not
+              exist) and add the <Code>chimedeck</Code> entry under <Code>mcpServers</Code>:
             </P>
             <Pre>{`{
   "mcpServers": {
@@ -329,15 +264,14 @@ const McpDocsPage = () => {
   }
 }`}</Pre>
             <P>
-              Restart Claude Desktop to pick up the change. Restart Claude
-              Desktop to pick up the change.
+              Restart Claude Desktop to pick up the change. Restart Claude Desktop to pick up the
+              change.
             </P>
 
             <H3>Cursor</H3>
             <P>
-              Create or edit <Code>~/.cursor/mcp.json</Code> (or{' '}
-              <Code>.cursor/mcp.json</Code> at the project root for
-              project-scoped config):
+              Create or edit <Code>~/.cursor/mcp.json</Code> (or <Code>.cursor/mcp.json</Code> at
+              the project root for project-scoped config):
             </P>
             <Pre>{`{
   "mcpServers": {
@@ -353,11 +287,9 @@ const McpDocsPage = () => {
 
             <H3>Other MCP clients</H3>
             <P>
-              Any MCP-compatible client that supports remote HTTP / SSE
-              transport can connect. Configure the endpoint URL to{' '}
-              <Code>{appUrl}/api/mcp</Code> and pass{' '}
-              <Code>Authorization: Bearer hf_your_token_here</Code> as a request
-              header.
+              Any MCP-compatible client that supports remote HTTP / SSE transport can connect.
+              Configure the endpoint URL to <Code>{appUrl}/api/mcp</Code> and pass{' '}
+              <Code>Authorization: Bearer hf_your_token_here</Code> as a request header.
             </P>
           </Section>
 
@@ -370,9 +302,8 @@ const McpDocsPage = () => {
               Endpoint Reference (Remote HTTP)
             </H2>
             <P>
-              The HTTP MCP endpoint is served at <Code>/api/mcp</Code> on the
-              same port as ChimeDeck (default <Code>3000</Code>). No additional
-              ports or env vars are required.
+              The HTTP MCP endpoint is served at <Code>/api/mcp</Code> on the same port as ChimeDeck
+              (default <Code>3000</Code>). No additional ports or env vars are required.
             </P>
 
             <H3>Session lifecycle</H3>
@@ -392,8 +323,7 @@ const McpDocsPage = () => {
               ))}
             </ol>
             <P>
-              Sessions expire automatically after <strong>30 minutes</strong> of
-              inactivity.
+              Sessions expire automatically after <strong>30 minutes</strong> of inactivity.
             </P>
 
             <H3>curl examples</H3>
@@ -461,8 +391,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'name', content: <Code>bad-request</Code> },
                     {
                       key: 'meaning',
-                      content:
-                        'mcp-session-id header missing on a non-initialize request',
+                      content: 'mcp-session-id header missing on a non-initialize request',
                     },
                   ],
                 },
@@ -495,8 +424,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'name', content: <Code>forbidden</Code> },
                     {
                       key: 'meaning',
-                      content:
-                        'Token belongs to a different user than the session owner',
+                      content: 'Token belongs to a different user than the session owner',
                     },
                   ],
                 },
@@ -505,15 +433,12 @@ curl -X POST http://localhost:3000/api/mcp \\
                   cells: [
                     {
                       key: 'status',
-                      content: (
-                        <Badge color="bg-bg-overlay text-subtle">404</Badge>
-                      ),
+                      content: <Badge color="bg-bg-overlay text-subtle">404</Badge>,
                     },
                     { key: 'name', content: <Code>session-not-found</Code> },
                     {
                       key: 'meaning',
-                      content:
-                        'Session expired or never existed — re-initialize',
+                      content: 'Session expired or never existed — re-initialize',
                     },
                   ],
                 },
@@ -527,30 +452,26 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="available-tools">
             <H2>Available Tools</H2>
             <P>
-              Each tool maps to a specific REST API endpoint. The board coverage
-              tools (from <Code>get_me</Code> on) use the same names and
-              arguments as the local Python <Code>chimedeck-mcp</Code> server,
-              and every write returns the object read back after the change.
-              Every requested field is compared on the read-back (text as the
-              server stores it: trimmed and sanitized); a mismatch is{' '}
-              <Code>readback-failed</Code>. A DELETE succeeds only with its
-              route’s real answer (<Code>204</Code>, or <Code>200</Code> naming
-              the deleted row for attachments and comments); an HTML or other
-              body is <Code>invalid-response</Code>. Tools that take a parent ID
-              (<Code>cardId</Code>, <Code>boardId</Code>) next to a child ID
-              require the child to belong to that parent and fail with{' '}
-              <Code>not-in-card</Code> / <Code>not-in-board</Code> before
-              sending any write.
+              Each tool maps to a specific REST API endpoint. The board coverage tools retain native
+              permissions and parent-scoping guards, and retain authorization/readback checks.
+              Compact defaults, bounded discussion and verified write receipts are a breaking output
+              contract: update callers before switching runtimes. Selected writes return receipts
+              instead of full cards. Every requested field is compared on the read-back (text as the
+              server stores it: trimmed and sanitized); a mismatch is <Code>readback-mismatch</Code>
+              . A DELETE succeeds only with its route’s real answer (<Code>204</Code>, or{' '}
+              <Code>200</Code> naming the deleted row for attachments and comments); an HTML or
+              other body is <Code>invalid-response</Code>. Tools that take a parent ID (
+              <Code>cardId</Code>, <Code>boardId</Code>) next to a child ID require the child to
+              belong to that parent and fail with <Code>not-in-card</Code> /{' '}
+              <Code>not-in-board</Code> before sending any write.
             </P>
             <P>
-              Known limitation: the card and list archive routes toggle the
-              stored state. <Code>archive_card</Code> and{' '}
-              <Code>archive_list</Code> resolve the UUID and current state
-              first, only PATCH when the state differs, and report any other
-              post-state as <Code>archive-state-conflict</Code>; a concurrent
-              toggle by another client between the read and the PATCH can still
-              flip it. An explicit <Code>archived: boolean</Code> body on those
-              routes would make the operation atomic.
+              Known limitation: the card and list archive routes toggle the stored state.{' '}
+              <Code>archive_card</Code> and <Code>archive_list</Code> resolve the UUID and current
+              state first, only PATCH when the state differs, and report any other post-state as{' '}
+              <Code>archive-state-conflict</Code>; a concurrent toggle by another client between the
+              read and the PATCH can still flip it. An explicit <Code>archived: boolean</Code> body
+              on those routes would make the operation atomic.
             </P>
             <Table
               headers={['Tool', 'Description', 'Endpoint']}
@@ -561,8 +482,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>move_card</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'Move a card to a different list, optionally at a specific position',
+                      content: 'Move a card to a different list, optionally at a specific position',
                     },
                     {
                       key: 'endpoint',
@@ -588,9 +508,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Create a board in a workspace' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>POST /api/v1/workspaces/:workspaceId/boards</Code>
-                      ),
+                      content: <Code>POST /api/v1/workspaces/:workspaceId/boards</Code>,
                     },
                   ],
                 },
@@ -629,9 +547,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>PATCH /api/v1/cards/:cardId/description</Code>
-                      ),
+                      content: <Code>PATCH /api/v1/cards/:cardId/description</Code>,
                     },
                   ],
                 },
@@ -655,14 +571,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>invite_to_board</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'Invite a user to a board by email (requires board admin)',
+                      content: 'Invite a user to a board by email (requires board admin)',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>POST /api/v1/boards/:boardId/members</Code>
-                      ),
+                      content: <Code>POST /api/v1/boards/:boardId/members</Code>,
                     },
                   ],
                 },
@@ -676,9 +589,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/workspaces/:workspaceId/search</Code>
-                      ),
+                      content: <Code>GET /api/v1/workspaces/:workspaceId/search</Code>,
                     },
                   ],
                 },
@@ -688,8 +599,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>search_board</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'Full-text search over cards and lists scoped to a single board',
+                      content: 'Full-text search over cards and lists scoped to a single board',
                     },
                     {
                       key: 'endpoint',
@@ -704,15 +614,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     {
                       key: 'desc',
                       content:
-                        'Retrieve the full details of a single card by its ID, optionally with its activity feed',
+                        'Retrieve a compact card with complete text, or opt into full fields',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          GET /api/v1/cards/:cardId[?include=activities]
-                        </Code>
-                      ),
+                      content: <Code>GET /api/v1/cards/:cardId[?include=activities]</Code>,
                     },
                   ],
                 },
@@ -722,8 +628,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>get_card_discussion</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'Read comments and replies with explicit completeness status',
+                      content: 'Read comments and replies with explicit completeness status',
                     },
                     {
                       key: 'endpoint',
@@ -746,9 +651,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/comments/:commentId/replies</Code>
-                      ),
+                      content: <Code>GET /api/v1/comments/:commentId/replies</Code>,
                     },
                   ],
                 },
@@ -761,16 +664,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'desc',
-                      content:
-                        'Retrieve state transition graph and enabled flag for a board',
+                      content: 'Retrieve state transition graph and enabled flag for a board',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          GET /api/v1/boards/:boardId/state-transitions
-                        </Code>
-                      ),
+                      content: <Code>GET /api/v1/boards/:boardId/state-transitions</Code>,
                     },
                   ],
                 },
@@ -783,16 +681,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'desc',
-                      content:
-                        'Update state transition graph and/or enabled flag for a board',
+                      content: 'Update state transition graph and/or enabled flag for a board',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          PUT /api/v1/boards/:boardId/state-transitions
-                        </Code>
-                      ),
+                      content: <Code>PUT /api/v1/boards/:boardId/state-transitions</Code>,
                     },
                   ],
                 },
@@ -805,16 +698,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'desc',
-                      content:
-                        'Retrieve enforceable state-transition rules for a board',
+                      content: 'Retrieve enforceable state-transition rules for a board',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          GET /api/v1/boards/:boardId/state-transitions/rules
-                        </Code>
-                      ),
+                      content: <Code>GET /api/v1/boards/:boardId/state-transitions/rules</Code>,
                     },
                   ],
                 },
@@ -827,16 +715,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'desc',
-                      content:
-                        'Copy state transition graph from one board to another',
+                      content: 'Copy state transition graph from one board to another',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          POST /api/v1/boards/:boardId/state-transitions/copy
-                        </Code>
-                      ),
+                      content: <Code>POST /api/v1/boards/:boardId/state-transitions/copy</Code>,
                     },
                   ],
                 },
@@ -878,9 +761,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'List the boards in a workspace' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/workspaces/:workspaceId/boards</Code>
-                      ),
+                      content: <Code>GET /api/v1/workspaces/:workspaceId/boards</Code>,
                     },
                   ],
                 },
@@ -893,14 +774,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'desc',
-                      content:
-                        'List workspace members (userId, email, name, role)',
+                      content: 'List workspace members (userId, email, name, role)',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/workspaces/:workspaceId/members</Code>
-                      ),
+                      content: <Code>GET /api/v1/workspaces/:workspaceId/members</Code>,
                     },
                   ],
                 },
@@ -952,8 +830,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>list_board_members</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'List board members (user_id, email, display_name, role)',
+                      content: 'List board members (user_id, email, display_name, role)',
                     },
                     {
                       key: 'endpoint',
@@ -985,9 +862,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/boards/:boardId/archived-cards</Code>
-                      ),
+                      content: <Code>GET /api/v1/boards/:boardId/archived-cards</Code>,
                     },
                   ],
                 },
@@ -1012,8 +887,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>set_card_due</Code> },
                     {
                       key: 'desc',
-                      content:
-                        "Set or clear a card's due date and completion tick",
+                      content: "Set or clear a card's due date and completion tick",
                     },
                     {
                       key: 'endpoint',
@@ -1088,8 +962,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>delete_comment</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'Delete a comment (the server keeps a placeholder)',
+                      content: 'Delete a comment (the server keeps a placeholder)',
                     },
                     {
                       key: 'endpoint',
@@ -1104,9 +977,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'List the attachments on a card' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/cards/:cardId/attachments</Code>
-                      ),
+                      content: <Code>GET /api/v1/cards/:cardId/attachments</Code>,
                     },
                   ],
                 },
@@ -1116,14 +987,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>download_attachment</Code> },
                     {
                       key: 'desc',
-                      content:
-                        "Fetch an uploaded attachment's bytes (max 10 MB)",
+                      content: 'Local stdio file stream; hosted in-band bytes capped at 10 MB',
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>GET /api/v1/attachments/:attachmentId/view</Code>
-                      ),
+                      content: <Code>GET /api/v1/attachments/:attachmentId/view</Code>,
                     },
                   ],
                 },
@@ -1134,9 +1002,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Attach a link to a card' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>POST /api/v1/cards/:cardId/attachments/url</Code>
-                      ),
+                      content: <Code>POST /api/v1/cards/:cardId/attachments/url</Code>,
                     },
                   ],
                 },
@@ -1150,9 +1016,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>DELETE /api/v1/attachments/:attachmentId</Code>
-                      ),
+                      content: <Code>DELETE /api/v1/attachments/:attachmentId</Code>,
                     },
                   ],
                 },
@@ -1177,11 +1041,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Remove a label from a card' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          DELETE /api/v1/cards/:cardId/labels/:labelId
-                        </Code>
-                      ),
+                      content: <Code>DELETE /api/v1/cards/:cardId/labels/:labelId</Code>,
                     },
                   ],
                 },
@@ -1202,8 +1062,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>delete_label</Code> },
                     {
                       key: 'desc',
-                      content:
-                        'Delete a board label from the board and every card',
+                      content: 'Delete a board label from the board and every card',
                     },
                     {
                       key: 'endpoint',
@@ -1229,11 +1088,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Unassign a member from a card' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          DELETE /api/v1/cards/:cardId/members/:userId
-                        </Code>
-                      ),
+                      content: <Code>DELETE /api/v1/cards/:cardId/members/:userId</Code>,
                     },
                   ],
                 },
@@ -1248,9 +1103,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>POST /api/v1/boards/:boardId/members</Code>
-                      ),
+                      content: <Code>POST /api/v1/boards/:boardId/members</Code>,
                     },
                   ],
                 },
@@ -1263,16 +1116,11 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'desc',
-                      content:
-                        "Change an existing board member's role (requires board admin)",
+                      content: "Change an existing board member's role (requires board admin)",
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>
-                          PATCH /api/v1/boards/:boardId/members/:userId
-                        </Code>
-                      ),
+                      content: <Code>PATCH /api/v1/boards/:boardId/members/:userId</Code>,
                     },
                   ],
                 },
@@ -1283,9 +1131,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Create a checklist on a card' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>POST /api/v1/cards/:cardId/checklists</Code>
-                      ),
+                      content: <Code>POST /api/v1/cards/:cardId/checklists</Code>,
                     },
                   ],
                 },
@@ -1296,9 +1142,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Add an item to a checklist' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>POST /api/v1/checklists/:checklistId/items</Code>
-                      ),
+                      content: <Code>POST /api/v1/checklists/:checklistId/items</Code>,
                     },
                   ],
                 },
@@ -1312,9 +1156,22 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>PATCH /api/v1/checklist-items/:itemId</Code>
-                      ),
+                      content: <Code>PATCH /api/v1/checklist-items/:itemId</Code>,
+                    },
+                  ],
+                },
+                {
+                  rowId: 'tool-set-checklist-items',
+                  cells: [
+                    { key: 'tool', content: <Code>set_checklist_items</Code> },
+                    {
+                      key: 'desc',
+                      content:
+                        'Batch checklist updates with separate request and observation receipts',
+                    },
+                    {
+                      key: 'endpoint',
+                      content: <Code>GET card, N PATCH items, GET card</Code>,
                     },
                   ],
                 },
@@ -1325,9 +1182,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Rename a checklist' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>PATCH /api/v1/checklists/:checklistId</Code>
-                      ),
+                      content: <Code>PATCH /api/v1/checklists/:checklistId</Code>,
                     },
                   ],
                 },
@@ -1341,9 +1196,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>DELETE /api/v1/checklists/:checklistId</Code>
-                      ),
+                      content: <Code>DELETE /api/v1/checklists/:checklistId</Code>,
                     },
                   ],
                 },
@@ -1357,9 +1210,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'desc', content: 'Delete one checklist item' },
                     {
                       key: 'endpoint',
-                      content: (
-                        <Code>DELETE /api/v1/checklist-items/:itemId</Code>
-                      ),
+                      content: <Code>DELETE /api/v1/checklist-items/:itemId</Code>,
                     },
                   ],
                 },
@@ -1405,8 +1256,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'tool', content: <Code>update_board</Code> },
                     {
                       key: 'desc',
-                      content:
-                        "Update a board's title, description or visibility",
+                      content: "Update a board's title, description or visibility",
                     },
                     {
                       key: 'endpoint',
@@ -1424,8 +1274,7 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-details">
             <H2>Tool Details</H2>
             <P>
-              Each tool accepts a JSON object of parameters. Required fields are
-              marked with ✅.
+              Each tool accepts a JSON object of parameters. Required fields are marked with ✅.
             </P>
           </Section>
 
@@ -1433,8 +1282,8 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-move-card">
             <H3>move_card</H3>
             <P>
-              Move a card to a different list. Optionally specify a zero-based
-              position within the target list.
+              Move a card to a different list. Optionally specify a zero-based position within the
+              target list.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1458,6 +1307,19 @@ curl -X POST http://localhost:3000/api/mcp \\
                   ],
                 },
                 {
+                  rowId: 'mc-afterCardId',
+                  cells: [
+                    { key: 'param', content: <Code>afterCardId</Code> },
+                    { key: 'type', content: 'string | null' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content:
+                        'Insert after this card; null selects top, omission appends at bottom',
+                    },
+                  ],
+                },
+                {
                   rowId: 'mc-position',
                   cells: [
                     { key: 'param', content: <Code>position</Code> },
@@ -1465,7 +1327,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content: 'Zero-based position within the target list',
+                      content: 'Deprecated alias: only 0 (top) is supported',
                     },
                   ],
                 },
@@ -1476,6 +1338,11 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* write_comment */}
           <Section id="tool-write-comment">
             <H3>write_comment</H3>
+            <P>
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
             <P>Post a comment on a card.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1506,9 +1373,20 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-create-board">
             <H3>create_board</H3>
             <P>
-              Create a board in a workspace. Existing API authorization enforces
-              workspace membership and defaults visibility to{' '}
-              <Code>PRIVATE</Code>.
+              Blank backgrounds expect null; a proxy for a blank request is a mismatch. Ordinary
+              URLs/strings compare after trimming. For a nonempty requested background, an exact
+              current-board background proxy is a lossy view: background stays unverified while
+              other fields are verified and the acknowledged ID is retained. No raw remote S3-key
+              verification is claimed.
+            </P>
+            <P>
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
+            <P>
+              Create a board in a workspace. Existing API authorization enforces workspace
+              membership and defaults visibility to <Code>PRIVATE</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1566,8 +1444,17 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-create-list">
             <H3>create_list</H3>
             <P>
-              Create a list on a board. Existing API authorization enforces
-              board writable-member permission.
+              Short board aliases resolve through an authenticated canonical lookup before POST;
+              lookup failure sends no POST, and later failures preserve an acknowledged list ID.
+            </P>
+            <P>
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
+            <P>
+              Create a list on a board. Existing API authorization enforces board writable-member
+              permission.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1606,6 +1493,11 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* create_card */}
           <Section id="tool-create-card">
             <H3>create_card</H3>
+            <P>
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
             <P>Create a new card in a list.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1677,8 +1569,13 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-set-card-price">
             <H3>set_card_price</H3>
             <P>
-              Set or clear the price on a card. Pass <Code>null</Code> for{' '}
-              <Code>amount</Code> to remove the price.
+              Prices use finite parsed JavaScript numbers; unsafe integer inputs fail before HTTP.
+              Verification compares exact decimal coefficients/scales, not tolerance. This does not
+              promise arbitrary Python-integer or raw JSON-number precision.
+            </P>
+            <P>
+              Set or clear the price on a card. Pass <Code>null</Code> for <Code>amount</Code> to
+              remove the price.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1733,14 +1630,15 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-invite-to-board">
             <H3>invite_to_board</H3>
             <P>
-              Invite a user to a board by email. Requires board-management
-              permission.
+              The receipt preserves known board_id/user_id and verifies membership role; no
+              generated user ID is invented. Native eligibility, duplicate and ambiguous-email
+              guards remain.
             </P>
+            <P>Invite a user to a board by email. Requires board-management permission.</P>
             <WarnCallout className="mb-3">
-              <strong>Access control:</strong> Workspace ADMIN/OWNER or explicit
-              board ADMIN permission is required. Failures return a structured
-              API error such as <Code>insufficient-role</Code> instead of
-              crashing.
+              <strong>Access control:</strong> Workspace ADMIN/OWNER or explicit board ADMIN
+              permission is required. Failures return a structured API error such as{' '}
+              <Code>insufficient-role</Code> instead of crashing.
             </WarnCallout>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -1782,16 +1680,70 @@ curl -X POST http://localhost:3000/api/mcp \\
             />
           </Section>
 
+          <Section id="compact-results">
+            <H2>Compact results and verified writes</H2>
+            <P>
+              Card, list, search and discussion reads accept optional view: compact (default) or
+              full. Compact cards retain complete descriptions and checklist text once; attachments
+              are separate. List/search rows omit descriptions unless includeDescription: true. Text
+              is never truncated. Both views remove IP/user-agent fields and redact tokens.
+            </P>
+            <P>
+              Creation receipts retain acknowledged IDs through later verification failures.
+              request_outcome: succeeded does not prove verification. Inspect verified and errors;
+              never automatically retry acknowledged or unknown creations. Native text verification
+              uses sanitized/trimmed expectations and exposes normalization and actual observed
+              values. Native roles and threaded comment mutations remain supported; legacy Python
+              wire results are not all identical.
+            </P>
+            <Pre>{`{"name":"get_card","arguments":{"cardId":"<card ID>","view":"full"}}`}</Pre>
+          </Section>
+
           {/* search_cards */}
           <Section id="tool-search-cards">
             <H3>search_cards</H3>
             <P>
-              Full-text search over all cards within a workspace. Returns
-              matching cards with title, list, and board context.
+              Full-text search over all cards within a workspace. Returns matching cards with title,
+              list, and board context.
+            </P>
+            <P>
+              Default compact search uses one GET. Explicit includeDescription: true or view: full
+              fills missing card descriptions with authenticated card and board reads: at most 1 + N
+              + B GETs for N unique selected cards and B unique boards, with B ≤ N and at most 100
+              selected rows. Ten cards on one board require 12 GETs when descriptions are absent
+              upstream. Existing string/null descriptions need no extra reads. Fresh hierarchy and
+              workspace checks must agree; errors fail the whole tool without partial text. Only
+              descriptions are merged, preserving order and metadata. These sequential observations
+              are not an atomic snapshot. Board search already returns descriptions and ordinarily
+              remains one GET.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
+                {
+                  rowId: 'search-cards-view',
+                  cells: [
+                    { key: 'param', content: <Code>view</Code> },
+                    { key: 'type', content: 'compact | full' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Compact default; full preserves full fields',
+                    },
+                  ],
+                },
+                {
+                  rowId: 'search-cards-includeDescription',
+                  cells: [
+                    { key: 'param', content: <Code>includeDescription</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Default false; include complete descriptions in summaries',
+                    },
+                  ],
+                },
                 {
                   rowId: 'sc-workspaceId',
                   cells: [
@@ -1807,10 +1759,13 @@ curl -X POST http://localhost:3000/api/mcp \\
                 {
                   rowId: 'sc-q',
                   cells: [
-                    { key: 'param', content: <Code>q</Code> },
+                    { key: 'param', content: <Code>query</Code> },
                     { key: 'type', content: 'string' },
                     { key: 'req', content: '✅' },
-                    { key: 'desc', content: 'Full-text search query' },
+                    {
+                      key: 'desc',
+                      content: 'Search query; deprecated q alias also accepted',
+                    },
                   ],
                 },
                 {
@@ -1821,8 +1776,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content:
-                        'Maximum number of results to return (default: 20)',
+                      content: 'Integer 1–100; default 20. Supports view and includeDescription.',
                     },
                   ],
                 },
@@ -1833,12 +1787,34 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* search_board */}
           <Section id="tool-search-board">
             <H3>search_board</H3>
-            <P>
-              Full-text search over cards and lists scoped to a single board.
-            </P>
+            <P>Full-text search over cards and lists scoped to a single board.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
+                {
+                  rowId: 'search-board-view',
+                  cells: [
+                    { key: 'param', content: <Code>view</Code> },
+                    { key: 'type', content: 'compact | full' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Compact default; full preserves full fields',
+                    },
+                  ],
+                },
+                {
+                  rowId: 'search-board-includeDescription',
+                  cells: [
+                    { key: 'param', content: <Code>includeDescription</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Default false; include complete descriptions in summaries',
+                    },
+                  ],
+                },
                 {
                   rowId: 'sb-boardId',
                   cells: [
@@ -1854,10 +1830,13 @@ curl -X POST http://localhost:3000/api/mcp \\
                 {
                   rowId: 'sb-q',
                   cells: [
-                    { key: 'param', content: <Code>q</Code> },
+                    { key: 'param', content: <Code>query</Code> },
                     { key: 'type', content: 'string' },
                     { key: 'req', content: '✅' },
-                    { key: 'desc', content: 'Full-text search query' },
+                    {
+                      key: 'desc',
+                      content: 'Search query; deprecated q alias also accepted',
+                    },
                   ],
                 },
                 {
@@ -1868,7 +1847,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content: 'Maximum number of results to return',
+                      content: 'Integer 1–100; default 20. Supports view and includeDescription.',
                     },
                   ],
                 },
@@ -1880,12 +1859,24 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-get-card">
             <H3>get_card</H3>
             <P>
-              Retrieve the full details of a single card by its ID, including
+              Retrieve a compact card by default (view: full opts into full fields), including
               title, description, list, price, labels, and members.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
+                {
+                  rowId: 'get-card-view',
+                  cells: [
+                    { key: 'param', content: <Code>view</Code> },
+                    { key: 'type', content: 'compact | full' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Compact default; full preserves full fields',
+                    },
+                  ],
+                },
                 {
                   rowId: 'gc-cardId',
                   cells: [
@@ -1914,48 +1905,52 @@ curl -X POST http://localhost:3000/api/mcp \\
 
           <Section id="tool-get-card-discussion">
             <H3>get_card_discussion</H3>
+            <Pre>{`{"name":"get_card_discussion","arguments":{"cardId":"<card ID>","all":true,"view":"full"}}`}</Pre>
             <P>
-              Read the complete discussion using a required <Code>cardId</Code>{' '}
-              string (card UUID or short ID). Use this tool for comments;{' '}
-              <Code>get_card</Code> is not a comment source.
+              Read the latest 20 parent threads using a required <Code>cardId</Code> string (card
+              UUID or short ID). Use this tool for comments; <Code>get_card</Code> is not a comment
+              source.
             </P>
             <Pre>{`{"name":"get_card_discussion","arguments":{"cardId":"<card UUID or short ID>"}}`}</Pre>
             <P>
-              Returns <Code>{'{data, complete, issues}'}</Code>. The flat array
-              preserves author, body, timestamps, reactions and{' '}
-              <Code>parent_id</Code>. Parents are oldest first, each followed by
-              their oldest-first replies. Equal timestamps retain server order;
-              threads are grouped rather than globally interleaved.
+              Returns <Code>{'{data, complete, page_complete, scope, pagination, issues}'}</Code>.
+              The flat array preserves author, body, timestamps and <Code>parent_id</Code>. Parents
+              are oldest first, each followed by their oldest-first replies. Equal timestamps retain
+              server order; threads are grouped rather than globally interleaved.
             </P>
             <WarnCallout>
-              Check <Code>complete</Code> before treating results as exhaustive.
-              Failed threads, changed reply counts and unexpected metadata set
-              it to false with per-parent issues. Successful threads remain
-              available; a failed initial read returns an MCP error.
+              Check <Code>complete</Code> before treating results as exhaustive. Failed threads,
+              changed reply counts and unexpected metadata set it to false with per-parent issues.
+              Successful threads remain available; a failed initial read returns an MCP error.
             </WarnCallout>
             <P>
-              The current API has one reply level and no pagination. Deleted
-              parent placeholders remain, but deleted replies are unavailable.
-              Reads are not an atomic snapshot; re-read after concurrent edits.
+              Optional limit is an integer 1–100 (default 20), offset a nonnegative integer (default
+              0), and view compact or full. all: true selects all parents; combining all with
+              explicit limit/offset fails before HTTP. Selected newest parents return oldest first
+              with all direct replies. page_complete describes the selected page; complete requires
+              exhaustive coverage. The underlying API has one reply level. Deleted parent
+              placeholders remain, but deleted replies are unavailable. Reads are not an atomic
+              snapshot; re-read after concurrent edits.
             </P>
           </Section>
 
           <Section id="tool-get-comment-replies">
             <H3>get_comment_replies</H3>
             <P>
-              Read one parent’s non-deleted direct replies using a required{' '}
-              <Code>commentId</Code> UUID string from{' '}
-              <Code>get_card_discussion</Code>. UUID case is normalized. Returns
-              the same <Code>{'{data, complete, issues}'}</Code> envelope,
-              oldest first. The tool does not verify that the requested comment
-              is top-level; a reply itself has no children. Failed reads return
-              MCP errors.
+              Optional view is compact (default) or full; reactions are retained only in full view.
+            </P>
+            <P>
+              Read one parent’s non-deleted direct replies using a required <Code>commentId</Code>{' '}
+              UUID string from <Code>get_card_discussion</Code>. UUID case is normalized. Returns
+              the same <Code>{'{data, complete, issues}'}</Code> envelope, oldest first. The tool
+              does not verify that the requested comment is top-level; a reply itself has no
+              children. Failed reads return MCP errors.
             </P>
             <Pre>{`{"name":"get_comment_replies","arguments":{"commentId":"<parent comment UUID>"}}`}</Pre>
             <InfoCallout>
-              Both tools are read-only and use your existing permissions in
-              stdio and HTTP sessions. Reconnect after deployment and add both
-              names if your client uses an explicit tool allowlist.
+              Both tools are read-only and use your existing permissions in stdio and HTTP sessions.
+              Reconnect after deployment and add both names if your client uses an explicit tool
+              allowlist.
             </InfoCallout>
           </Section>
 
@@ -1982,12 +1977,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* set_state_transitions */}
           <Section id="tool-set-state-transitions">
             <H3>set_state_transitions</H3>
-            <P>
-              Update state transition graph and/or enabled flag for a board.
-            </P>
+            <P>Update state transition graph and/or enabled flag for a board.</P>
             <WarnCallout className="mb-3">
-              Provide at least one of <Code>enabled</Code> or <Code>graph</Code>
-              .
+              Provide at least one of <Code>enabled</Code> or <Code>graph</Code>.
             </WarnCallout>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2228,12 +2220,36 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-list-cards">
             <H3>list_cards</H3>
             <P>
-              List the open cards in a list, in board order. Archived cards are
-              not included; use <Code>list_archived_cards</Code>.
+              List the open cards in a list, in board order. Archived cards are not included; use{' '}
+              <Code>list_archived_cards</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
+                {
+                  rowId: 'list-cards-view',
+                  cells: [
+                    { key: 'param', content: <Code>view</Code> },
+                    { key: 'type', content: 'compact | full' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Compact default; full preserves full fields',
+                    },
+                  ],
+                },
+                {
+                  rowId: 'list-cards-includeDescription',
+                  cells: [
+                    { key: 'param', content: <Code>includeDescription</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Default false; include complete descriptions in summaries',
+                    },
+                  ],
+                },
                 {
                   rowId: 'lc-listId',
                   cells: [
@@ -2251,7 +2267,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content: 'Maximum number of cards to return (min 1)',
+                      content: 'Integer 1–100; default 50. Supports view and includeDescription.',
                     },
                   ],
                 },
@@ -2261,7 +2277,10 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'param', content: <Code>offset</Code> },
                     { key: 'type', content: 'integer' },
                     { key: 'req', content: 'No' },
-                    { key: 'desc', content: 'Number of cards to skip (min 0)' },
+                    {
+                      key: 'desc',
+                      content: 'Number of cards to skip (min 0, default 0)',
+                    },
                   ],
                 },
               ]}
@@ -2271,10 +2290,37 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* list_archived_cards */}
           <Section id="tool-list-archived-cards">
             <H3>list_archived_cards</H3>
-            <P>List the archived cards on a board.</P>
+            <P>
+              List archived cards on a board. Optional view defaults to compact; includeDescription
+              defaults to false. No limit or offset is supported.
+            </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
+                {
+                  rowId: 'list-archived-cards-view',
+                  cells: [
+                    { key: 'param', content: <Code>view</Code> },
+                    { key: 'type', content: 'compact | full' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Compact default; full preserves full fields',
+                    },
+                  ],
+                },
+                {
+                  rowId: 'list-archived-cards-includeDescription',
+                  cells: [
+                    { key: 'param', content: <Code>includeDescription</Code> },
+                    { key: 'type', content: 'boolean' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content: 'Default false; include complete descriptions in summaries',
+                    },
+                  ],
+                },
                 {
                   rowId: 'lac-boardId',
                   cells: [
@@ -2292,12 +2338,16 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-update-card">
             <H3>update_card</H3>
             <P>
-              Update a card’s title, description, due date and/or completion
-              tick. Give at least one field, otherwise the tool fails with{' '}
-              <Code>nothing-to-update</Code> before any request. The PATCH body
-              uses the server’s snake_case fields (<Code>due_date</Code>,{' '}
-              <Code>due_complete</Code>). Returns the card read back with its
-              includes; every given field must read back as written.
+              Text is sanitized/trimmed before verification; normalized_fields reports changes and
+              observed holds actual values. Due dates use the timezone/precision constraints of
+              set_card_due.
+            </P>
+            <P>
+              Update a card’s title, description, due date and/or completion tick. Give at least one
+              field, otherwise the tool fails with <Code>nothing-to-update</Code> before any
+              request. The PATCH body uses the server’s snake_case fields (<Code>due_date</Code>,{' '}
+              <Code>due_complete</Code>). Returns a compact verified receipt with actual observed
+              fields and normalized text expectations.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2337,8 +2387,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content:
-                        'ISO-8601 due date; null or empty string clears it',
+                      content: 'ISO-8601 due date; null or empty string clears it',
                     },
                   ],
                 },
@@ -2350,8 +2399,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content:
-                        'Mark the due date complete (the visible tick) or not',
+                      content: 'Mark the due date complete (the visible tick) or not',
                     },
                   ],
                 },
@@ -2363,10 +2411,14 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-set-card-due">
             <H3>set_card_due</H3>
             <P>
-              Set or clear a card’s due date and completion tick. Give{' '}
-              <Code>dueDate</Code>, <Code>dueComplete</Code> or both (
-              <Code>nothing-to-update</Code> otherwise). Returns the card read
-              back with its includes.
+              Nonempty dueDate must be calendar-valid, timezone-aware and have at most six
+              fractional digits. Bare dates are rejected; the original validated timestamp is sent
+              and compared with exact microseconds.
+            </P>
+            <P>
+              Set or clear a card’s due date and completion tick. Give <Code>dueDate</Code>,{' '}
+              <Code>dueComplete</Code> or both (<Code>nothing-to-update</Code> otherwise). Returns a
+              compact verified receipt with actual observed due fields.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2388,8 +2440,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content:
-                        'ISO-8601 due date; null or empty string clears it',
+                      content: 'ISO-8601 due date; null or empty string clears it',
                     },
                   ],
                 },
@@ -2413,11 +2464,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-archive-card">
             <H3>archive_card</H3>
             <P>
-              Archive or restore a card. The server route toggles, so the tool
-              reads the card first (a short ID resolves to the UUID used for
-              every later request) and only PATCHes when its state differs from{' '}
-              <Code>archived</Code>. Returns the card read back; any other
-              post-state is <Code>archive-state-conflict</Code>.
+              Archive or restore a card. The server route toggles, so the tool reads the card first
+              (a short ID resolves to the UUID used for every later request) and only PATCHes when
+              its state differs from <Code>archived</Code>. Returns a compact verified receipt; any
+              other post-state is <Code>archive-state-conflict</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2451,9 +2501,8 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-card">
             <H3>delete_card</H3>
             <P>
-              Permanently delete a card. Destructive. Prefer{' '}
-              <Code>archive_card</Code>. Requires a <Code>204</Code> DELETE,
-              verifies the card now returns 404 and returns{' '}
+              Permanently delete a card. Destructive. Prefer <Code>archive_card</Code>. Requires a{' '}
+              <Code>204</Code> DELETE, verifies the card now returns 404 and returns{' '}
               <Code>&#123;deleted: true, id, title&#125;</Code>.
             </P>
             <Table
@@ -2476,8 +2525,13 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-copy-card">
             <H3>copy_card</H3>
             <P>
-              Copy a card into a list. Returns the new card read back with its
-              includes.
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
+            <P>
+              Copy a card into a list. Returns an acknowledged creation receipt with retained ID and
+              verification status.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2538,8 +2592,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-get-comments">
             <H3>get_comments</H3>
             <P>
-              List a card’s top-level comments, oldest first. Replies are not
-              included; use <Code>get_card_discussion</Code>.
+              Accepts only cardId and optional view (compact default or full). Returns a data
+              envelope with all top-level comments, oldest first, without replies. There are no
+              limit/offset/all or completeness fields. Use get_card_discussion for bounded parent
+              threads and replies.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2561,11 +2617,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-edit-comment">
             <H3>edit_comment</H3>
             <P>
-              Edit the text of an existing comment. It must be on{' '}
-              <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no PATCH
-              sent; pass the comment UUID). Returns the comment read back from
-              the card’s top-level comments, or for a reply from its parent’s
-              replies.
+              Edit the text of an existing comment. It must be on <Code>cardId</Code> (
+              <Code>not-in-card</Code> otherwise, no PATCH sent; pass the comment UUID). Returns the
+              compact verified receipt with actual observed sanitized/trimmed content.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2608,14 +2662,11 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-comment">
             <H3>delete_comment</H3>
             <P>
-              Delete a comment (the server keeps a placeholder). Destructive. It
-              must be on <Code>cardId</Code> (<Code>not-in-card</Code>{' '}
-              otherwise, no DELETE sent). The server soft-deletes: for a
-              top-level comment the tool requires the re-read row to have{' '}
-              <Code>deleted: true</Code> and returns that <Code>[deleted]</Code>{' '}
-              placeholder; a deleted reply must be absent from its parent’s
-              replies, and the tool returns{' '}
-              <Code>&#123;deleted: true, id&#125;</Code>.
+              Delete a comment (the server keeps a placeholder). Destructive. It must be on{' '}
+              <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). The server
+              soft-deletes: for a top-level comment the tool requires the re-read row to have{' '}
+              <Code>deleted: true</Code>; a deleted reply must be absent from its parent’s replies.
+              Both return <Code>&#123;deleted: true, verified: true, id, card_id&#125;</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2669,19 +2720,35 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-download-attachment">
             <H3>download_attachment</H3>
             <P>
-              Fetch an uploaded attachment’s bytes (max 10 MB). Returns the
-              attachment metadata as text, then the file as an image block for{' '}
-              <Code>image/*</Code> types or an embedded resource with a base64
-              blob and <Code>mimeType</Code> otherwise. Nothing is written to
-              the server’s disk. Files over 10 MB fail with{' '}
-              <Code>attachment-too-large</Code>; link attachments fail with{' '}
-              <Code>not-a-file</Code>; an upload that is not finished fails with{' '}
-              <Code>not-ready</Code>; any non-200 view response fails with{' '}
-              <Code>http-&lt;status&gt;</Code>.
+              Hosted HTTP fetches uploaded attachment bytes (max 10 MB). Returns the attachment
+              metadata as text, then the file as an image block for <Code>image/*</Code> types or an
+              embedded resource with a base64 blob and <Code>mimeType</Code> otherwise. Nothing is
+              written to the server’s disk. Files over 10 MB fail with{' '}
+              <Code>attachment-too-large</Code>; link attachments fail with <Code>not-a-file</Code>;
+              an upload that is not finished fails with <Code>not-ready</Code>; any non-200 view
+              response fails with <Code>http-&lt;status&gt;</Code>. Local stdio requires destPath
+              (absolute local filename), streams without the hosted cap, verifies size and
+              atomically replaces the destination after success. It returns metadata without binary
+              content. Hosted HTTP accepts no writable path. Local stdio deliberately permits atomic
+              overwrite of the chosen destination; replacement files have private mode0600 and
+              destructiveHint:true. Parent directories may remain after failure; only the owned
+              temporary file is rolled back.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
+                {
+                  rowId: 'da-destPath',
+                  cells: [
+                    { key: 'param', content: <Code>destPath</Code> },
+                    { key: 'type', content: 'string' },
+                    { key: 'req', content: 'Stdio only: required' },
+                    {
+                      key: 'desc',
+                      content: 'Absolute local destination filename; absent from HTTP schema',
+                    },
+                  ],
+                },
                 {
                   rowId: 'da-cardId',
                   cells: [
@@ -2714,9 +2781,13 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-add-url-attachment">
             <H3>add_url_attachment</H3>
             <P>
-              Attach a link to a card. The server requires a name, so an omitted{' '}
-              <Code>name</Code> is sent as the URL. Returns the attachment read
-              back from the card’s attachment list.
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
+            <P>
+              Attach a link to a card. The server requires a name, so an omitted <Code>name</Code>{' '}
+              is sent as the URL. The receipt includes selected attachment text once.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2756,10 +2827,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-attachment">
             <H3>delete_attachment</H3>
             <P>
-              Remove an attachment from a card. Destructive. It must be on{' '}
-              <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE
-              sent). Verifies the attachment is absent from the card’s
-              attachment list.
+              Remove an attachment from a card. Destructive. It must be on <Code>cardId</Code> (
+              <Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the attachment is absent
+              from the card’s attachment list.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2793,8 +2863,8 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-add-card-label">
             <H3>add_card_label</H3>
             <P>
-              Add an existing board label to a card. Returns the card read back;
-              the label must appear in its includes.
+              Add an existing board label to a card. Returns a compact verified receipt; the label
+              must appear in its includes.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2828,8 +2898,8 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-remove-card-label">
             <H3>remove_card_label</H3>
             <P>
-              Remove a label from a card. Returns the card read back; the label
-              must be gone from its includes.
+              Remove a label from a card. Returns a compact verified receipt; the label must be gone
+              from its includes.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2860,9 +2930,11 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-create-label">
             <H3>create_label</H3>
             <P>
-              Create a label on a board. Returns the label read back from the
-              board’s label list.
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
             </P>
+            <P>Create a label on a board. The receipt includes selected label text once.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[
@@ -2901,10 +2973,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-label">
             <H3>delete_label</H3>
             <P>
-              Delete a board label from the board and every card. Destructive.
-              It must be on <Code>boardId</Code> (<Code>not-in-board</Code>{' '}
-              otherwise, no DELETE sent). Verifies the label is absent from the
-              board’s label list.
+              Delete a board label from the board and every card. Destructive. It must be on{' '}
+              <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no DELETE sent). Verifies
+              the label is absent from the board’s label list.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2938,8 +3009,8 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-add-card-member">
             <H3>add_card_member</H3>
             <P>
-              Assign a board member to a card. Returns the card read back; the
-              member must appear in its includes.
+              Assign a board member to a card. Returns a compact verified receipt; the member must
+              appear in its includes.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2973,8 +3044,8 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-remove-card-member">
             <H3>remove_card_member</H3>
             <P>
-              Unassign a member from a card. Returns the card read back; the
-              member must be gone from its includes.
+              Unassign a member from a card. Returns a compact verified receipt; the member must be
+              gone from its includes.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3005,11 +3076,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-add-board-member">
             <H3>add_board_member</H3>
             <P>
-              Add a workspace member to a board by user ID (requires board
-              admin). An existing member fails with{' '}
-              <Code>board-member-exists</Code>; use{' '}
-              <Code>set_board_member_role</Code>. Returns the member row read
-              back from the board roster.
+              Add a workspace member to a board by user ID (requires board admin). An existing
+              member fails with <Code>board-member-exists</Code>; use{' '}
+              <Code>set_board_member_role</Code>. Returns the member row read back from the board
+              roster.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3055,9 +3125,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-set-board-member-role">
             <H3>set_board_member_role</H3>
             <P>
-              Change an existing board member’s role (requires board admin).
-              Demoting the last admin fails with <Code>last-board-admin</Code>.
-              Returns the member row read back with the new role.
+              Change an existing board member’s role (requires board admin). Demoting the last admin
+              fails with <Code>last-board-admin</Code>. Returns the member row read back with the
+              new role.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3100,9 +3170,13 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-create-checklist">
             <H3>create_checklist</H3>
             <P>
-              Create a checklist on a card. Returns{' '}
-              <Code>&#123;checklist, items, card&#125;</Code> read back from the
-              card.
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
+            <P>
+              Create a checklist on a card. Returns an acknowledged creation receipt with the
+              selected checklist text once.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3133,8 +3207,13 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-add-checklist-item">
             <H3>add_checklist_item</H3>
             <P>
-              Add an item to a checklist. Returns{' '}
-              <Code>&#123;item, card&#125;</Code> read back from the card.
+              Returns an acknowledged creation receipt. A valid new ID survives later verification
+              failure without invented observations; malformed acknowledgements, timeouts and 5xx
+              have unknown request outcomes. Check verified and errors; never automatically retry.
+            </P>
+            <P>
+              Add an item to a checklist. Returns an acknowledged creation receipt with the selected
+              item text once.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3165,11 +3244,11 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-set-checklist-item">
             <H3>set_checklist_item</H3>
             <P>
-              Check, uncheck or rename a checklist item. Give{' '}
-              <Code>checked</Code>, <Code>title</Code> or both (
-              <Code>nothing-to-update</Code> otherwise). Returns{' '}
-              <Code>&#123;item, card&#125;</Code>; the item must read back with
-              the requested <Code>checked</Code> and trimmed <Code>title</Code>.
+              Check, uncheck or rename a checklist item. Give <Code>checked</Code>,{' '}
+              <Code>title</Code> or both (<Code>nothing-to-update</Code> otherwise). Returns a
+              compact verified item receipt; its requested ID must match the acknowledgement and
+              readback, along with the requested <Code>checked</Code> and trimmed <Code>title</Code>
+              .
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3205,13 +3284,29 @@ curl -X POST http://localhost:3000/api/mcp \\
             />
           </Section>
 
+          <Section id="tool-set-checklist-items">
+            <H3>set_checklist_items</H3>
+            <P>
+              Required cardId and items: 1–100 unique objects containing itemId and checked and/or
+              title. Membership is checked before any PATCH. Updates run sequentially, stop on the
+              first request error and read back once (N PATCH + 2 GET for successful batches).
+            </P>
+            <P>
+              Each item_id has a request_outcome separate from observation. verified means observed
+              state matches, even for an unknown request whose error remains. verification_error
+              describes mismatch; readback_error a failed final read. complete requires every
+              request succeeded and every state matched; partial means incomplete, not proof writes
+              landed. No retry, rollback or atomicity is provided.
+            </P>
+            <Pre>{`{"name":"set_checklist_items","arguments":{"cardId":"<card ID>","items":[{"itemId":"<item UUID>","checked":true}]}}`}</Pre>
+          </Section>
+
           {/* rename_checklist */}
           <Section id="tool-rename-checklist">
             <H3>rename_checklist</H3>
             <P>
-              Rename a checklist. Returns{' '}
-              <Code>&#123;checklist, items, card&#125;</Code>; the checklist
-              must read back with the trimmed title.
+              Rename a checklist. Returns a compact verified checklist receipt; the requested
+              checklist must read back with the trimmed title.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3242,10 +3337,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-checklist">
             <H3>delete_checklist</H3>
             <P>
-              Delete a checklist and all its items. Destructive. It must be on{' '}
-              <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE
-              sent). Verifies the checklist is absent from the card and returns{' '}
-              <Code>&#123;deleted: true, id&#125;</Code>.
+              Delete a checklist and all its items. Destructive. It must be on <Code>cardId</Code> (
+              <Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the checklist is absent
+              from the card and returns <Code>&#123;deleted: true, id&#125;</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3279,10 +3373,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-checklist-item">
             <H3>delete_checklist_item</H3>
             <P>
-              Delete one checklist item. Destructive. It must be on{' '}
-              <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE
-              sent). Verifies the item is absent from the card and returns{' '}
-              <Code>&#123;deleted: true, id&#125;</Code>.
+              Delete one checklist item. Destructive. It must be on <Code>cardId</Code> (
+              <Code>not-in-card</Code> otherwise, no DELETE sent). Verifies the item is absent from
+              the card and returns <Code>&#123;deleted: true, id&#125;</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3313,10 +3406,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-rename-list">
             <H3>rename_list</H3>
             <P>
-              Rename a list. The list (open or archived) must be on{' '}
-              <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no
-              PATCH sent). Returns the list read back from the board’s lists;
-              its title must match the sanitized, trimmed text.
+              Rename a list. The list (open or archived) must be on <Code>boardId</Code> (
+              <Code>not-in-board</Code> otherwise, no PATCH sent). Returns the list read back from
+              the board’s lists; its title must match the sanitized, trimmed text.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3356,11 +3448,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-archive-list">
             <H3>archive_list</H3>
             <P>
-              Archive a list. The tool finds the list among the board’s open and
-              archived lists (by UUID or short ID; <Code>not-in-board</Code>{' '}
-              otherwise). The server route toggles, so a list already archived
-              is returned without a PATCH, and the PATCH uses the UUID. Returns
-              the list read back from the archived lists; anything else is{' '}
+              Archive a list. The tool finds the list among the board’s open and archived lists (by
+              UUID or short ID; <Code>not-in-board</Code> otherwise). The server route toggles, so a
+              list already archived is returned without a PATCH, and the PATCH uses the UUID.
+              Returns the list read back from the archived lists; anything else is{' '}
               <Code>archive-state-conflict</Code>.
             </P>
             <Table
@@ -3392,15 +3483,12 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-delete-list">
             <H3>delete_list</H3>
             <P>
-              Permanently delete an empty list. Destructive. Prefer{' '}
-              <Code>archive_list</Code>. The server refuses a list that still
-              has cards (<Code>delete-requires-confirmation</Code>); this tool
-              sends no confirmation, matching the local Python server. The list
-              must be on <Code>boardId</Code> (<Code>not-in-board</Code>{' '}
-              otherwise, no DELETE sent) and the DELETE must answer{' '}
-              <Code>204</Code>. Verifies the list is absent from both the
-              board’s open and archived lists and returns{' '}
-              <Code>&#123;deleted: true, id&#125;</Code>.
+              Permanently delete an empty list. Destructive. Prefer <Code>archive_list</Code>. The
+              server refuses a list that still has cards (<Code>delete-requires-confirmation</Code>
+              ); this tool sends no confirmation, matching the local Python server. The list must be
+              on <Code>boardId</Code> (<Code>not-in-board</Code> otherwise, no DELETE sent) and the
+              DELETE must answer <Code>204</Code>. Verifies the list is absent from both the board’s
+              open and archived lists and returns <Code>&#123;deleted: true, id&#125;</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -3431,9 +3519,9 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-update-board">
             <H3>update_board</H3>
             <P>
-              Update a board’s title, description or visibility. Give at least
-              one field (<Code>nothing-to-update</Code> otherwise). Returns the
-              board read back; every given field must match.
+              Update a board’s title, description or visibility. Give at least one field (
+              <Code>nothing-to-update</Code> otherwise). Returns the board read back; every given
+              field must match.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}

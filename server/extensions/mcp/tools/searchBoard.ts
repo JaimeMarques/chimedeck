@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { apiCall } from '../apiClient';
+import { apiPath, request, rowsOf, rowWithId, runTool } from './toolSupport';
+import { projectRows, rowView } from './results';
 
 export function registerSearchBoard(server: McpServer, token: string): void {
   server.registerTool(
@@ -8,13 +9,20 @@ export function registerSearchBoard(server: McpServer, token: string): void {
     {
       description: 'Full-text search over cards and lists scoped to a single board.',
       inputSchema: {
-      boardId: z.string().describe('ID of the board to search within'),
-      query: z.string().optional().describe('Full-text search query'),
-      q: z.string().optional().describe('Deprecated alias for full-text search query'),
-      limit: z.number().optional().describe('Maximum number of results to return'),
+        boardId: z.string().describe('ID of the board to search within'),
+        query: z.string().optional().describe('Full-text search query'),
+        q: z.string().optional().describe('Deprecated alias for full-text search query'),
+        ...rowView,
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(20)
+          .describe('Maximum number of results to return'),
       },
     },
-    async ({ boardId, query, q, limit }) => {
+    async ({ boardId, query, q, limit, view, includeDescription }) => {
       const resolvedQuery = query ?? q;
       if (!resolvedQuery || resolvedQuery.trim() === '') {
         return {
@@ -24,24 +32,18 @@ export function registerSearchBoard(server: McpServer, token: string): void {
       }
 
       const params = new URLSearchParams({ query: resolvedQuery });
-      if (limit !== undefined) params.set('limit', String(limit));
+      params.set('limit', String(limit));
 
-      const result = await apiCall<{ data: unknown[] }>({
-        method: 'GET',
-        path: `/api/v1/boards/${boardId}/search?${params.toString()}`,
-        token,
-      });
-
-      if ('error' in result) {
-        return {
-          content: [{ type: 'text', text: `Error: ${result.error.name}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
+      return runTool(token, async () =>
+        projectRows(
+          await request({
+            path: apiPath`/api/v1/boards/${boardId}/search` + `?${params.toString()}`,
+            token,
+            schema: rowsOf(rowWithId),
+          }),
+          { view, ...(includeDescription === undefined ? {} : { includeDescription }) }
+        )
+      );
     }
   );
 }

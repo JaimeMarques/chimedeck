@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiPath, dataOf, request, rowWithId, rowsOf, runTool } from './toolSupport';
+import { projectRows, rowView } from './results';
 
 // Read-only lookups for resolving IDs before writes. Names, arguments and
 // return shapes mirror the local Python server (chimedeck_mcp/tools.py).
@@ -136,22 +137,32 @@ export function registerBoardLookups(server: McpServer, token: string): void {
         'Archived cards are not included; use list_archived_cards.',
       inputSchema: {
         listId: z.string().min(1).describe('ID of the list'),
-        limit: z.number().int().min(1).optional().describe('Maximum number of cards to return'),
-        offset: z.number().int().min(0).optional().describe('Number of cards to skip'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(50)
+          .describe('Maximum number of cards to return'),
+        offset: z.number().int().min(0).default(0).describe('Number of cards to skip'),
+        ...rowView,
       },
       annotations: readOnly,
     },
-    ({ listId, limit, offset }) =>
+    ({ listId, limit, offset, view, includeDescription }) =>
       runTool(token, async () => {
         const query = new URLSearchParams();
-        if (limit !== undefined) query.set('limit', String(limit));
-        if (offset !== undefined) query.set('offset', String(offset));
-        const { data, metadata } = await request({
+        query.set('limit', String(limit));
+        query.set('offset', String(offset));
+        const response = await request({
           path: apiPath`/api/v1/lists/${listId}/cards` + (query.size ? `?${query.toString()}` : ''),
           token,
           schema: rowsOf(rowWithId).extend({ metadata: z.looseObject({}).optional() }),
         });
-        return metadata ? { data, metadata } : { data };
+        return projectRows(response, {
+          view,
+          ...(includeDescription === undefined ? {} : { includeDescription }),
+        });
       })
   );
 
@@ -159,9 +170,12 @@ export function registerBoardLookups(server: McpServer, token: string): void {
     'list_archived_cards',
     {
       description: 'List the archived cards on a board.',
-      inputSchema: { boardId },
+      inputSchema: { boardId, ...rowView },
       annotations: readOnly,
     },
-    (args) => runTool(token, () => readRows(apiPath`/api/v1/boards/${args.boardId}/archived-cards`))
+    (args) =>
+      runTool(token, async () =>
+        projectRows(await readRows(apiPath`/api/v1/boards/${args.boardId}/archived-cards`), args)
+      )
   );
 }

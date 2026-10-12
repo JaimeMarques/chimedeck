@@ -109,18 +109,21 @@ defineToolScenarios(import.meta, registerBoardLookups, {
     const cards = [row('c1'), row('c2')];
     // No pagination args: no query string, no metadata key.
     h.respond(() => json({ data: cards }));
-    assert.deepEqual(await h.ok('list_cards', { listId: 'l1' }), { data: cards });
+    assert.deepEqual(await h.ok('list_cards', { listId: 'l1', view: 'full' }), { data: cards });
     assert.deepEqual(
       h.requests.map((r) => [r.method, r.path]),
-      [['GET', '/api/v1/lists/l1/cards']]
+      [['GET', '/api/v1/lists/l1/cards?limit=50&offset=0']]
     );
     // Pagination: exact query, metadata passed through unchanged.
     const metadata = { total: 9, limit: 2, offset: 4, nextOffset: 6, hasMore: true };
     h.respond(() => json({ data: cards, metadata }));
-    assert.deepEqual(await h.ok('list_cards', { listId: 'l1', limit: 2, offset: 4 }), {
-      data: cards,
-      metadata,
-    });
+    assert.deepEqual(
+      await h.ok('list_cards', { listId: 'l1', limit: 2, offset: 4, view: 'full' }),
+      {
+        data: cards,
+        metadata,
+      }
+    );
     assert.deepEqual(
       h.requests.map((r) => r.path),
       ['/api/v1/lists/l1/cards?limit=2&offset=4']
@@ -132,7 +135,11 @@ defineToolScenarios(import.meta, registerBoardLookups, {
     await expectReadErrors(h, 'list_cards', { listId: 'l1' });
   },
   list_archived_cards: (h) =>
-    listContract(h, 'list_archived_cards', { boardId: 'b1' }, '/api/v1/boards/b1/archived-cards', [
-      row('c9'),
-    ]),
+    listContract(
+      h,
+      'list_archived_cards',
+      { boardId: 'b1', view: 'full' },
+      '/api/v1/boards/b1/archived-cards',
+      [row('c9')]
+    ),
 });

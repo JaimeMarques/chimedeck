@@ -6,12 +6,16 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiCall } from '../apiClient';
+import { runTool } from './toolSupport';
 
 export function registerImportDryRun(server: McpServer, token: string): void {
-  server.tool(
+  server.registerTool(
     'historical_import_dry_run',
-    'Dry-run a historical-import plan: full validation + outcome simulation with ZERO writes. Default and safe.',
-    { plan: z.unknown().describe('The full import plan manifest JSON.') },
+    {
+      description:
+        'Dry-run a historical-import plan: full validation + outcome simulation with ZERO writes. Default and safe.',
+      inputSchema: { plan: z.unknown().describe('The full import plan manifest JSON.') },
+    },
     async ({ plan }) => {
       const result = await apiCall<{ data: unknown }>({
         method: 'POST',
@@ -22,20 +26,23 @@ export function registerImportDryRun(server: McpServer, token: string): void {
       if ('error' in result) {
         return { content: [{ type: 'text', text: `Error: ${result.error.name}` }], isError: true };
       }
-      return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
+      return runTool(token, () => Promise.resolve(result.data));
     }
   );
 }
 
 export function registerImportReset(server: McpServer, token: string): void {
-  server.tool(
+  server.registerTool(
     'historical_import_reset',
-    'Reset provenance rows recorded by a plan hash (provenance-only: entity rows are never deleted here). Requires OWNER. Destructive recovery is REST-only (POST /reset with recovery=true + confirm_destructive=true and the HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED server gate).',
     {
-      planHash: z
-        .string()
-        .regex(/^[0-9a-f]{64}$/)
-        .describe('The 64-hex plan hash to reset.'),
+      description:
+        'Reset provenance rows recorded by a plan hash (provenance-only: entity rows are never deleted here). Requires OWNER. Destructive recovery is REST-only (POST /reset with recovery=true + confirm_destructive=true and the HISTORICAL_IMPORT_RESET_RECOVERY_ENABLED server gate).',
+      inputSchema: {
+        planHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .describe('The 64-hex plan hash to reset.'),
+      },
     },
     async ({ planHash }) => {
       const result = await apiCall<{ data: unknown }>({
@@ -47,7 +54,7 @@ export function registerImportReset(server: McpServer, token: string): void {
       if ('error' in result) {
         return { content: [{ type: 'text', text: `Error: ${result.error.name}` }], isError: true };
       }
-      return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
+      return runTool(token, () => Promise.resolve(result.data));
     }
   );
 }

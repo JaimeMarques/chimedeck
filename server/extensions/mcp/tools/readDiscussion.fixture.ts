@@ -123,8 +123,12 @@ try {
       scenario === 'validation'
         ? { commentId: 'not-a-uuid' }
         : direct
-          ? { commentId: parentId.toUpperCase() }
-          : { cardId: scenario === 'encoded-id' ? 'card?limit=1#fragment' : 'short123' },
+          ? { commentId: parentId.toUpperCase(), view: 'full' }
+          : {
+              cardId: scenario === 'encoded-id' ? 'card?limit=1#fragment' : 'short123',
+              view: 'full',
+              all: true,
+            },
   });
   const raw = result.content;
   assert.ok(Array.isArray(raw));
@@ -146,7 +150,7 @@ try {
     assert.equal(result.isError, true);
     const code = {
       denied: 'http-403',
-      html: 'bad-response',
+      html: 'invalid-response',
       null: 'bad-response',
       malformed: 'bad-response',
       'missing-count': 'bad-response',
@@ -157,7 +161,17 @@ try {
     if (scenario === 'validation') assert.equal(requests.length, 0);
   } else {
     assert.notEqual(result.isError, true);
-    const payload = JSON.parse(first.text) as {
+    const observed = JSON.parse(first.text) as Record<string, unknown>;
+    if (!direct) {
+      assert.equal(observed.scope, 'all');
+      assert.equal(observed.page_complete, observed.complete);
+      assert.ok(observed.pagination);
+    }
+    const legacy = { ...observed };
+    delete legacy.page_complete;
+    delete legacy.scope;
+    delete legacy.pagination;
+    const payload = legacy as {
       data: Array<ReturnType<typeof row>>;
       complete: boolean;
       issues: Array<{

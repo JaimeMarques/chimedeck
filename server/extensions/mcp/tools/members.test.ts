@@ -57,7 +57,12 @@ defineToolScenarios(import.meta, registerMemberTools, {
     h.respond((r) =>
       r.method === 'POST' ? json({ data: { card_id: 'c1', user_id: 'u1' } }, 201) : json(after)
     );
-    assert.deepEqual(await h.ok('add_card_member', { cardId: 'c1', userId: 'u1' }), after);
+    assert.deepEqual(await h.ok('add_card_member', { cardId: 'c1', userId: 'u1' }), {
+      id: 'c1',
+      verified: true,
+      verified_fields: ['members'],
+      observed: { child_id: 'u1', present: true },
+    });
     assert.deepEqual(calls(h), [
       { method: 'POST', path: '/api/v1/cards/c1/members', body: { userId: 'u1' } },
       { method: 'GET', path: '/api/v1/cards/c1', body: undefined },
@@ -73,7 +78,12 @@ defineToolScenarios(import.meta, registerMemberTools, {
   remove_card_member: async (h) => {
     const after = card([]);
     h.respond((r) => (r.method === 'DELETE' ? empty() : json(after)));
-    assert.deepEqual(await h.ok('remove_card_member', { cardId: 'c1', userId: 'u/1' }), after);
+    assert.deepEqual(await h.ok('remove_card_member', { cardId: 'c1', userId: 'u/1' }), {
+      id: 'c1',
+      verified: true,
+      verified_fields: ['members'],
+      observed: { child_id: 'u/1', present: false },
+    });
     assert.deepEqual(calls(h), [
       { method: 'DELETE', path: '/api/v1/cards/c1/members/u%2F1', body: undefined },
       { method: 'GET', path: '/api/v1/cards/c1', body: undefined },

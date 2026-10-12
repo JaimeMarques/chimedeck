@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { sanitizeRichText } from '../../../common/sanitize';
+import { identity, projectRows, verified, viewSchema } from './results';
 import {
   ToolError,
   apiPath,
   dataOf,
-  expectFields,
   findRow,
   request,
   rowWithId,
@@ -51,10 +51,12 @@ export function registerCommentTools(server: McpServer, token: string): void {
   // get_card_discussion walks it); a miss is not-in-card with no write sent.
   const locate = async (cardId: string, commentId: string) => {
     const top = await cardComments(cardId);
-    const own = top.find((row) => row.id === commentId);
+    const own = top.find((row) => identity(row.id) === identity(commentId));
     if (own) return { comment: own, parentId: null };
     for (const parent of top.filter((row) => (row.reply_count ?? 1) > 0)) {
-      const reply = (await replies(parent.id)).find((row) => row.id === commentId);
+      const reply = (await replies(parent.id)).find(
+        (row) => identity(row.id) === identity(commentId)
+      );
       if (reply) return { comment: reply, parentId: parent.id };
     }
     throw new ToolError('not-in-card');
@@ -65,10 +67,21 @@ export function registerCommentTools(server: McpServer, token: string): void {
     {
       description:
         'List the top-level comments on a card, oldest first. Use get_card_discussion for replies.',
-      inputSchema: { cardId: z.string().min(1).describe('ID of the card') },
+      inputSchema: { cardId: z.string().min(1).describe('ID of the card'), view: viewSchema },
       annotations: { readOnlyHint: true },
     },
-    (args) => runTool(token, () => cardComments(args.cardId))
+    (args) =>
+      runTool(token, async () =>
+        projectRows(
+          await request({
+            path: apiPath`/api/v1/cards/${args.cardId}/comments`,
+            token,
+            schema: rowsOf(topLevelRow),
+          }),
+          args,
+          true
+        )
+      )
   );
 
   server.registerTool(
@@ -95,8 +108,11 @@ export function registerCommentTools(server: McpServer, token: string): void {
         });
         const row = findRow(await thread(args.cardId, parentId), 'id', comment.id);
         // Stored as sanitizeRichText(content.trim()) (comment/api/update.ts).
-        expectFields(row, { content: sanitizeRichText(args.content.trim()) });
-        return row;
+        return {
+          ...verified(row, { content: sanitizeRichText(args.content.trim()) }),
+          card_id: row.card_id,
+          parent_id: row.parent_id,
+        };
       })
   );
 
@@ -108,9 +124,9 @@ export function registerCommentTools(server: McpServer, token: string): void {
     'delete_comment',
     {
       description:
-        "Delete a comment. A top-level comment leaves a '[deleted]' placeholder, which is returned; " +
-        'a deleted reply is verified gone from its thread. It must be on cardId (not-in-card otherwise; ' +
-        'pass the comment UUID).',
+        "Delete a comment. A top-level comment's '[deleted]' placeholder is checked on read-back, not returned; " +
+        'a deleted reply is verified gone from its thread. Returns a compact receipt with deleted, verified, id and card_id. ' +
+        'It must be on cardId (not-in-card otherwise; pass the comment UUID).',
       inputSchema: { cardId: commentCardId, commentId },
       annotations: { destructiveHint: true },
     },
@@ -128,11 +144,11 @@ export function registerCommentTools(server: McpServer, token: string): void {
         const rows = await thread(args.cardId, parentId);
         if (parentId) {
           if (rows.some((row) => row.id === comment.id)) throw new ToolError('delete-failed');
-          return { deleted: true, id: comment.id };
+          return { deleted: true, verified: true, id: comment.id, card_id: args.cardId };
         }
         const row = findRow(rows, 'id', comment.id);
         if (row.deleted !== true) throw new ToolError('delete-failed');
-        return row;
+        return { deleted: true, verified: true, id: comment.id, card_id: row.card_id };
       })
   );
 }

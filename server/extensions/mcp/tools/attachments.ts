@@ -2,12 +2,15 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { config } from '../config';
+import { acknowledgedCreate, fields, type Row } from './results';
+import { mkdir, open, rename, unlink } from 'node:fs/promises';
+import { dirname, resolve, join, isAbsolute } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   ToolError,
   apiFetch,
   apiPath,
   dataOf,
-  expectFields,
   findRow,
   inParent,
   request,
@@ -94,7 +97,110 @@ async function download(row: AttachmentRow, token: string) {
   };
 }
 
-export function registerAttachmentTools(server: McpServer, token: string): void {
+async function downloadToDisk(row: AttachmentRow, token: string, destPath: string) {
+  if (row.type !== 'FILE' || row.external_url) throw new ToolError('not-a-file');
+  if (row.status !== 'READY') throw new ToolError('not-ready');
+  if (!isAbsolute(destPath)) throw new ToolError('bad-request');
+  const destination = resolve(destPath);
+  const temporary = join(dirname(destination), `.chimedeck-${randomUUID()}.part`);
+  const abort = new AbortController();
+  const budget = config.timeoutMs ?? 30_000;
+  let deadline = setTimeout(() => {
+    abort.abort();
+  }, budget);
+  const progress = () => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => {
+      abort.abort();
+    }, budget);
+  };
+  const active = () => {
+    if (abort.signal.aborted) throw new ToolError('download-failed');
+  };
+  let res: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let file: Awaited<ReturnType<typeof open>> | undefined;
+  let published = false;
+  let ownedTemporary = false;
+  try {
+    res = await apiFetch(apiPath`/api/v1/attachments/${row.id}/view`, token, {
+      signal: abort.signal,
+    });
+    active();
+    if (res.status !== 200) throw new ToolError(`http-${String(res.status)}`);
+    const mimeType =
+      (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ||
+      row.content_type ||
+      'application/octet-stream';
+    if (mimeType === 'text/html' && row.content_type !== 'text/html')
+      throw new ToolError('invalid-response');
+    reader = res.body?.getReader();
+    progress(); // Header/setup deadline becomes a body idle deadline.
+    await mkdir(dirname(destination), { recursive: true });
+    active();
+    file = await open(temporary, 'wx', 0o600);
+    ownedTemporary = true;
+    active();
+    let total = 0;
+    while (reader) {
+      active();
+      const next = await reader.read();
+      active(); // Buffered bytes or EOF must not revive an already aborted transfer.
+      if (next.done) break;
+      if (next.value.byteLength > 0) progress();
+      total += next.value.byteLength;
+      if (typeof row.size_bytes === 'number' && total > row.size_bytes)
+        throw new ToolError('size-mismatch');
+      let offset = 0;
+      while (offset < next.value.byteLength) {
+        active();
+        const result = await file.write(next.value, offset, next.value.byteLength - offset);
+        active();
+        if (result.bytesWritten === 0) throw new ToolError('disk-write');
+        offset += result.bytesWritten;
+      }
+    }
+    active();
+    if (
+      typeof row.size_bytes !== 'number' ||
+      !Number.isSafeInteger(row.size_bytes) ||
+      row.size_bytes < 0 ||
+      total !== row.size_bytes
+    )
+      throw new ToolError('size-mismatch');
+    active();
+    clearTimeout(deadline); // Validated EOF retires network timing before disk publication.
+    await file.sync();
+    await file.close();
+    file = undefined;
+    await rename(temporary, destination);
+    published = true;
+    return {
+      id: row.id,
+      name: row.name ?? null,
+      path: destination,
+      size_bytes: total,
+      content_type: mimeType,
+      verified: true,
+    };
+  } catch (error) {
+    if (error instanceof ToolError) throw error;
+    throw new ToolError('download-failed');
+  } finally {
+    clearTimeout(deadline);
+    await file?.close().catch(() => {});
+    if (!published && ownedTemporary) await unlink(temporary).catch(() => {});
+    // Cancellation is best effort and must not strand an owned file or block the result.
+    try {
+      const disposal = reader ? reader.cancel() : res?.body?.cancel();
+      void disposal?.catch(() => {});
+    } catch {
+      /* A locked or already disposed body has no filesystem ownership. */
+    }
+  }
+}
+
+export function registerAttachmentTools(server: McpServer, token: string, localDisk = false): void {
   const cardAttachments = async (cardId: string) =>
     (
       await request({
@@ -117,22 +223,38 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
   server.registerTool(
     'download_attachment',
     {
-      description:
-        "Fetch an uploaded card attachment's bytes (max 10 MB). Returns its metadata, then the file " +
-        'as an image block (image types) or an embedded resource with a base64 blob. Link attachments have no bytes.',
+      description: localDisk
+        ? 'Stream an uploaded attachment to destPath on the local stdio client machine. Verifies size before atomic replacement; returns small metadata only.'
+        : "Fetch an uploaded card attachment's bytes (max 10 MB). Returns its metadata, then the file " +
+          'as an image block (image types) or an embedded resource with a base64 blob. Link attachments have no bytes.',
       inputSchema: {
         cardId: attachmentCardId,
         attachmentId: z.string().min(1).describe('ID of the attachment (from get_attachments)'),
+        ...(localDisk
+          ? {
+              destPath: z
+                .string()
+                .min(1)
+                .refine(isAbsolute)
+                .describe('Absolute local destination file path'),
+            }
+          : {}),
       },
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: !localDisk, ...(localDisk ? { destructiveHint: true } : {}) },
     },
     async (args) => {
       let block: CallToolResult['content'][number] | undefined;
       const result = await runTool(token, async () => {
+        if (localDisk && (typeof args.destPath !== 'string' || !isAbsolute(args.destPath)))
+          throw new ToolError('bad-request');
         const row = attachmentRow.safeParse(
           inParent(await cardAttachments(args.cardId), args.attachmentId, 'card')
         );
         if (!row.success) throw new ToolError('invalid-response');
+        if (localDisk) {
+          if (typeof args.destPath !== 'string') throw new ToolError('bad-request');
+          return downloadToDisk(row.data, token, args.destPath);
+        }
         const file = await download(row.data, token);
         block = file.block;
         return file.meta;
@@ -154,18 +276,35 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
     },
     (args) =>
       runTool(token, async () => {
-        const created = await request({
-          method: 'POST',
-          path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
-          // [why] The server rejects a missing name; Python leaves it optional.
-          body: { url: args.url, name: args.name || args.url },
-          token,
-          schema: dataOf(rowWithId),
-        });
-        const row = findRow(await cardAttachments(args.cardId), 'id', created.data.id);
-        // Stored verbatim (attachment/api/addUrl.ts); a link's view_url is its URL.
-        expectFields(row, { name: args.name || args.url, view_url: args.url });
-        return row;
+        return acknowledgedCreate(
+          () =>
+            request({
+              method: 'POST',
+              path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
+              // [why] The server rejects a missing name; Python leaves it optional.
+              body: { url: args.url, name: args.name || args.url },
+              token,
+              schema: z.unknown(),
+            }),
+          async (ack) => {
+            const row = findRow(await cardAttachments(args.cardId), 'id', String(ack.id));
+            return {
+              row,
+              selected: true,
+              extra: {
+                attachment: fields(
+                  row,
+                  new Set(
+                    'id card_id type name external_url view_url content_type size_bytes status created_at'.split(
+                      ' '
+                    )
+                  )
+                ) as Row,
+              },
+            };
+          },
+          { name: args.name || args.url, view_url: args.url }
+        );
       })
   );
 

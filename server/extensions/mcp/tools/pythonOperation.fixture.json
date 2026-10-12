@@ -1,0 +1,372 @@
+{
+  "reference": "2d9ae72f54ffb9258588eb4b85de375c202bb535",
+  "batch": {
+    "expected": {
+      "card_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "complete": true,
+      "partial": false,
+      "items": [
+        {
+          "item_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "request_outcome": "succeeded",
+          "observation": "matches",
+          "verified": true,
+          "observed": {
+            "checked": true
+          }
+        },
+        {
+          "item_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "request_outcome": "succeeded",
+          "observation": "matches",
+          "verified": true,
+          "observed": {
+            "title": "two"
+          }
+        }
+      ]
+    },
+    "methods": ["GET", "PATCH", "PATCH", "GET"]
+  },
+  "discussion": {
+    "expected": {
+      "data": [
+        {
+          "id": "parent-5",
+          "content": "完整-5",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-5",
+          "parent_id": "parent-5",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-6",
+          "content": "完整-6",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-6",
+          "parent_id": "parent-6",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-7",
+          "content": "完整-7",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-7",
+          "parent_id": "parent-7",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-8",
+          "content": "完整-8",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-8",
+          "parent_id": "parent-8",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-9",
+          "content": "完整-9",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-9",
+          "parent_id": "parent-9",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-10",
+          "content": "完整-10",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-10",
+          "parent_id": "parent-10",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-11",
+          "content": "完整-11",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-11",
+          "parent_id": "parent-11",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-12",
+          "content": "完整-12",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-12",
+          "parent_id": "parent-12",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-13",
+          "content": "完整-13",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-13",
+          "parent_id": "parent-13",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-14",
+          "content": "完整-14",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-14",
+          "parent_id": "parent-14",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-15",
+          "content": "完整-15",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-15",
+          "parent_id": "parent-15",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-16",
+          "content": "完整-16",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-16",
+          "parent_id": "parent-16",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-17",
+          "content": "完整-17",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-17",
+          "parent_id": "parent-17",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-18",
+          "content": "完整-18",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-18",
+          "parent_id": "parent-18",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-19",
+          "content": "完整-19",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-19",
+          "parent_id": "parent-19",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-20",
+          "content": "完整-20",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-20",
+          "parent_id": "parent-20",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-21",
+          "content": "完整-21",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-21",
+          "parent_id": "parent-21",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-22",
+          "content": "完整-22",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-22",
+          "parent_id": "parent-22",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-23",
+          "content": "完整-23",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-23",
+          "parent_id": "parent-23",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        },
+        {
+          "id": "parent-24",
+          "content": "完整-24",
+          "created_at": "same",
+          "deleted": false,
+          "reply_count": 1,
+          "parent_id": null
+        },
+        {
+          "id": "reply-parent-24",
+          "parent_id": "parent-24",
+          "content": "reply",
+          "created_at": "same",
+          "deleted": false
+        }
+      ],
+      "complete": false,
+      "page_complete": true,
+      "issues": [],
+      "scope": "latest-parent-threads",
+      "pagination": {
+        "total_threads": 25,
+        "returned_threads": 20,
+        "omitted_threads": 5,
+        "offset": 0,
+        "limit": 20,
+        "next_offset": 20
+      }
+    },
+    "methods": [
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET"
+    ]
+  }
+}

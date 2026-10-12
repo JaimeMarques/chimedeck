@@ -1,40 +1,39 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { apiCall } from '../apiClient';
+import { apiPath, dataOf, request, rowWithId, runTool } from './toolSupport';
+import { projectCard, viewSchema } from './results';
 
 export function registerGetCard(server: McpServer, token: string): void {
   server.registerTool(
     'get_card',
     {
-      description: 'Retrieve the full details of a single card by its ID.',
+      description:
+        'Retrieve a card by ID, compact by default with its complete description; view:full returns the full API envelope ' +
+        'after privacy filtering. Both views recursively remove ip_address and user_agent. Read comments with get_card_discussion.',
       inputSchema: {
         cardId: z.string().describe('ID of the card to retrieve'),
+        view: viewSchema,
         include_activities: z
           .boolean()
           .optional()
           .describe(
-            "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; when present, the 'card_created' row's actor_id is the card's creator (some cards, e.g. duplicated or copied ones, have none).",
+            "Also return the card's activity feed in includes.activities (default false). Rows are oldest first; when present, the 'card_created' row's actor_id is the card's creator (some cards, e.g. duplicated or copied ones, have none)."
           ),
       },
     },
-    async ({ cardId, include_activities }) => {
+    async ({ cardId, include_activities, view }) => {
       const query = include_activities ? '?include=activities' : '';
-      const result = await apiCall<{ data: unknown }>({
-        method: 'GET',
-        path: `/api/v1/cards/${encodeURIComponent(cardId)}${query}`,
-        token,
-      });
-
-      if ('error' in result) {
-        return {
-          content: [{ type: 'text', text: `Error: ${result.error.name}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
+      return runTool(token, async () =>
+        projectCard(
+          await request({
+            method: 'GET',
+            path: apiPath`/api/v1/cards/${cardId}` + query,
+            token,
+            schema: dataOf(rowWithId),
+          }),
+          view
+        )
+      );
     }
   );
 }

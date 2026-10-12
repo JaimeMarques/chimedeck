@@ -1,36 +1,41 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { apiCall } from '../apiClient';
+import { sanitizeRichText, sanitizeText } from '../../../common/sanitize';
+import { apiPath, readCard, request, runTool } from './toolSupport';
+import { acknowledgedCreate } from './results';
 
 export function registerCreateCard(server: McpServer, token: string): void {
   server.registerTool(
     'create_card',
     {
-      description: 'Create a new card in a specified list.',
+      description:
+        'Create a card and verify its acknowledged identity and stored fields. Never automatically retry an unknown creation.',
       inputSchema: {
-        listId: z.string().describe('ID of the list to create the card in'),
-        title: z.string().describe('Title of the new card'),
-        description: z.string().optional().describe('Optional description for the new card'),
+        listId: z.string().min(1).describe('Destination list ID'),
+        title: z.string().describe('Card title'),
+        description: z.string().optional().describe('Card description; stored text is sanitized'),
       },
     },
-    async ({ listId, title, description }) => {
-      const result = await apiCall<{ data: unknown }>({
-        method: 'POST',
-        path: `/api/v1/lists/${listId}/cards`,
-        body: { title, description },
-        token,
-      });
-
-      if ('error' in result) {
-        return {
-          content: [{ type: 'text', text: `Error: ${result.error.name}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
-    }
+    ({ listId, title, description }) =>
+      runTool(token, () =>
+        acknowledgedCreate(
+          () =>
+            request({
+              method: 'POST',
+              path: apiPath`/api/v1/lists/${listId}/cards`,
+              body: { title, description },
+              token,
+              schema: z.unknown(),
+            }),
+          async (ack) => ({ row: (await readCard(String(ack.id), token)).data }),
+          {
+            title: sanitizeText(title.trim()),
+            list_id: listId,
+            ...(description === undefined
+              ? {}
+              : { description: description ? sanitizeRichText(description.trim()) : null }),
+          }
+        )
+      )
   );
 }

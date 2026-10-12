@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiCall } from '../apiClient';
+import { runTool } from './toolSupport';
 
 export function registerGetStateTransitionRules(server: McpServer, token: string): void {
   server.registerTool(
@@ -8,7 +9,7 @@ export function registerGetStateTransitionRules(server: McpServer, token: string
     {
       description: 'Get enforceable state-transition rules for a board.',
       inputSchema: {
-      boardId: z.string().describe('ID of the board'),
+        boardId: z.string().describe('ID of the board'),
       },
     },
     async ({ boardId }) => {
@@ -25,9 +26,7 @@ export function registerGetStateTransitionRules(server: McpServer, token: string
         };
       }
 
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
+      return runTool(token, () => Promise.resolve(result.data));
     }
   );
 }

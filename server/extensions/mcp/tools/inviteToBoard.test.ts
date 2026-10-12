@@ -47,9 +47,7 @@ describe('registerInviteToBoard', () => {
     registerInviteToBoard(server as never, 'token-1');
 
     expect(toolName).toBe('invite_to_board');
-    expect(toolDescription).toBe(
-      'Invite a user to a board by email. Requires the token holder to be a board admin.'
-    );
+    expect(toolDescription).toContain('eligible workspace member');
     expect(handler).toBeDefined();
   });
 
@@ -62,7 +60,13 @@ describe('registerInviteToBoard', () => {
   });
 
   test('posts the email with the authenticated MCP token to the board members endpoint', async () => {
-    apiCallMock.mockResolvedValue({ data: { data: { id: 'user-1', role: 'MEMBER' } } });
+    apiCallMock.mockImplementation(({ method }: { method: string }) =>
+      Promise.resolve({
+        data: {
+          data: method === 'GET' ? [{ user_id: 'user-1', role: 'MEMBER' }] : { id: 'user-1' },
+        },
+      })
+    );
     registerInviteToBoard(server as never, 'token-abc');
     if (!handler) throw new Error('invite_to_board did not register a handler');
 
@@ -72,12 +76,14 @@ describe('registerInviteToBoard', () => {
       role: 'member',
     });
 
-    expect(apiCallMock).toHaveBeenCalledWith({
-      method: 'POST',
-      path: '/api/v1/boards/board-1/members',
-      body: { email: 'person@example.com', role: 'member' },
-      token: 'token-abc',
-    });
+    expect(apiCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/v1/boards/board-1/members',
+        body: { email: 'person@example.com', role: 'member' },
+        token: 'token-abc',
+      })
+    );
     expect(result.isError).toBeUndefined();
   });
 
