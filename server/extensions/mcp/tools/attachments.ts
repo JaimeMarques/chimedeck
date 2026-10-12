@@ -240,7 +240,7 @@ export function registerAttachmentTools(server: McpServer, token: string, localD
             }
           : {}),
       },
-      annotations: { readOnlyHint: !localDisk },
+      annotations: { readOnlyHint: !localDisk, ...(localDisk ? { destructiveHint: true } : {}) },
     },
     async (args) => {
       let block: CallToolResult['content'][number] | undefined;

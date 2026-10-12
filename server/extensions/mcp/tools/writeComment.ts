@@ -11,9 +11,12 @@ export function registerWriteComment(server: McpServer, token: string): void {
       description:
         'Post a parent comment and verify its acknowledged identity. Unknown creation outcomes must not be automatically retried.',
       inputSchema: {
-        cardId: z.string().min(1),
-        content: z.string().optional(),
-        text: z.string().optional(),
+        cardId: z.string().min(1).describe('Card UUID or short ID'),
+        content: z
+          .string()
+          .optional()
+          .describe('Parent comment body; required unless text alias is supplied'),
+        text: z.string().optional().describe('Deprecated alias for content'),
       },
     },
     ({ cardId, content, text }) =>

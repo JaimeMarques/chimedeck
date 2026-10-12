@@ -20,7 +20,7 @@ Created card, copy, comment, checklist, item, board and list IDs survive later v
 
 Nonempty due dates require a calendar-valid timezone-aware timestamp with at most six fractional digits. The original input is sent without millisecond conversion; comparisons use exact integer microseconds. Backend serialization/storage may still lose precision, which fails verification. Prices compare exact decimal coefficients/scales against finite parsed JavaScript numbers, including internal exponent expansion. Unsafe integer inputs are rejected before HTTP; this does not claim arbitrary Python-integer or raw JSON-number precision after JavaScript parsing. Money clear/label behavior follows the native backend.
 
-Attachment download schemas differ by trusted transport registration. Local stdio requires an absolute `destPath`, uses a bounded header/setup deadline and a body idle timeout reset only on byte progress, streams to an exclusive temporary file, verifies size, then atomically replaces the destination and returns small metadata only. Progressing large transfers may exceed the setup budget; validated EOF retires network timing before disk publication. Hosted HTTP exposes no destination path or disk writes and retains capped in-band attachment content. Both retain file/readiness/card-scope, redirect and size guards.
+Attachment download schemas differ by trusted transport registration. Local stdio requires an absolute `destPath`, uses a bounded header/setup deadline and a body idle timeout reset only on byte progress, streams to an exclusive temporary file, verifies size, then atomically replaces the destination and returns small metadata only. Progressing large transfers may exceed the setup budget; validated EOF retires network timing before disk publication. Local stdio deliberately permits atomic overwrite of an existing explicitly chosen destination; the replacement has private mode0600 and destructiveHint:true. Hosted HTTP exposes no destination path or disk writes and retains capped in-band attachment content. Both retain file/readiness/card-scope, redirect and size guards.
 
 This port deliberately strengthens `create_label` and `add_url_attachment` beyond the Python 0.3 legacy results: newly allocated IDs survive secondary verification failures and selected label/attachment text is returned once. Native roles, normalization and threaded comment mutation support follow the current application. Full tool catalogue parity does not imply every legacy wire result is identical.
 
@@ -317,7 +317,7 @@ Returns `204 No Content` on success.
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card to move |
 | `targetListId` | string | ✅ | ID of the destination list |
-| `afterCardId` | string \| null | No | Insert after this card ID (`null` places at the top) |
+| `afterCardId` | string \| null | No | Insert after this card ID; null places at top, omission appends at bottom |
 | `position` | number | No | Deprecated alias. Only `0` is supported and maps to top |
 
 #### `write_comment`
@@ -646,7 +646,7 @@ The comment must be on `cardId` (top level or a reply; `not-in-card` otherwise, 
 | `cardId` | string | ✅ | ID of the card the comment is on |
 | `commentId` | string | ✅ | ID of the comment |
 
-Destructive. The comment must be on `cardId` (`not-in-card` otherwise, no DELETE sent). The server soft-deletes: for a top-level comment the tool requires the re-read row to have `deleted: true` and returns that `[deleted]` placeholder; a deleted reply must be absent from its parent's replies, and the tool returns `{deleted: true, id}`.
+Destructive. The comment must be on `cardId` (`not-in-card` otherwise, no DELETE sent). The server soft-deletes: for a top-level comment the tool requires the re-read row to have `deleted: true`; a deleted reply must be absent from its parent's replies. Both return `{deleted: true, verified: true, id, card_id}`.
 
 #### `get_attachments`
 

@@ -242,6 +242,7 @@ defineToolScenarios(
       assert.ok(tool);
       assert.ok(tool);
       assert.equal(tool.annotations?.readOnlyHint, false);
+      assert.equal(tool.annotations.destructiveHint, true);
       assert.ok(tool.inputSchema.required?.includes('destPath'));
       h.respond(() => json({ data: [row] }));
       assert.equal(
@@ -340,6 +341,7 @@ defineToolScenarios(
       const tool = h.tools.find((tool) => tool.name === 'download_attachment');
       assert.ok(tool);
       assert.equal(tool.annotations?.readOnlyHint, true);
+      assert.equal(tool.annotations.destructiveHint, undefined);
       assert.equal(tool.inputSchema.properties?.destPath, undefined);
       const folder = await mkdtemp(join(tmpdir(), 'chimedeck-http-test-'));
       try {

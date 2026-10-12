@@ -68,14 +68,17 @@ const services = {
 };
 export function inspectOwnedResources(docker, project, checkout, composePath) {
   const names = {
-    container: Object.keys(services).map((name) => `${project}-${name}-1`),
+    container: [
+      ...Object.keys(services).map((name) => `${project}-${name}-1`),
+      `${project}-migrate-1`,
+    ],
     volume: ['postgres', 'redis', 's3'].map((name) => `${project}_${name}`),
     network: [`${project}_default`],
   };
   const objects = { container: [], volume: [], network: [] };
   const formats = {
     container:
-      '{"Name":{{json .Name}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .NetworkSettings.Ports}},"RequestedPorts":{{json .HostConfig.PortBindings}},"Running":{{json .State.Running}}}',
+      '{"Id":{{json .Id}},"Name":{{json .Name}},"Command":{{json .Config.Cmd}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .NetworkSettings.Ports}},"RequestedPorts":{{json .HostConfig.PortBindings}},"Running":{{json .State.Running}}}',
     volume:
       '{"Name":{{json .Name}},"Labels":{{json .Labels}},"Driver":{{json .Driver}},"Options":{{json .Options}}}',
     network:
@@ -125,13 +128,26 @@ export function inspectOwnedResources(docker, project, checkout, composePath) {
   for (const container of objects.container) {
     const service = container.Labels['com.docker.compose.service'];
     const expected = services[service];
+    const migration = container.Name === `/${project}-migrate-1`;
     if (
       !expected ||
-      container.Name !== `/${project}-${service}-1` ||
+      typeof container.Id !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(container.Id) ||
+      (migration ? service !== 'app' : container.Name !== `/${project}-${service}-1`) ||
       container.Labels['com.docker.compose.project.config_files'] !== composePath ||
       container.Labels['com.docker.compose.project.working_dir'] !== dirname(composePath)
     )
       throw new Error('Foreign Compose container');
+    if (migration) {
+      if (
+        container.Labels['com.docker.compose.oneoff'] !== 'True' ||
+        JSON.stringify(container.Command) !== JSON.stringify(['bun', 'run', 'db:migrate']) ||
+        Object.keys(container.RequestedPorts ?? {}).length ||
+        Object.values(container.Ports ?? {}).some((bindings) => bindings?.length)
+      )
+        throw new Error('Foreign migration container');
+    } else if (container.Labels['com.docker.compose.oneoff'] === 'True')
+      throw new Error('Unexpected one-off service container');
     if (
       Object.keys(container.Networks ?? {}).some((name) => name !== `${project}_default`) ||
       Object.keys(container.Networks ?? {}).length !== 1 ||
@@ -155,6 +171,7 @@ export function inspectOwnedResources(docker, project, checkout, composePath) {
       !objects.volume.some((volume) => volume.Name === mount.Name)
     )
       throw new Error('Container volume is outside owned lab');
+    if (migration) continue;
     const requested = container.RequestedPorts?.[expected.port];
     if (
       Object.keys(container.RequestedPorts ?? {}).length !== 1 ||

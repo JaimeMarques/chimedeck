@@ -9,7 +9,10 @@ export function registerEditDescription(server: McpServer, token: string): void 
     'edit_card_description',
     {
       description: 'Update a card description and verify the stored sanitized value.',
-      inputSchema: { cardId: z.string().min(1), description: z.string() },
+      inputSchema: {
+        cardId: z.string().min(1).describe('Card ID'),
+        description: z.string().describe('New description; sanitized/trimmed text is verified'),
+      },
     },
     ({ cardId, description }) =>
       runTool(token, async () => {

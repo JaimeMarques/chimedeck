@@ -10,9 +10,13 @@ export function registerCreateList(server: McpServer, token: string): void {
       description:
         'Create a list and verify its acknowledged identity and title on the requested board. Relative ordering remains explicitly unverified.',
       inputSchema: {
-        boardId: z.string().min(1),
-        title: z.string().min(1),
-        afterId: z.string().nullable().optional(),
+        boardId: z.string().min(1).describe('Parent board ID'),
+        title: z.string().min(1).describe('List title'),
+        afterId: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Insert after this list; null selects top, omission appends'),
       },
     },
     ({ boardId, title, afterId }) =>

@@ -1307,6 +1307,19 @@ curl -X POST http://localhost:3000/api/mcp \\
                   ],
                 },
                 {
+                  rowId: 'mc-afterCardId',
+                  cells: [
+                    { key: 'param', content: <Code>afterCardId</Code> },
+                    { key: 'type', content: 'string | null' },
+                    { key: 'req', content: 'No' },
+                    {
+                      key: 'desc',
+                      content:
+                        'Insert after this card; null selects top, omission appends at bottom',
+                    },
+                  ],
+                },
+                {
                   rowId: 'mc-position',
                   cells: [
                     { key: 'param', content: <Code>position</Code> },
@@ -1314,7 +1327,7 @@ curl -X POST http://localhost:3000/api/mcp \\
                     { key: 'req', content: 'No' },
                     {
                       key: 'desc',
-                      content: 'Zero-based position within the target list',
+                      content: 'Deprecated alias: only 0 (top) is supported',
                     },
                   ],
                 },
@@ -1666,11 +1679,11 @@ curl -X POST http://localhost:3000/api/mcp \\
             </P>
             <P>
               Creation receipts retain acknowledged IDs through later verification failures.
-              created: true does not prove verification. Inspect verified and errors; never
-              automatically retry acknowledged or unknown creations. Native text verification uses
-              sanitized/trimmed expectations and exposes normalization and actual observed values.
-              Native roles and threaded comment mutations remain supported; legacy Python wire
-              results are not all identical.
+              request_outcome: succeeded does not prove verification. Inspect verified and errors;
+              never automatically retry acknowledged or unknown creations. Native text verification
+              uses sanitized/trimmed expectations and exposes normalization and actual observed
+              values. Native roles and threaded comment mutations remain supported; legacy Python
+              wire results are not all identical.
             </P>
             <Pre>{`{"name":"get_card","arguments":{"cardId":"<card ID>","view":"full"}}`}</Pre>
           </Section>
@@ -2584,8 +2597,7 @@ curl -X POST http://localhost:3000/api/mcp \\
             <P>
               Edit the text of an existing comment. It must be on <Code>cardId</Code> (
               <Code>not-in-card</Code> otherwise, no PATCH sent; pass the comment UUID). Returns the
-              comment read back from the card’s top-level comments, or for a reply from its parent’s
-              replies.
+              compact verified receipt with actual observed sanitized/trimmed content.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2631,9 +2643,8 @@ curl -X POST http://localhost:3000/api/mcp \\
               Delete a comment (the server keeps a placeholder). Destructive. It must be on{' '}
               <Code>cardId</Code> (<Code>not-in-card</Code> otherwise, no DELETE sent). The server
               soft-deletes: for a top-level comment the tool requires the re-read row to have{' '}
-              <Code>deleted: true</Code> and returns that <Code>[deleted]</Code> placeholder; a
-              deleted reply must be absent from its parent’s replies, and the tool returns{' '}
-              <Code>&#123;deleted: true, id&#125;</Code>.
+              <Code>deleted: true</Code>; a deleted reply must be absent from its parent’s replies.
+              Both return <Code>&#123;deleted: true, verified: true, id, card_id&#125;</Code>.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2696,7 +2707,9 @@ curl -X POST http://localhost:3000/api/mcp \\
               response fails with <Code>http-&lt;status&gt;</Code>. Local stdio requires destPath
               (absolute local filename), streams without the hosted cap, verifies size and
               atomically replaces the destination after success. It returns metadata without binary
-              content. Hosted HTTP accepts no writable path.
+              content. Hosted HTTP accepts no writable path. Local stdio deliberately permits atomic
+              overwrite of the chosen destination; replacement files have private mode0600 and
+              destructiveHint:true.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2751,7 +2764,7 @@ curl -X POST http://localhost:3000/api/mcp \\
             </P>
             <P>
               Attach a link to a card. The server requires a name, so an omitted <Code>name</Code>{' '}
-              is sent as the URL. Returns the attachment read back from the card’s attachment list.
+              is sent as the URL. The receipt includes selected attachment text once.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
@@ -2898,9 +2911,7 @@ curl -X POST http://localhost:3000/api/mcp \\
               failure without invented observations; malformed acknowledgements, timeouts and 5xx
               have unknown request outcomes. Check verified and errors; never automatically retry.
             </P>
-            <P>
-              Create a label on a board. Returns the label read back from the board’s label list.
-            </P>
+            <P>Create a label on a board. The receipt includes selected label text once.</P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[

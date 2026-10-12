@@ -18,10 +18,17 @@ export function registerMoveCard(server: McpServer, token: string): void {
       description:
         'Move a card and verify destination and ordering. Ordering stays explicitly unverified if a complete list read is unavailable.',
       inputSchema: {
-        cardId: z.string().min(1),
-        targetListId: z.string().min(1),
-        afterCardId: z.string().nullable().optional(),
-        position: z.number().optional(),
+        cardId: z.string().min(1).describe('Card to move'),
+        targetListId: z.string().min(1).describe('Destination list ID'),
+        afterCardId: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Insert after this card; null places at top, omission appends at bottom'),
+        position: z
+          .number()
+          .optional()
+          .describe('Deprecated position alias; only 0 (top) is supported'),
       },
     },
     ({ cardId, targetListId, afterCardId, position }) =>

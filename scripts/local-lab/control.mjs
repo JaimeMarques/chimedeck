@@ -199,6 +199,62 @@ function database(allowStart = false) {
     throw new Error('Connected database is not the owned lab');
   return found;
 }
+function stopOrder(found) {
+  return [...found.container].sort(
+    (a, b) =>
+      Number(![`${project}-migrate-1`, `${project}-app-1`].includes(a.Name.slice(1))) -
+      Number(![`${project}-migrate-1`, `${project}-app-1`].includes(b.Name.slice(1)))
+  );
+}
+function refreshApp() {
+  if (existsSync(resolve(state, 'app-start.json'))) privateJson('app-start.json');
+  compose('up', '-d', '--wait', '--no-deps', '--force-recreate', 'app');
+  const app = resources(true, true).container.find(
+    (container) => container.Name === `/${project}-app-1`
+  );
+  if (!app?.Running || typeof app.Id !== 'string') throw new Error('Fresh owned app missing');
+  writeFileSync(
+    resolve(state, 'app-start.json'),
+    JSON.stringify({
+      container_id: app.Id,
+      revision,
+      development: allowMcp,
+    }),
+    { mode: 0o600 }
+  );
+}
+function proofApp() {
+  const found = database();
+  if (allowMcp) {
+    refreshApp();
+    return;
+  }
+  if (!existsSync(resolve(state, 'app-start.json')))
+    throw new Error('Loaded app provenance missing; run clean restart-app');
+  const loaded = privateJson('app-start.json');
+  const app = found.container.find((container) => container.Name === `/${project}-app-1`);
+  if (
+    !app?.Running ||
+    loaded.container_id !== app.Id ||
+    loaded.revision !== revision ||
+    loaded.development !== false
+  )
+    throw new Error('Loaded app provenance is stale or development-started; run clean restart-app');
+}
+function containerAction(action, container) {
+  // Snapshot IDs cannot select a replacement that reuses an owned name.
+  try {
+    docker([action, container.Id]);
+  } catch (error) {
+    const probe = spawnSync(
+      'docker',
+      ['--host', dockerHost, 'container', 'inspect', '--format', '{{.Id}}', container.Id],
+      { env: cleanEnv, encoding: 'utf8' }
+    );
+    if (probe.status === 1 && /No such (object|container)/i.test(probe.stderr ?? '')) return;
+    throw error;
+  }
+}
 if (
   !cleanup &&
   !['pin', 'prepare'].includes(command) &&
@@ -241,6 +297,9 @@ if (command === 'prepare') {
   console.info('Pinned the unchanged-schema source and verified local Docker daemon');
 } else if (command === 'start') {
   const found = resources();
+  const migration = found.container.find((container) => container.Name === `/${project}-migrate-1`);
+  if (migration?.Running)
+    throw new Error('Owned migration is already running; stop it before start');
   if (!found.container.some((container) => container.Running))
     for (const port of [33000, 35432, 36379, 34566])
       await new Promise((accept, reject) => {
@@ -259,9 +318,19 @@ if (command === 'prepare') {
     );
   }
   database();
-  compose('run', '--rm', '--no-deps', 'app', 'bun', 'run', 'db:migrate');
-  compose('up', '-d', '--wait', 'app');
-  resources(true, true);
+  if (migration) containerAction('rm', migration);
+  compose(
+    'run',
+    '--name',
+    `${project}-migrate-1`,
+    '--rm',
+    '--no-deps',
+    'app',
+    'bun',
+    'run',
+    'db:migrate'
+  );
+  refreshApp();
   console.info('Local API started on http://127.0.0.1:33000');
 } else if (command === 'seed') {
   database();
@@ -277,9 +346,9 @@ if (command === 'prepare') {
 } else if (command === 'reset') {
   database(true);
   const found = resources(true);
-  for (const container of found.container)
-    if (container.Running) docker(['stop', container.Name.slice(1)]);
-  for (const container of found.container) docker(['rm', container.Name.slice(1)]);
+  for (const container of stopOrder(found))
+    if (container.Running) containerAction('stop', container);
+  for (const container of found.container) containerAction('rm', container);
   for (const network of found.network) docker(['network', 'rm', network.Name]);
   for (const volume of found.volume) docker(['volume', 'rm', volume.Name]);
   for (const name of [
@@ -288,6 +357,7 @@ if (command === 'prepare') {
     'browser-result.json',
     'smoke-attachment.txt',
     'browser-smoke.png',
+    'app-start.json',
   ]) {
     const file = resolve(state, name);
     if (existsSync(file)) unlinkSync(file);
@@ -295,8 +365,8 @@ if (command === 'prepare') {
   console.info('Removed only verified owned lab resources and generated credentials');
 } else if (command === 'stop') {
   const found = resources(true);
-  for (const container of found.container)
-    if (container.Running) docker(['stop', container.Name.slice(1)]);
+  for (const container of stopOrder(found))
+    if (container.Running) containerAction('stop', container);
   console.info('Stopped owned lab containers; resources retained for guarded reset/restart');
 } else if (command === 'status') {
   const found = resources(true);
@@ -310,6 +380,12 @@ if (command === 'prepare') {
     console.info(
       'Owned stopped resources validated; database marker is unverified while Postgres is stopped'
     );
+  if (existsSync(resolve(state, 'app-start.json'))) {
+    const loaded = privateJson('app-start.json');
+    console.info(
+      `Loaded app revision=${String(loaded.revision)} development=${String(loaded.development)} container=${String(loaded.container_id)}`
+    );
+  } else console.info('Loaded app provenance missing; clean restart-app required before proof');
   console.info(
     docker([
       'ps',
@@ -322,19 +398,18 @@ if (command === 'prepare') {
   );
 } else if (command === 'restart-app') {
   database();
-  compose('up', '-d', '--wait', '--no-deps', '--force-recreate', 'app');
-  resources(true, true);
+  refreshApp();
   console.info('Restarted the API on the explicitly pinned revision');
 } else if (command === 'test') {
-  database();
+  proofApp();
   console.info(
     run('bun', ['scripts/local-lab/smoke.ts'], { env: { ...cleanEnv, LAB_STATE: state } })
   );
 } else if (command === 'guards') {
-  database();
+  proofApp();
   console.info(run('node', ['scripts/local-lab/guards.mjs', state, revision]));
 } else if (command === 'browser') {
-  database();
+  proofApp();
   const executable = process.argv[5];
   if (!executable || !existsSync(executable))
     throw new Error('Explicit existing browser executable required');

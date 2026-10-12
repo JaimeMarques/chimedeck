@@ -10,11 +10,14 @@ export function registerCreateBoard(server: McpServer, token: string): void {
       description:
         'Create a board and verify acknowledged identity and stored fields. Returns one selected board, with no automatic retries.',
       inputSchema: {
-        workspaceId: z.string().min(1),
-        title: z.string().min(1),
-        visibility: z.enum(['PRIVATE', 'WORKSPACE', 'PUBLIC']).optional(),
-        description: z.string().optional(),
-        background: z.string().optional(),
+        workspaceId: z.string().min(1).describe('Workspace ID containing the new board'),
+        title: z.string().min(1).describe('Board title'),
+        visibility: z
+          .enum(['PRIVATE', 'WORKSPACE', 'PUBLIC'])
+          .optional()
+          .describe('Board visibility; defaults to PRIVATE'),
+        description: z.string().optional().describe('Board description; stored text is sanitized'),
+        background: z.string().optional().describe('Board background value'),
       },
     },
     ({ workspaceId, title, visibility, description, background }) =>

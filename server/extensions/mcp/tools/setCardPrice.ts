@@ -9,13 +9,14 @@ export function registerSetCardPrice(server: McpServer, token: string): void {
       description:
         'Set or clear card price and verify the exact finite JavaScript number transmitted. Unsafe integer inputs are rejected.',
       inputSchema: {
-        cardId: z.string().min(1),
+        cardId: z.string().min(1).describe('Card ID'),
         amount: z
           .number()
           .refine((value) => !Number.isInteger(value) || Number.isSafeInteger(value))
-          .nullable(),
-        currency: z.string().optional(),
-        label: z.string().optional(),
+          .nullable()
+          .describe('Finite price amount; null clears price, unsafe integers rejected'),
+        currency: z.string().optional().describe('Currency code'),
+        label: z.string().optional().describe('Optional price label'),
       },
     },
     ({ cardId, amount, currency, label }) =>

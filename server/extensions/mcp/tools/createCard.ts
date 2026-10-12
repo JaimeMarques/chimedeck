@@ -11,9 +11,9 @@ export function registerCreateCard(server: McpServer, token: string): void {
       description:
         'Create a card and verify its acknowledged identity and stored fields. Never automatically retry an unknown creation.',
       inputSchema: {
-        listId: z.string().min(1),
-        title: z.string(),
-        description: z.string().optional(),
+        listId: z.string().min(1).describe('Destination list ID'),
+        title: z.string().describe('Card title'),
+        description: z.string().optional().describe('Card description; stored text is sanitized'),
       },
     },
     ({ listId, title, description }) =>

@@ -9,9 +9,9 @@ export function registerInviteToBoard(server: McpServer, token: string): void {
       description:
         'Add an eligible workspace member by email and verify board membership and role. Preserves backend duplicate and ambiguity refusals; no email invitation to outsiders.',
       inputSchema: {
-        boardId: z.string().min(1),
-        email: z.email(),
-        role: z.enum(['member', 'admin']).optional(),
+        boardId: z.string().min(1).describe('Board ID'),
+        email: z.email().describe('Email of an eligible existing workspace member'),
+        role: z.enum(['member', 'admin']).optional().describe('Board role; defaults to member'),
       },
     },
     ({ boardId, email, role }) =>
