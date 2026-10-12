@@ -36,6 +36,8 @@ jobs:
           node --test scripts/local-lab/*.test.mjs
           scripts/local-lab/controller-check.mjs
           scripts/local-lab/atomicOwner-check.mjs
+      - name: Test local lab seed connection refusal
+        run: bun test scripts/local-lab/seedConnectionGuard.test.ts
       - name: Typecheck local lab SDK fixtures
         run: bunx --no-install tsc --noEmit -p scripts/local-lab/tsconfig.json
       - name: Lint MCP discussion and board coverage implementation and fixtures
