@@ -399,6 +399,7 @@ Returns an acknowledged ID receipt. Later verification failure preserves the ID;
 #### `search_cards`
 
 Optional `view` is `"compact"` (default) or `"full"`. List/search summaries accept `includeDescription` (default false).
+Default compact search uses one GET. Explicit `includeDescription: true` or `view: "full"` fills missing card descriptions using authenticated card and board reads: at most 1 + N + B GETs for N unique selected cards and B unique boards (B ≤ N, selected limit ≤ 100). Ten cards on one board require 12 GETs when their descriptions are absent upstream. Existing string/null descriptions need no extra reads. Every fresh hierarchy/workspace check must agree; inaccessible, moved or malformed results fail the whole tool without partial text. Only descriptions are merged, preserving search order and metadata. These reads are sequential observations, not an atomic snapshot. `search_board` already returns descriptions and ordinarily remains one GET.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `workspaceId` | string | ✅ | ID of the workspace to search within |

@@ -30,7 +30,7 @@ export const demoCards: DemoCard[] = [
     title: 'Lab demo: scheduled review',
     description:
       'Synthetic review appointment with an explicit UTC due date. No email, webhook, payment or external notification is sent by this lab.',
-    dueDate: '2030-01-15T14:30:00.123456Z',
+    dueDate: '2030-01-15T14:30:00.123Z',
   },
   {
     shortId: 'labcard5',

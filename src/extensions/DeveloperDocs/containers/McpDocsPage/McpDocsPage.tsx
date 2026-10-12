@@ -1706,6 +1706,17 @@ curl -X POST http://localhost:3000/api/mcp \\
               Full-text search over all cards within a workspace. Returns matching cards with title,
               list, and board context.
             </P>
+            <P>
+              Default compact search uses one GET. Explicit includeDescription: true or view: full
+              fills missing card descriptions with authenticated card and board reads: at most 1 + N
+              + B GETs for N unique selected cards and B unique boards, with B ≤ N and at most 100
+              selected rows. Ten cards on one board require 12 GETs when descriptions are absent
+              upstream. Existing string/null descriptions need no extra reads. Fresh hierarchy and
+              workspace checks must agree; errors fail the whole tool without partial text. Only
+              descriptions are merged, preserving order and metadata. These sequential observations
+              are not an atomic snapshot. Board search already returns descriptions and ordinarily
+              remains one GET.
+            </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}
               rows={[

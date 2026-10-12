@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiPath, request, rowsOf, rowWithId, runTool } from './toolSupport';
 import { projectRows, rowView } from './results';
+import { describeSearch } from './searchDescriptions';
 
 export function registerSearchCards(server: McpServer, token: string): void {
   server.registerTool(
@@ -34,16 +35,19 @@ export function registerSearchCards(server: McpServer, token: string): void {
       const params = new URLSearchParams({ query: resolvedQuery });
       params.set('limit', String(limit));
 
-      return runTool(token, async () =>
-        projectRows(
-          await request({
-            path: apiPath`/api/v1/workspaces/${workspaceId}/search` + `?${params.toString()}`,
-            token,
-            schema: rowsOf(rowWithId),
-          }),
+      return runTool(token, async () => {
+        const response = await request({
+          path: apiPath`/api/v1/workspaces/${workspaceId}/search` + `?${params.toString()}`,
+          token,
+          schema: rowsOf(rowWithId),
+        });
+        return projectRows(
+          view === 'full' || includeDescription === true
+            ? await describeSearch(response, workspaceId, token, limit)
+            : response,
           { view, ...(includeDescription === undefined ? {} : { includeDescription }) }
-        )
-      );
+        );
+      });
     }
   );
 }

@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { demoCards } from './demoFixtures';
+import { equal, timestamp } from '../../server/extensions/mcp/tools/results';
 
 const state = Bun.env.LAB_STATE;
 if (!state) throw new Error('Explicit private lab state required');
@@ -134,7 +135,8 @@ async function verifyDemoReads() {
         );
         for (const fixture of credentials.demoCards) {
           const row = rows.find((value) => value.id === fixture.id);
-          assert.equal(row?.title, fixture.title);
+          assert.ok(row);
+          assert.equal(row.title, fixture.title);
           if ('includeDescription' in options || 'view' in options)
             assert.equal(row.description, fixture.description);
           else assert.ok(!('description' in row), `${tool}: compact default omits description`);
@@ -148,6 +150,27 @@ async function verifyDemoReads() {
           .parse(await call(client, 'get_card', { cardId: fixture.id, ...options })).data;
         assert.equal(card.id, fixture.id);
         assert.equal(card.description, fixture.description);
+        const expected = demoCards.find((value) => value.shortId === fixture.shortId);
+        assert.ok(expected);
+        if (expected.dueDate) assert.equal(timestamp(card.due_date), timestamp(expected.dueDate));
+        if (expected.amount) {
+          assert.ok(equal('amount', card.amount, 123.45));
+          assert.equal(card.currency, expected.currency);
+        }
+        if (['labcard2', 'labcard3', 'labcard4'].includes(fixture.shortId)) {
+          const detail = await call(client, 'get_card', { cardId: fixture.id });
+          const labels = z
+            .object({
+              includes: z.object({
+                labels: z.array(z.object({ name: z.string(), color: z.string() })),
+              }),
+            })
+            .parse(detail).includes.labels;
+          assert.deepEqual(
+            labels.map(({ name, color }) => ({ name, color })),
+            [{ name: 'Synthetic demo', color: '#2563EB' }]
+          );
+        }
       }
     }
   }
