@@ -124,9 +124,9 @@ export function registerCommentTools(server: McpServer, token: string): void {
     'delete_comment',
     {
       description:
-        "Delete a comment. A top-level comment leaves a '[deleted]' placeholder, which is returned; " +
-        'a deleted reply is verified gone from its thread. It must be on cardId (not-in-card otherwise; ' +
-        'pass the comment UUID).',
+        "Delete a comment. A top-level comment's '[deleted]' placeholder is checked on read-back, not returned; " +
+        'a deleted reply is verified gone from its thread. Returns a compact receipt with deleted, verified, id and card_id. ' +
+        'It must be on cardId (not-in-card otherwise; pass the comment UUID).',
       inputSchema: { cardId: commentCardId, commentId },
       annotations: { destructiveHint: true },
     },

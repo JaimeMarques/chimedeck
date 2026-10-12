@@ -54,7 +54,9 @@ export function registerMemberTools(server: McpServer, token: string): void {
   server.registerTool(
     'add_card_member',
     {
-      description: 'Assign a board member to a card. Returns the card with its includes.',
+      description:
+        'Assign a board member to a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (members) and observed {child_id, present: true}, not a full card or includes.',
       inputSchema: {
         cardId,
         userId: z.string().min(1).describe('User ID (see list_board_members)'),
@@ -76,7 +78,9 @@ export function registerMemberTools(server: McpServer, token: string): void {
   server.registerTool(
     'remove_card_member',
     {
-      description: 'Unassign a member from a card. Returns the card with its includes.',
+      description:
+        'Unassign a member from a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (members) and observed {child_id, present: false}, not a full card or includes.',
       inputSchema: { cardId, userId: z.string().min(1).describe('User ID') },
     },
     (args) =>

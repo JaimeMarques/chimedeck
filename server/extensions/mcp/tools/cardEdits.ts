@@ -92,7 +92,8 @@ export function registerCardEdits(server: McpServer, token: string): void {
     {
       description:
         "Update a card's title, description, due date and/or completion tick. " +
-        'Pass only the fields to change. Returns the card with its includes.',
+        'Pass only the fields to change. Returns a compact receipt with id, verified, verified_fields and observed; ' +
+        'normalized_fields identifies stored normalization when present. No full card or includes are returned.',
       inputSchema: {
         cardId,
         title: z.string().optional().describe('New title'),
@@ -119,7 +120,8 @@ export function registerCardEdits(server: McpServer, token: string): void {
     'set_card_due',
     {
       description:
-        "Set or clear a card's due date and its completion tick. Returns the card with its includes.",
+        "Set or clear a card's due date and its completion tick. Returns a compact receipt with id, verified, " +
+        'verified_fields and observed, not a full card or includes.',
       inputSchema: {
         cardId,
         dueDate: dueDate.describe('Due date as ISO-8601; null or empty clears it'),
@@ -133,7 +135,8 @@ export function registerCardEdits(server: McpServer, token: string): void {
     'archive_card',
     {
       description:
-        'Archive a card (archived=true) or restore it (archived=false). Returns the card with its includes. ' +
+        'Archive a card (archived=true) or restore it (archived=false). Returns a compact receipt with id, verified, ' +
+        'verified_fields and observed, not a full card or includes; write_skipped is true when already in the requested state. ' +
         'The server route toggles, so a concurrent archive/restore by someone else between the read and the write ' +
         'can leave the card in the other state: that is reported as archive-state-conflict, never success.',
       inputSchema: {
@@ -189,7 +192,11 @@ export function registerCardEdits(server: McpServer, token: string): void {
   server.registerTool(
     'copy_card',
     {
-      description: 'Copy a card into a list. Returns the new card with its includes.',
+      description:
+        'Copy a card into a list. Returns a compact creation receipt with request_outcome and verified; ' +
+        'successful read-back adds id, verified_fields and observed, not a full card or includes. ' +
+        'Explicit keepChecklists and keepMembers remain unverified. An unknown request_outcome or failed ' +
+        'verification does not prove no copy was created; never automatically retry.',
       inputSchema: {
         cardId: z.string().min(1).describe('ID of the card to copy'),
         targetListId: z.string().min(1).describe('ID of the destination list'),

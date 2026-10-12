@@ -235,7 +235,10 @@ export function registerChecklistTools(server: McpServer, token: string): void {
   server.registerTool(
     'create_checklist',
     {
-      description: 'Create a checklist on a card. Returns {checklist, items, card}.',
+      description:
+        'Create a checklist on a card. Returns a compact creation receipt with request_outcome and verified; ' +
+        'successful read-back adds the selected checklist and card_id, not items or a full card. ' +
+        'An unknown request_outcome or failed verification does not prove no write occurred; never automatically retry.',
       inputSchema: {
         cardId: z.string().min(1).describe('ID of the card'),
         title: z.string().min(1).describe('Checklist title'),
@@ -266,7 +269,10 @@ export function registerChecklistTools(server: McpServer, token: string): void {
   server.registerTool(
     'add_checklist_item',
     {
-      description: 'Add an item to a checklist. Returns {item, card}.',
+      description:
+        'Add an item to a checklist. Returns a compact creation receipt with request_outcome and verified; ' +
+        'successful read-back adds the selected item and card_id, not a full card. ' +
+        'An unknown request_outcome or failed verification does not prove no write occurred; never automatically retry.',
       inputSchema: { checklistId, title: z.string().min(1).describe('Item text') },
     },
     (args) =>
@@ -300,7 +306,8 @@ export function registerChecklistTools(server: McpServer, token: string): void {
     'set_checklist_item',
     {
       description:
-        'Check/uncheck or rename a checklist item. Returns {item, card}. Give checked, title or both.',
+        'Check/uncheck or rename a checklist item. Give checked, title or both. Returns a compact receipt ' +
+        'with id, verified, verified_fields, observed, the selected item and card_id, not a full card.',
       inputSchema: {
         itemId,
         checked: z.boolean().optional().describe('true to tick, false to untick'),
@@ -329,7 +336,9 @@ export function registerChecklistTools(server: McpServer, token: string): void {
   server.registerTool(
     'rename_checklist',
     {
-      description: 'Rename a checklist. Returns {checklist, items, card}.',
+      description:
+        'Rename a checklist. Returns a compact receipt with id, verified, verified_fields, observed, ' +
+        'the selected checklist and card_id, not items or a full card.',
       inputSchema: { checklistId, title: z.string().min(1).describe('New title') },
     },
     (args) =>

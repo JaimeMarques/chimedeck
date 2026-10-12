@@ -8,7 +8,8 @@ export function registerGetCard(server: McpServer, token: string): void {
     'get_card',
     {
       description:
-        'Retrieve a card by ID, compact by default with its complete description; view:full includes all fields. Read comments with get_card_discussion.',
+        'Retrieve a card by ID, compact by default with its complete description; view:full returns the full API envelope ' +
+        'after privacy filtering. Both views recursively remove ip_address and user_agent. Read comments with get_card_discussion.',
       inputSchema: {
         cardId: z.string().describe('ID of the card to retrieve'),
         view: viewSchema,

@@ -56,7 +56,9 @@ export function registerLabelTools(server: McpServer, token: string): void {
   server.registerTool(
     'add_card_label',
     {
-      description: 'Add an existing board label to a card. Returns the card with its includes.',
+      description:
+        'Add an existing board label to a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (labels) and observed {child_id, present: true}, not a full card or includes.',
       inputSchema: {
         cardId,
         labelId: z.string().min(1).describe('ID of the label (see list_labels)'),
@@ -78,7 +80,9 @@ export function registerLabelTools(server: McpServer, token: string): void {
   server.registerTool(
     'remove_card_label',
     {
-      description: 'Remove a label from a card. Returns the card with its includes.',
+      description:
+        'Remove a label from a card. Returns a compact receipt with id, verified, ' +
+        'verified_fields (labels) and observed {child_id, present: false}, not a full card or includes.',
       inputSchema: { cardId, labelId: z.string().min(1).describe('ID of the label') },
     },
     (args) =>
