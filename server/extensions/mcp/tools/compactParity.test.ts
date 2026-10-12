@@ -401,13 +401,18 @@ defineToolScenarios(import.meta, registerMcpTools, {
   'batch timeout and malformed ack remain unknown after a matching read': async (h) => {
     for (const mode of ['timeout', 'malformed']) {
       const rows = [item()];
-      config.timeoutMs = 15;
+      config.timeoutMs = 30_000;
+      let reads = 0;
       h.respond(async ({ method, body }) => {
         if (method === 'PATCH') {
+          // This request already captured its deadline. Give the final read the
+          // ordinary budget so only the mutation times out, not cold preflight.
+          config.timeoutMs = 30_000;
           Object.assign(rows[0] ?? {}, body);
-          if (mode === 'timeout') await Bun.sleep(40);
+          if (mode === 'timeout') await Bun.sleep(300);
           return mode === 'malformed' ? html() : json({ data: rows[0] });
         }
+        if (reads++ === 0 && mode === 'timeout') config.timeoutMs = 100;
         return json(card(rows));
       });
       const result = (await h.ok('set_checklist_items', {
@@ -418,7 +423,12 @@ defineToolScenarios(import.meta, registerMcpTools, {
       assert.ok(result.items[0]);
       assert.equal(result.items[0].request_outcome, 'unknown');
       assert.equal(result.items[0].observation, 'matches');
+      assert.equal(result.items[0].verified, true);
       assert.ok(result.items[0].error);
+      assert.deepEqual(
+        h.requests.map((request) => request.method),
+        ['GET', 'PATCH', 'GET']
+      );
     }
     config.timeoutMs = 30_000;
   },
