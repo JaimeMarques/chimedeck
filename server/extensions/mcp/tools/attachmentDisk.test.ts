@@ -22,6 +22,141 @@ defineToolScenarios(
     });
   },
   {
+    'local header deadline fails before destination mutation': async (h) => {
+      const folder = await mkdtemp(join(tmpdir(), 'chimedeck-header-test-'));
+      const destPath = join(folder, 'previous.txt');
+      try {
+        await writeFile(destPath, 'previous');
+        config.timeoutMs = 25;
+        h.respond(async ({ path }) => {
+          if (!path.endsWith('/view')) return json({ data: [row] });
+          await new Promise((accept) => setTimeout(accept, 100));
+          return new Response('hello', { headers: { 'Content-Type': 'text/plain' } });
+        });
+        await h.fail(
+          'download_attachment',
+          { cardId: 'c1', attachmentId: 'file1', destPath },
+          'network'
+        );
+        assert.equal(await readFile(destPath, 'utf8'), 'previous');
+        assert.deepEqual(await readdir(folder), ['previous.txt']);
+      } finally {
+        config.timeoutMs = 30_000;
+        await rm(folder, { recursive: true, force: true });
+      }
+    },
+    'buffered EOF abort reader setup failure and stalled cancellation never publish': async (h) => {
+      const folder = await mkdtemp(join(tmpdir(), 'chimedeck-reader-test-'));
+      const destPath = join(folder, 'previous.txt');
+      const fetchOriginal = globalThis.fetch;
+      try {
+        await writeFile(destPath, 'previous');
+        config.timeoutMs = 25;
+        h.respond(() => json({ data: [row] }));
+        for (const mode of ['buffered', 'eof', 'reader', 'setup']) {
+          let readCount = 0;
+          globalThis.fetch = Object.assign(
+            async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+              const url =
+                typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+              if (!url.endsWith('/view')) return fetchOriginal(input, init);
+              const response = new Response('hello', { headers: { 'Content-Type': 'text/plain' } });
+              Object.defineProperty(response.body, 'getReader', {
+                value: () => {
+                  if (mode === 'reader') throw new Error('synthetic reader setup failure');
+                  return {
+                    async read() {
+                      if (mode === 'buffered' || readCount++ > 0) {
+                        await new Promise((accept) => setTimeout(accept, 80));
+                        return {
+                          done: mode !== 'buffered',
+                          value: new TextEncoder().encode('hello'),
+                        };
+                      }
+                      return { done: false, value: new TextEncoder().encode('hello') };
+                    },
+                    cancel() {
+                      return new Promise(() => {});
+                    },
+                  };
+                },
+              });
+              return response;
+            },
+            { preconnect: fetchOriginal.preconnect }
+          );
+          if (mode === 'setup') await writeFile(join(folder, 'parent-file'), 'parent');
+          const result = await Promise.race([
+            h.call('download_attachment', {
+              cardId: 'c1',
+              attachmentId: 'file1',
+              destPath: mode === 'setup' ? join(folder, 'parent-file', 'output') : destPath,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => {
+                reject(new Error('Cancellation blocked result'));
+              }, 500)
+            ),
+          ]);
+          assert.equal(result.isError, true);
+          assert.equal(await readFile(destPath, 'utf8'), 'previous');
+          assert.deepEqual(
+            (await readdir(folder)).sort(),
+            mode === 'setup' ? ['parent-file', 'previous.txt'] : ['previous.txt']
+          );
+        }
+      } finally {
+        globalThis.fetch = fetchOriginal;
+        config.timeoutMs = 30_000;
+        await rm(folder, { recursive: true, force: true });
+      }
+    },
+    'relative destinations reject before HTTP or filesystem mutation': async (h) => {
+      h.respond(() => json({ data: [row] }));
+      for (const destPath of ['report.pdf', '../report.pdf', '~/report.pdf']) {
+        assert.equal(
+          (await h.call('download_attachment', { cardId: 'c1', attachmentId: 'file1', destPath }))
+            .isError,
+          true
+        );
+        assert.equal(h.requests.length, 0);
+      }
+    },
+    'slow byte progress continues beyond the setup deadline': async (h) => {
+      const folder = await mkdtemp(join(tmpdir(), 'chimedeck-progress-test-'));
+      const destPath = join(folder, 'output.txt');
+      try {
+        config.timeoutMs = 80;
+        h.respond(({ path }) =>
+          path.endsWith('/view')
+            ? new Response(
+                new ReadableStream({
+                  async pull(controller) {
+                    await new Promise((accept) => setTimeout(accept, 20));
+                    if (count++ < 8) controller.enqueue(new Uint8Array([65]));
+                    else controller.close();
+                  },
+                }),
+                { headers: { 'Content-Type': 'text/plain' } }
+              )
+            : json({ data: [{ ...row, size_bytes: 8 }] })
+        );
+        let count = 0;
+        const started = performance.now();
+        const result = await h.call('download_attachment', {
+          cardId: 'c1',
+          attachmentId: 'file1',
+          destPath,
+        });
+        assert.equal(result.isError, false);
+        assert.ok(performance.now() - started > 80);
+        assert.equal(await readFile(destPath, 'utf8'), 'AAAAAAAA');
+        assert.deepEqual(await readdir(folder), ['output.txt']);
+      } finally {
+        config.timeoutMs = 30_000;
+        await rm(folder, { recursive: true, force: true });
+      }
+    },
     'local streaming exceeds the hosted 10 MiB cap without binary context': async (h) => {
       const folder = await mkdtemp(join(tmpdir(), 'chimedeck-large-test-'));
       const size = 10 * 1024 * 1024 + 4096;

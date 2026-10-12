@@ -60,7 +60,9 @@ function privateJson(name) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 const identity = command === 'init' ? undefined : privateJson('identity.json');
-const allowMcp = process.env.LAB_ALLOW_MCP_DEV === '1' || identity?.allow_mcp_dev === true;
+const allowMcp = process.env.LAB_ALLOW_MCP_DEV === '1';
+if (allowMcp && !cleanup)
+  console.info('MCP development allowance enabled for this invocation; source may be uncommitted');
 if (!cleanup) guardSource(checkout, run, allowMcp);
 const selectedHost =
   process.env.LAB_DOCKER_HOST ??
@@ -108,7 +110,6 @@ if (command === 'init') {
     docker_host: dockerHost,
     docker_id: daemonId,
     dependency_digest: dependencyDigest(checkout),
-    allow_mcp_dev: allowMcp,
   };
   const runtime = {
     LAB_CHECKOUT: checkout,
@@ -212,7 +213,7 @@ if (command === 'prepare') {
   writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
   console.info('Prepared frozen dependencies for the selected source');
 } else if (command === 'pin') {
-  const changed = run('git', ['diff', '--name-only', identity.revision, revision])
+  const changed = run('git', ['diff', '--no-renames', '--name-only', identity.revision, revision])
     .trim()
     .split('\n')
     .filter(Boolean);
@@ -235,7 +236,7 @@ if (command === 'prepare') {
   identity.revision = revision;
   identity.docker_host = dockerHost;
   identity.docker_id = daemonId;
-  identity.allow_mcp_dev = allowMcp;
+  delete identity.allow_mcp_dev;
   writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
   console.info('Pinned the unchanged-schema source and verified local Docker daemon');
 } else if (command === 'start') {

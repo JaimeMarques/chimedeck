@@ -20,7 +20,7 @@ Created card, copy, comment, checklist, item, board and list IDs survive later v
 
 Nonempty due dates require a calendar-valid timezone-aware timestamp with at most six fractional digits. The original input is sent without millisecond conversion; comparisons use exact integer microseconds. Backend serialization/storage may still lose precision, which fails verification. Prices compare exact decimal coefficients/scales against finite parsed JavaScript numbers, including internal exponent expansion. Unsafe integer inputs are rejected before HTTP; this does not claim arbitrary Python-integer or raw JSON-number precision after JavaScript parsing. Money clear/label behavior follows the native backend.
 
-Attachment download schemas differ by trusted transport registration. Local stdio requires `destPath`, streams to an exclusive temporary file, verifies size, then atomically replaces the destination and returns small metadata only. Hosted HTTP exposes no destination path or disk writes and retains capped in-band attachment content. Both retain file/readiness/card-scope, redirect and size guards.
+Attachment download schemas differ by trusted transport registration. Local stdio requires an absolute `destPath`, uses a bounded header/setup deadline and a body idle timeout reset only on byte progress, streams to an exclusive temporary file, verifies size, then atomically replaces the destination and returns small metadata only. Progressing large transfers may exceed the setup budget; validated EOF retires network timing before disk publication. Hosted HTTP exposes no destination path or disk writes and retains capped in-band attachment content. Both retain file/readiness/card-scope, redirect and size guards.
 
 This port deliberately strengthens `create_label` and `add_url_attachment` beyond the Python 0.3 legacy results: newly allocated IDs survive secondary verification failures and selected label/attachment text is returned once. Native roles, normalization and threaded comment mutation support follow the current application. Full tool catalogue parity does not imply every legacy wire result is identical.
 
@@ -317,7 +317,7 @@ Returns `204 No Content` on success.
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card to move |
 | `targetListId` | string | ✅ | ID of the destination list |
-| `afterCardId` | string \ | null | No | Insert after this card ID (`null` places at the top) |
+| `afterCardId` | string \| null | No | Insert after this card ID (`null` places at the top) |
 | `position` | number | No | Deprecated alias. Only `0` is supported and maps to top |
 
 #### `write_comment`
@@ -338,7 +338,7 @@ Returns an acknowledged ID receipt with selected board text once; later verifica
 |---|---|---|---|
 | `workspaceId` | string | ✅ | ID of the workspace to create the board in |
 | `title` | string | ✅ | Board title |
-| `visibility` | `PRIVATE` \ | `WORKSPACE` \ | `PUBLIC` | No | Defaults to `PRIVATE` |
+| `visibility` | `PRIVATE` \| `WORKSPACE` \| `PUBLIC` | No | Defaults to `PRIVATE` |
 | `description` | string | No | Optional board description |
 | `background` | string | No | Optional board background value |
 
@@ -352,7 +352,7 @@ Returns an acknowledged ID receipt with selected list text once; later verificat
 |---|---|---|---|
 | `boardId` | string | ✅ | ID of the board to create the list on |
 | `title` | string | ✅ | List title |
-| `afterId` | string \ | null | No | Optional list ID after which to insert; omit to append |
+| `afterId` | string \| null | No | Optional list ID after which to insert; omit to append |
 
 The existing list API enforces board writable-member permission checks.
 
@@ -378,7 +378,7 @@ Returns an acknowledged ID receipt. Later verification failure preserves the ID;
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card |
-| `amount` | number \ | null | ✅ | Price amount, or `null` to clear the price |
+| `amount` | number \| null | ✅ | Price amount, or `null` to clear the price |
 | `currency` | string | No | ISO 4217 currency code (e.g. `USD`) |
 | `label` | string | No | Display label for the price |
 
@@ -388,7 +388,7 @@ Returns an acknowledged ID receipt. Later verification failure preserves the ID;
 |---|---|---|---|
 | `boardId` | string | ✅ | ID of the board |
 | `email` | string | ✅ | Email address of the user to invite |
-| `role` | `"member"` \ | `"admin"` | No | Role to assign (defaults to `"member"`) |
+| `role` | `"member"` \| `"admin"` | No | Role to assign (defaults to `"member"`) |
 
 > **Note:** `invite_to_board` requires board-management permission. Permission failures are returned as structured API errors (for example, `insufficient-role`) instead of crashing.
 
@@ -428,7 +428,7 @@ Optional `view` is `"compact"` (default) or `"full"`. Compact cards retain the c
 | `limit` | integer | No | 1–100 parent threads; default 20 |
 | `offset` | integer | No | Nonnegative; default 0 |
 | `all` | boolean | No | All parents; incompatible with explicit limit/offset |
-| `view` | compact \ | full | No | Compact default; full retains full fields |
+| `view` | compact \| full | No | Compact default; full retains full fields |
 
 Call this tool for a card's discussion; `get_card` is not a comment source.
 It returns `{data, complete, page_complete, scope, pagination, issues}`. Compact
@@ -573,7 +573,7 @@ Optional `view` is `"compact"` (default) or `"full"`. List/search summaries acce
 | `cardId` | string | ✅ | ID of the card |
 | `title` | string | No | New title |
 | `description` | string | No | New description |
-| `dueDate` | string \ | null | No | ISO-8601 due date; `null` or empty string clears it |
+| `dueDate` | string \| null | No | ISO-8601 due date; `null` or empty string clears it |
 | `dueComplete` | boolean | No | Mark the due date complete (the visible tick) or not |
 
 Give at least one field, otherwise the tool fails with `nothing-to-update` before any request. The PATCH body uses the server's snake_case fields (`due_date`, `due_complete`). Returns a compact verified receipt with actual observed fields. Text expectations are sanitized/trimmed; changed inputs expose `normalized_fields`. Requested due fields use exact typed comparison. A mismatch fails verification.
@@ -583,7 +583,7 @@ Give at least one field, otherwise the tool fails with `nothing-to-update` befor
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card |
-| `dueDate` | string \ | null | No | ISO-8601 due date; `null` or empty string clears it |
+| `dueDate` | string \| null | No | ISO-8601 due date; `null` or empty string clears it |
 | `dueComplete` | boolean | No | Mark complete (`true`) or not (`false`) |
 
 Give `dueDate`, `dueComplete` or both (`nothing-to-update` otherwise). Nonempty dates require a calendar-valid timezone-aware timestamp with at most six fractional digits; bare dates are rejected. The original validated value is sent unchanged and compared using exact microseconds. Returns a compact verified receipt with actual observed fields.
@@ -619,7 +619,10 @@ Returns an acknowledged creation receipt with the new ID and verification status
 
 #### `get_comments`
 
-This alias returns the discussion data envelope and shares its latest-20, limit/offset/all and compact/full semantics.
+Accepts only `cardId` and optional `view` (compact default or full). Returns
+`{data}` containing all top-level comments, oldest first, without replies. It has
+no limit/offset/all or completeness fields; use `get_card_discussion` for bounded
+parent threads, replies and completeness.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `cardId` | string | ✅ | ID of the card |
@@ -741,7 +744,7 @@ Returns a compact verified receipt; the member must be absent from observed incl
 |---|---|---|---|
 | `boardId` | string | ✅ | ID of the board |
 | `userId` | string | ✅ | User ID (see `list_workspace_members`) |
-| `role` | `"admin"` \ | `"member"` | No | Role to assign (defaults to `"member"`) |
+| `role` | `"admin"` \| `"member"` | No | Role to assign (defaults to `"member"`) |
 
 An existing member fails with `board-member-exists`; use `set_board_member_role`. Returns the member row read back from the board roster.
 
@@ -751,7 +754,7 @@ An existing member fails with `board-member-exists`; use `set_board_member_role`
 |---|---|---|---|
 | `boardId` | string | ✅ | ID of the board |
 | `userId` | string | ✅ | User ID (see `list_board_members`) |
-| `role` | `"admin"` \ | `"member"` | ✅ | New role |
+| `role` | `"admin"` \| `"member"` | ✅ | New role |
 
 Demoting the last admin fails with `last-board-admin`. Returns the member row read back with the new role.
 
@@ -867,6 +870,6 @@ Destructive. Prefer `archive_list`. The server refuses a list that still has car
 | `boardId` | string | ✅ | ID of the board |
 | `title` | string | No | New title |
 | `description` | string | No | New description |
-| `visibility` | `PRIVATE` \ | `WORKSPACE` \ | `PUBLIC` | No | New visibility |
+| `visibility` | `PRIVATE` \| `WORKSPACE` \| `PUBLIC` | No | New visibility |
 
 Give at least one field (`nothing-to-update` otherwise). Returns the board read back; every given field must match (`readback-failed` otherwise).

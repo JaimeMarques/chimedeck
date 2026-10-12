@@ -28,7 +28,7 @@ export function registerMoveCard(server: McpServer, token: string): void {
       runTool(token, async () => {
         if (afterCardId === undefined && position !== undefined && position !== 0)
           throw new ToolError('bad-request');
-        let after = afterCardId ?? null;
+        let after = afterCardId === undefined && position === 0 ? null : afterCardId;
         if (after) {
           const relative = (await readCard(after, token)).data;
           if (
@@ -59,7 +59,13 @@ export function registerMoveCard(server: McpServer, token: string): void {
           const index = ids.indexOf(identity(card.id));
           if (new Set(ids).size !== ids.length || index < 0)
             throw new ToolError('invalid-response');
-          if (after === null ? index !== 0 : index === 0 || ids[index - 1] !== identity(after))
+          if (
+            after === undefined
+              ? index !== ids.length - 1
+              : after === null
+                ? index !== 0
+                : index === 0 || ids[index - 1] !== identity(after)
+          )
             throw new ToolError('readback-mismatch');
           result.verified = true;
           result.verified_fields.push('ordering');

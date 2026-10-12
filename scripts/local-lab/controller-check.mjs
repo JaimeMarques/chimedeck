@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -11,9 +11,14 @@ import { dependencyDigest } from './labGuards.mjs';
 
 const source = dirname(fileURLToPath(import.meta.url));
 const revision = 'a'.repeat(40);
-const endpoint = `unix://${realpathSync('/var/run/docker.sock')}`;
 async function fixture(options) {
   const directory = await mkdtemp(resolve(tmpdir(), 'chimedeck-controller-'));
+  const socket = createServer();
+  const endpoint = `unix://${resolve(directory, 'fixture.sock')}`;
+  await new Promise((accept, reject) => {
+    socket.once('error', reject);
+    socket.listen(endpoint.slice('unix://'.length), accept);
+  });
   const checkout = resolve(directory, 'checkout'),
     state = resolve(directory, 'state'),
     bin = resolve(directory, 'bin'),
@@ -35,13 +40,14 @@ async function fixture(options) {
     revision,
     status: options.status ?? '',
     collision: options.collision,
+    rename: options.rename,
     log: resolve(directory, 'docker-calls.jsonl'),
   };
   await writeFile(resolve(bin, 'fixture.json'), JSON.stringify(config));
   const common = `const fs=require('node:fs'),path=require('node:path');const config=JSON.parse(fs.readFileSync(path.join(__dirname,'fixture.json'),'utf8'));const args=process.argv.slice(2);`;
   await writeFile(
     resolve(bin, 'git'),
-    `#!/usr/bin/env node\n${common}\nprocess.stdout.write(args[0]==='status'?config.status:config.revision+'\\n');`,
+    `#!/usr/bin/env node\n${common}\nprocess.stdout.write(args[0]==='status'?config.status:args[0]==='diff'&&config.rename?(args.includes('--no-renames')?'db/migrations/moved.ts\\n':'')+'server/extensions/mcp/moved.ts\\n':config.revision+'\\n');`,
     { mode: 0o700 }
   );
   await writeFile(
@@ -60,6 +66,7 @@ async function fixture(options) {
       docker_host: endpoint,
       docker_id: 'fixture-daemon',
       dependency_digest: dependencyDigest(checkout),
+      allow_mcp_dev: options.persistedMcp ?? false,
     }),
     { mode: 0o600 }
   );
@@ -74,15 +81,22 @@ async function fixture(options) {
     { mode: 0o600 }
   );
   if (options.envFile) await writeFile(resolve(checkout, options.envFile), 'SYNTHETIC=true');
+  const identityBefore = await readFile(resolve(state, 'identity.json'), 'utf8');
   const result = spawnSync(
     process.execPath,
-    [resolve(checkout, 'scripts/local-lab/control.mjs'), 'start', state, revision],
+    [
+      resolve(checkout, 'scripts/local-lab/control.mjs'),
+      options.command ?? 'start',
+      state,
+      revision,
+    ],
     {
       cwd: checkout,
       env: {
         PATH: `${bin}:${process.env.PATH}`,
         HOME: home,
         ...(options.endpoint ? { LAB_DOCKER_HOST: options.endpoint } : {}),
+        ...(options.allowMcp !== undefined ? { LAB_ALLOW_MCP_DEV: options.allowMcp } : {}),
       },
       encoding: 'utf8',
     }
@@ -97,7 +111,7 @@ async function fixture(options) {
   } catch {
     /* Refusals before Docker correctly have no recorder. */
   }
-  return { directory, checkout, home, result, calls };
+  return { directory, checkout, home, state, endpoint, socket, identityBefore, result, calls };
 }
 const mutations = ['up', 'down', 'run', 'rm', 'create', 'start', 'stop'];
 async function refuse(options, message, beforeDocker = false) {
@@ -110,15 +124,21 @@ async function refuse(options, message, beforeDocker = false) {
       'Guard must precede every mutation'
     );
     assert.ok(
-      value.calls.every((args) => args[0] === '--host' && args[1] === endpoint),
+      value.calls.every((args) => args[0] === '--host' && args[1] === value.endpoint),
       'Every Docker command pins the verified local endpoint'
     );
     if (beforeDocker) assert.equal(value.calls.length, 0);
+    assert.equal(
+      await readFile(resolve(value.state, 'identity.json'), 'utf8'),
+      value.identityBefore,
+      'Refusal must not rewrite recorded ownership or permissions'
+    );
     assert.equal(
       await readFile(resolve(value.home, '.docker/config.json'), 'utf8'),
       '{"currentContext":"remote-fixture"}'
     );
   } finally {
+    await new Promise((accept) => value.socket.close(accept));
     await rm(value.directory, { recursive: true, force: true });
   }
 }
@@ -147,4 +167,24 @@ test('controller rejects dirty protected working/index/untracked files before Do
     ' M vite.config.ts\0',
   ])
     await refuse({ status }, 'Protected source/index/untracked', true);
+});
+test('MCP development permission is per-run even with a legacy sticky identity', async () => {
+  for (const allowMcp of [undefined, '0'])
+    await refuse(
+      { status: ' M server/extensions/mcp/tools/example.ts\0', persistedMcp: true, allowMcp },
+      'Protected source/index/untracked',
+      true
+    );
+  await refuse(
+    {
+      status: ' M server/extensions/mcp/tools/example.ts\0',
+      persistedMcp: true,
+      allowMcp: '1',
+      collision: 'chimedeck-compact-lab_s3',
+    },
+    'Foreign or unmarked'
+  );
+});
+test('pin rejects protected source renamed into an allowed directory before mutation', async () => {
+  await refuse({ command: 'pin', rename: true }, 'Pin only supports committed');
 });

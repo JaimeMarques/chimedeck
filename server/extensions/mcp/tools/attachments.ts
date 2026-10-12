@@ -4,8 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { config } from '../config';
 import { acknowledgedCreate, fields, type Row } from './results';
 import { mkdir, open, rename, unlink } from 'node:fs/promises';
-import { dirname, resolve, join } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname, resolve, join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   ToolError,
@@ -101,43 +100,67 @@ async function download(row: AttachmentRow, token: string) {
 async function downloadToDisk(row: AttachmentRow, token: string, destPath: string) {
   if (row.type !== 'FILE' || row.external_url) throw new ToolError('not-a-file');
   if (row.status !== 'READY') throw new ToolError('not-ready');
-  const destination = resolve(
-    destPath.startsWith('~/') ? join(homedir(), destPath.slice(2)) : destPath
-  );
+  if (!isAbsolute(destPath)) throw new ToolError('bad-request');
+  const destination = resolve(destPath);
   const temporary = join(dirname(destination), `.chimedeck-${randomUUID()}.part`);
-  const res = await apiFetch(apiPath`/api/v1/attachments/${row.id}/view`, token);
-  if (res.status !== 200) {
-    await res.body?.cancel();
-    throw new ToolError(`http-${String(res.status)}`);
-  }
-  const mimeType =
-    (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ||
-    row.content_type ||
-    'application/octet-stream';
-  if (mimeType === 'text/html' && row.content_type !== 'text/html') {
-    await res.body?.cancel();
-    throw new ToolError('invalid-response');
-  }
+  const abort = new AbortController();
+  const budget = config.timeoutMs ?? 30_000;
+  let deadline = setTimeout(() => {
+    abort.abort();
+  }, budget);
+  const progress = () => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => {
+      abort.abort();
+    }, budget);
+  };
+  const active = () => {
+    if (abort.signal.aborted) throw new ToolError('download-failed');
+  };
+  let res: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let file: Awaited<ReturnType<typeof open>> | undefined;
   let published = false;
   let ownedTemporary = false;
-  const reader = res.body?.getReader();
   try {
+    res = await apiFetch(apiPath`/api/v1/attachments/${row.id}/view`, token, {
+      signal: abort.signal,
+    });
+    active();
+    if (res.status !== 200) throw new ToolError(`http-${String(res.status)}`);
+    const mimeType =
+      (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ||
+      row.content_type ||
+      'application/octet-stream';
+    if (mimeType === 'text/html' && row.content_type !== 'text/html')
+      throw new ToolError('invalid-response');
+    reader = res.body?.getReader();
+    progress(); // Header/setup deadline becomes a body idle deadline.
     await mkdir(dirname(destination), { recursive: true });
+    active();
     file = await open(temporary, 'wx', 0o600);
     ownedTemporary = true;
+    active();
     let total = 0;
-    for (let next = await reader?.read(); next && !next.done; next = await reader?.read()) {
+    while (reader) {
+      active();
+      const next = await reader.read();
+      active(); // Buffered bytes or EOF must not revive an already aborted transfer.
+      if (next.done) break;
+      if (next.value.byteLength > 0) progress();
       total += next.value.byteLength;
       if (typeof row.size_bytes === 'number' && total > row.size_bytes)
         throw new ToolError('size-mismatch');
       let offset = 0;
       while (offset < next.value.byteLength) {
+        active();
         const result = await file.write(next.value, offset, next.value.byteLength - offset);
+        active();
         if (result.bytesWritten === 0) throw new ToolError('disk-write');
         offset += result.bytesWritten;
       }
     }
+    active();
     if (
       typeof row.size_bytes !== 'number' ||
       !Number.isSafeInteger(row.size_bytes) ||
@@ -145,6 +168,8 @@ async function downloadToDisk(row: AttachmentRow, token: string, destPath: strin
       total !== row.size_bytes
     )
       throw new ToolError('size-mismatch');
+    active();
+    clearTimeout(deadline); // Validated EOF retires network timing before disk publication.
     await file.sync();
     await file.close();
     file = undefined;
@@ -162,9 +187,16 @@ async function downloadToDisk(row: AttachmentRow, token: string, destPath: strin
     if (error instanceof ToolError) throw error;
     throw new ToolError('download-failed');
   } finally {
-    await reader?.cancel().catch(() => {});
+    clearTimeout(deadline);
     await file?.close().catch(() => {});
     if (!published && ownedTemporary) await unlink(temporary).catch(() => {});
+    // Cancellation is best effort and must not strand an owned file or block the result.
+    try {
+      const disposal = reader ? reader.cancel() : res?.body?.cancel();
+      void disposal?.catch(() => {});
+    } catch {
+      /* A locked or already disposed body has no filesystem ownership. */
+    }
   }
 }
 
@@ -199,7 +231,13 @@ export function registerAttachmentTools(server: McpServer, token: string, localD
         cardId: attachmentCardId,
         attachmentId: z.string().min(1).describe('ID of the attachment (from get_attachments)'),
         ...(localDisk
-          ? { destPath: z.string().min(1).describe('Local destination file path') }
+          ? {
+              destPath: z
+                .string()
+                .min(1)
+                .refine(isAbsolute)
+                .describe('Absolute local destination file path'),
+            }
           : {}),
       },
       annotations: { readOnlyHint: !localDisk },
@@ -207,6 +245,8 @@ export function registerAttachmentTools(server: McpServer, token: string, localD
     async (args) => {
       let block: CallToolResult['content'][number] | undefined;
       const result = await runTool(token, async () => {
+        if (localDisk && (typeof args.destPath !== 'string' || !isAbsolute(args.destPath)))
+          throw new ToolError('bad-request');
         const row = attachmentRow.safeParse(
           inParent(await cardAttachments(args.cardId), args.attachmentId, 'card')
         );

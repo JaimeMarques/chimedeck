@@ -74,7 +74,7 @@ export async function apiFetch(
     return await fetch(`${config.apiUrl}${path}`, {
       ...init,
       headers,
-      signal: AbortSignal.timeout(config.timeoutMs ?? 30_000),
+      signal: init.signal ?? AbortSignal.timeout(config.timeoutMs ?? 30_000),
       redirect: 'manual',
     });
   } catch {

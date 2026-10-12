@@ -2557,13 +2557,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-get-comments">
             <H3>get_comments</H3>
             <P>
-              Returns a compact data envelope with the discussion completeness and pagination
-              fields; view: full opts into full rows.
-            </P>
-            <P>
-              List a card’s top-level comments, oldest first. Replies are not included; use{' '}
-              <Code>get_card_discussion</Code>. This alias uses the same latest-20, limit/offset/all
-              and compact/full contracts.
+              Accepts only cardId and optional view (compact default or full). Returns a data
+              envelope with all top-level comments, oldest first, without replies. There are no
+              limit/offset/all or completeness fields. Use get_card_discussion for bounded parent
+              threads and replies.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}

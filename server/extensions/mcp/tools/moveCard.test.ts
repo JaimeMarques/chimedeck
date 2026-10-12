@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { z } from 'zod';
 
 const apiCallMock = mock();
 
@@ -113,6 +114,52 @@ describe('registerMoveCard', () => {
       path: '/api/v1/cards/card-1/move',
       body: { targetListId: 'list-2', afterCardId: null },
       token: 'token-1',
+    });
+  });
+
+  test('omits insertion for the native bottom default and verifies final order', async () => {
+    apiCallMock.mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve({
+        data: path.includes('/lists/')
+          ? { data: [{ id: 'other' }, { id: 'card-1' }] }
+          : { data: { id: 'card-1', list_id: 'list-2' } },
+      })
+    );
+    registerMoveCard(server as never, 'token-1');
+    const result = await registeredHandler()({ cardId: 'card-1', targetListId: 'list-2' });
+    const patch: unknown = apiCallMock.mock.calls.find(
+      ([args]: unknown[]) =>
+        z.object({ method: z.string().optional() }).parse(args).method === 'PATCH'
+    )?.[0];
+    const body = z.object({ body: z.record(z.string(), z.unknown()) }).parse(patch).body;
+    expect(JSON.parse(JSON.stringify(body))).toEqual({ targetListId: 'list-2' });
+    expect(JSON.parse(result.content[0]?.text ?? 'null') as unknown).toMatchObject({
+      verified: true,
+      observed: { after_card_id: 'other' },
+    });
+  });
+
+  test('explicit null places at top while a misplaced bottom default fails verification', async () => {
+    apiCallMock.mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve({
+        data: path.includes('/lists/')
+          ? { data: [{ id: 'card-1' }, { id: 'other' }] }
+          : { data: { id: 'card-1', list_id: 'list-2' } },
+      })
+    );
+    registerMoveCard(server as never, 'token-1');
+    const top = await registeredHandler()({
+      cardId: 'card-1',
+      targetListId: 'list-2',
+      afterCardId: null,
+    });
+    expect(
+      z.object({ verified: z.boolean() }).parse(JSON.parse(top.content[0]?.text ?? 'null')).verified
+    ).toBe(true);
+    const bottom = await registeredHandler()({ cardId: 'card-1', targetListId: 'list-2' });
+    expect(JSON.parse(bottom.content[0]?.text ?? 'null') as unknown).toMatchObject({
+      verified: false,
+      verification_error: { code: 'readback-mismatch' },
     });
   });
 

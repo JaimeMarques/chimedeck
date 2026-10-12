@@ -32,6 +32,26 @@ const item = (id = itemId, extra = {}) => ({
 });
 
 defineToolScenarios(import.meta, registerMcpTools, {
+  'move defaults to native bottom while explicit null and position zero select top': async (h) => {
+    for (const [args, top] of [
+      [{}, false],
+      [{ afterCardId: null }, true],
+      [{ position: 0 }, true],
+    ] as const) {
+      h.respond(({ path }) =>
+        path.includes('/lists/')
+          ? json({ data: (top ? [cardId, otherId] : [otherId, cardId]).map((id) => ({ id })) })
+          : json(card([], { list_id: 'list1' }))
+      );
+      const result = await h.ok('move_card', { cardId, targetListId: 'list1', ...args });
+      assert.equal(z.object({ verified: z.boolean() }).parse(result).verified, true);
+      const patch = h.requests.find((request) => request.method === 'PATCH');
+      assert.deepEqual(
+        patch?.body,
+        top ? { targetListId: 'list1', afterCardId: null } : { targetListId: 'list1' }
+      );
+    }
+  },
   'native SDK payload regression retains text while removing full-card write context': async (
     h
   ) => {
