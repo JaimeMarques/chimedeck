@@ -20,7 +20,7 @@ if (!config.token) {
 
 const server = new McpServer({ name: 'chimedeck', version: '1.0.0' });
 
-registerMcpTools(server, config.token);
+registerMcpTools(server, config.token, { transport: 'stdio' });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

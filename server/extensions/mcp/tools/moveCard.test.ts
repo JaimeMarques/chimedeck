@@ -23,7 +23,12 @@ let toolDescription = '';
 let handler: ToolHandler | undefined;
 
 const server = {
-  tool: (name: string, description: string, inputSchema: unknown, registeredHandler: ToolHandler) => {
+  tool: (
+    name: string,
+    description: string,
+    inputSchema: unknown,
+    registeredHandler: ToolHandler
+  ) => {
     toolName = name;
     toolDescription = description;
     handler = registeredHandler;
@@ -32,7 +37,7 @@ const server = {
   registerTool: (
     name: string,
     config: { description: string; inputSchema: unknown },
-    registeredHandler: ToolHandler,
+    registeredHandler: ToolHandler
   ) => {
     toolName = name;
     toolDescription = config.description;
@@ -56,7 +61,13 @@ describe('registerMoveCard', () => {
   });
 
   test('registers move_card and sends the destination and insertion card', async () => {
-    apiCallMock.mockResolvedValue({ data: { data: { id: 'card-1' } } });
+    apiCallMock.mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve({
+        data: path.includes('/lists/')
+          ? { data: [{ id: 'card-0' }, { id: 'card-1' }] }
+          : { data: { id: path.includes('card-0') ? 'card-0' : 'card-1', list_id: 'list-2' } },
+      })
+    );
     registerMoveCard(server as never, 'token-1');
 
     expect(toolName).toBe('move_card');
@@ -68,13 +79,27 @@ describe('registerMoveCard', () => {
       afterCardId: 'card-0',
     });
 
-    expect(apiCallMock).toHaveBeenCalledWith({
-      method: 'PATCH',
-      path: '/api/v1/cards/card-1/move',
-      body: { targetListId: 'list-2', afterCardId: 'card-0' },
-      token: 'token-1',
+    expect(apiCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'PATCH',
+        path: '/api/v1/cards/card-1/move',
+        body: { targetListId: 'list-2', afterCardId: 'card-0' },
+        token: 'token-1',
+      })
+    );
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            id: 'card-1',
+            observed: { list_id: 'list-2', after_card_id: 'card-0' },
+            verified: true,
+            verified_fields: ['list_id', 'ordering'],
+          }),
+        },
+      ],
     });
-    expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ data: { id: 'card-1' } }) }] });
   });
 
   test('maps the supported legacy top position to a null insertion card', async () => {
@@ -94,11 +119,15 @@ describe('registerMoveCard', () => {
   test('rejects unsupported legacy positions without calling the API', async () => {
     registerMoveCard(server as never, 'token-1');
 
-    const result = await registeredHandler()({ cardId: 'card-1', targetListId: 'list-2', position: 2 });
+    const result = await registeredHandler()({
+      cardId: 'card-1',
+      targetListId: 'list-2',
+      position: 2,
+    });
 
     expect(apiCallMock).not.toHaveBeenCalled();
     expect(result).toEqual({
-      content: [{ type: 'text', text: 'Error: bad-request (position is deprecated; use afterCardId)' }],
+      content: [{ type: 'text', text: 'Error: bad-request' }],
       isError: true,
     });
   });

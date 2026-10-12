@@ -38,7 +38,16 @@ describe('registerCreateCard', () => {
   });
 
   test('registers create_card and posts the card fields to its list endpoint', async () => {
-    apiCallMock.mockResolvedValue({ data: { data: { id: 'card-1', title: 'Demo card' } } });
+    apiCallMock.mockResolvedValue({
+      data: {
+        data: {
+          id: 'card-1',
+          title: 'Demo card',
+          list_id: 'list-1',
+          description: 'Created through MCP',
+        },
+      },
+    });
 
     registerCreateCard(server as never, 'token-1');
 
@@ -54,14 +63,27 @@ describe('registerCreateCard', () => {
       description: 'Created through MCP',
     });
 
-    expect(apiCallMock).toHaveBeenCalledWith({
-      method: 'POST',
-      path: '/api/v1/lists/list-1/cards',
-      body: { title: 'Demo card', description: 'Created through MCP' },
-      token: 'token-1',
-    });
+    expect(apiCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/v1/lists/list-1/cards',
+        body: { title: 'Demo card', description: 'Created through MCP' },
+        token: 'token-1',
+      })
+    );
     expect(result).toEqual({
-      content: [{ type: 'text', text: JSON.stringify({ data: { id: 'card-1', title: 'Demo card' } }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            id: 'card-1',
+            observed: { title: 'Demo card', list_id: 'list-1', description: 'Created through MCP' },
+            verified: true,
+            verified_fields: ['title', 'list_id', 'description'],
+            request_outcome: 'succeeded',
+          }),
+        },
+      ],
     });
   });
 

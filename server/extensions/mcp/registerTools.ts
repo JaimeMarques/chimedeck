@@ -28,7 +28,11 @@ import { registerListBoardAdmin } from './tools/listBoardAdmin';
 
 // token is threaded through to every tool so each API call uses the correct
 // credential — the env token for stdio mode, the request's Bearer token for HTTP mode.
-export function registerMcpTools(server: McpServer, token: string): void {
+export function registerMcpTools(
+  server: McpServer,
+  token: string,
+  options: { transport?: 'stdio' | 'http' } = {}
+): void {
   registerMoveCard(server, token);
   registerWriteComment(server, token);
   registerCreateCard(server, token);
@@ -51,7 +55,7 @@ export function registerMcpTools(server: McpServer, token: string): void {
   registerBoardLookups(server, token);
   registerCardEdits(server, token);
   registerCommentTools(server, token);
-  registerAttachmentTools(server, token);
+  registerAttachmentTools(server, token, options.transport === 'stdio');
   registerLabelTools(server, token);
   registerMemberTools(server, token);
   registerChecklistTools(server, token);

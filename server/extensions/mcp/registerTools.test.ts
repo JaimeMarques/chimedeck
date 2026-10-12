@@ -38,6 +38,7 @@ const BOARD_COVERAGE_TOOLS = [
   'create_checklist',
   'add_checklist_item',
   'set_checklist_item',
+  'set_checklist_items',
   'rename_checklist',
   'delete_checklist',
   'delete_checklist_item',
@@ -48,11 +49,11 @@ const BOARD_COVERAGE_TOOLS = [
 ];
 
 defineToolScenarios(import.meta, registerMcpTools, {
-  'registers 60 unique tools including the board coverage set': (h) => {
+  'registers 61 unique tools including the board coverage set': (h) => {
     const names = h.tools.map((tool) => tool.name);
     assert.equal(new Set(names).size, names.length, 'duplicate tool names');
-    assert.equal(names.length, 60);
-    assert.equal(BOARD_COVERAGE_TOOLS.length, 40);
+    assert.equal(names.length, 61);
+    assert.equal(BOARD_COVERAGE_TOOLS.length, 41);
     for (const name of BOARD_COVERAGE_TOOLS)
       assert.ok(names.includes(name), `${name} not registered`);
   },

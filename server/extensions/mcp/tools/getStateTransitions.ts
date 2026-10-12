@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiCall } from '../apiClient';
+import { runTool } from './toolSupport';
 
 export function registerGetStateTransitions(server: McpServer, token: string): void {
   server.registerTool(
@@ -8,7 +9,7 @@ export function registerGetStateTransitions(server: McpServer, token: string): v
     {
       description: 'Get state transition graph and enabled flag for a board.',
       inputSchema: {
-      boardId: z.string().describe('ID of the board'),
+        boardId: z.string().describe('ID of the board'),
       },
     },
     async ({ boardId }) => {
@@ -25,9 +26,7 @@ export function registerGetStateTransitions(server: McpServer, token: string): v
         };
       }
 
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
+      return runTool(token, () => Promise.resolve(result.data));
     }
   );
 }

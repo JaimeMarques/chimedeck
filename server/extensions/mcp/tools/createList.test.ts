@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 const apiCallMock = mock();
 
-mock.module('../apiClient', () => ({
+void mock.module('../apiClient', () => ({
   apiCall: apiCallMock,
 }));
 
@@ -16,12 +16,17 @@ let toolDescription = '';
 let handler: ToolHandler | undefined;
 
 const server = {
-  tool: (name: string, description: string, _schema: unknown, registeredHandler: ToolHandler) => {
+  registerTool: (name: string, config: { description: string }, registeredHandler: ToolHandler) => {
     toolName = name;
-    toolDescription = description;
+    toolDescription = config.description;
     handler = registeredHandler;
   },
 };
+
+function registered() {
+  if (!handler) throw new Error('Missing handler');
+  return handler;
+}
 
 const { registerCreateList } = await import('./createList');
 
@@ -34,7 +39,16 @@ describe('registerCreateList', () => {
   });
 
   test('registers create_list and posts a list title to its board endpoint', async () => {
-    apiCallMock.mockResolvedValue({ data: { data: { id: 'list-1', title: 'Backlog' } } });
+    apiCallMock.mockImplementation(({ method }: { method: string }) =>
+      Promise.resolve({
+        data: {
+          data:
+            method === 'GET'
+              ? [{ id: 'list-1', board_id: 'board-1', title: 'Backlog' }]
+              : { id: 'list-1' },
+        },
+      })
+    );
 
     registerCreateList(server as never, 'token-1');
 
@@ -42,17 +56,29 @@ describe('registerCreateList', () => {
     expect(toolDescription).toContain('list');
     expect(handler).toBeDefined();
 
-    const result = await handler!({ boardId: 'board-1', title: 'Backlog' });
+    const result = await registered()({ boardId: 'board-1', title: 'Backlog' });
 
-    expect(apiCallMock).toHaveBeenCalledWith({
-      method: 'POST',
-      path: '/api/v1/boards/board-1/lists',
-      body: { title: 'Backlog', afterId: undefined },
-      token: 'token-1',
-    });
+    expect(apiCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/v1/boards/board-1/lists',
+        body: { title: 'Backlog', afterId: undefined },
+        token: 'token-1',
+      })
+    );
     expect(result).toEqual({
       content: [
-        { type: 'text', text: JSON.stringify({ data: { id: 'list-1', title: 'Backlog' } }) },
+        {
+          type: 'text',
+          text: JSON.stringify({
+            id: 'list-1',
+            observed: {},
+            verified: true,
+            verified_fields: ['board_id', 'title'],
+            list: { id: 'list-1', board_id: 'board-1', title: 'Backlog' },
+            request_outcome: 'succeeded',
+          }),
+        },
       ],
     });
   });
@@ -61,7 +87,7 @@ describe('registerCreateList', () => {
     apiCallMock.mockResolvedValue({ error: { name: 'forbidden' } });
     registerCreateList(server as never, 'token-1');
 
-    const result = await handler!({ boardId: 'board-1', title: 'Backlog' });
+    const result = await registered()({ boardId: 'board-1', title: 'Backlog' });
 
     expect(result).toEqual({
       content: [{ type: 'text', text: 'Error: forbidden' }],

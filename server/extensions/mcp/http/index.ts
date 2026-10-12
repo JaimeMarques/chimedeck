@@ -49,7 +49,7 @@ export async function mcpHttpHandler(req: Request): Promise<Response | null> {
   if (method === 'POST' && !req.headers.get('mcp-session-id')) {
     const sessionId = randomUUID();
     const server = new McpServer({ name: 'chimedeck', version: '1.0.0' });
-    registerMcpTools(server, token);
+    registerMcpTools(server, token, { transport: 'http' });
 
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => sessionId,

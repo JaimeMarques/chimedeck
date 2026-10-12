@@ -2,12 +2,16 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { config } from '../config';
+import { acknowledgedCreate, fields, type Row } from './results';
+import { mkdir, open, rename, unlink } from 'node:fs/promises';
+import { dirname, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import {
   ToolError,
   apiFetch,
   apiPath,
   dataOf,
-  expectFields,
   findRow,
   inParent,
   request,
@@ -94,7 +98,77 @@ async function download(row: AttachmentRow, token: string) {
   };
 }
 
-export function registerAttachmentTools(server: McpServer, token: string): void {
+async function downloadToDisk(row: AttachmentRow, token: string, destPath: string) {
+  if (row.type !== 'FILE' || row.external_url) throw new ToolError('not-a-file');
+  if (row.status !== 'READY') throw new ToolError('not-ready');
+  const destination = resolve(
+    destPath.startsWith('~/') ? join(homedir(), destPath.slice(2)) : destPath
+  );
+  const temporary = join(dirname(destination), `.chimedeck-${randomUUID()}.part`);
+  const res = await apiFetch(apiPath`/api/v1/attachments/${row.id}/view`, token);
+  if (res.status !== 200) {
+    await res.body?.cancel();
+    throw new ToolError(`http-${String(res.status)}`);
+  }
+  const mimeType =
+    (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ||
+    row.content_type ||
+    'application/octet-stream';
+  if (mimeType === 'text/html' && row.content_type !== 'text/html') {
+    await res.body?.cancel();
+    throw new ToolError('invalid-response');
+  }
+  let file: Awaited<ReturnType<typeof open>> | undefined;
+  let published = false;
+  let ownedTemporary = false;
+  const reader = res.body?.getReader();
+  try {
+    await mkdir(dirname(destination), { recursive: true });
+    file = await open(temporary, 'wx', 0o600);
+    ownedTemporary = true;
+    let total = 0;
+    for (let next = await reader?.read(); next && !next.done; next = await reader?.read()) {
+      total += next.value.byteLength;
+      if (typeof row.size_bytes === 'number' && total > row.size_bytes)
+        throw new ToolError('size-mismatch');
+      let offset = 0;
+      while (offset < next.value.byteLength) {
+        const result = await file.write(next.value, offset, next.value.byteLength - offset);
+        if (result.bytesWritten === 0) throw new ToolError('disk-write');
+        offset += result.bytesWritten;
+      }
+    }
+    if (
+      typeof row.size_bytes !== 'number' ||
+      !Number.isSafeInteger(row.size_bytes) ||
+      row.size_bytes < 0 ||
+      total !== row.size_bytes
+    )
+      throw new ToolError('size-mismatch');
+    await file.sync();
+    await file.close();
+    file = undefined;
+    await rename(temporary, destination);
+    published = true;
+    return {
+      id: row.id,
+      name: row.name ?? null,
+      path: destination,
+      size_bytes: total,
+      content_type: mimeType,
+      verified: true,
+    };
+  } catch (error) {
+    if (error instanceof ToolError) throw error;
+    throw new ToolError('download-failed');
+  } finally {
+    await reader?.cancel().catch(() => {});
+    await file?.close().catch(() => {});
+    if (!published && ownedTemporary) await unlink(temporary).catch(() => {});
+  }
+}
+
+export function registerAttachmentTools(server: McpServer, token: string, localDisk = false): void {
   const cardAttachments = async (cardId: string) =>
     (
       await request({
@@ -117,14 +191,18 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
   server.registerTool(
     'download_attachment',
     {
-      description:
-        "Fetch an uploaded card attachment's bytes (max 10 MB). Returns its metadata, then the file " +
-        'as an image block (image types) or an embedded resource with a base64 blob. Link attachments have no bytes.',
+      description: localDisk
+        ? 'Stream an uploaded attachment to destPath on the local stdio client machine. Verifies size before atomic replacement; returns small metadata only.'
+        : "Fetch an uploaded card attachment's bytes (max 10 MB). Returns its metadata, then the file " +
+          'as an image block (image types) or an embedded resource with a base64 blob. Link attachments have no bytes.',
       inputSchema: {
         cardId: attachmentCardId,
         attachmentId: z.string().min(1).describe('ID of the attachment (from get_attachments)'),
+        ...(localDisk
+          ? { destPath: z.string().min(1).describe('Local destination file path') }
+          : {}),
       },
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: !localDisk },
     },
     async (args) => {
       let block: CallToolResult['content'][number] | undefined;
@@ -133,6 +211,10 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
           inParent(await cardAttachments(args.cardId), args.attachmentId, 'card')
         );
         if (!row.success) throw new ToolError('invalid-response');
+        if (localDisk) {
+          if (typeof args.destPath !== 'string') throw new ToolError('bad-request');
+          return downloadToDisk(row.data, token, args.destPath);
+        }
         const file = await download(row.data, token);
         block = file.block;
         return file.meta;
@@ -154,18 +236,35 @@ export function registerAttachmentTools(server: McpServer, token: string): void 
     },
     (args) =>
       runTool(token, async () => {
-        const created = await request({
-          method: 'POST',
-          path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
-          // [why] The server rejects a missing name; Python leaves it optional.
-          body: { url: args.url, name: args.name || args.url },
-          token,
-          schema: dataOf(rowWithId),
-        });
-        const row = findRow(await cardAttachments(args.cardId), 'id', created.data.id);
-        // Stored verbatim (attachment/api/addUrl.ts); a link's view_url is its URL.
-        expectFields(row, { name: args.name || args.url, view_url: args.url });
-        return row;
+        return acknowledgedCreate(
+          () =>
+            request({
+              method: 'POST',
+              path: apiPath`/api/v1/cards/${args.cardId}/attachments/url`,
+              // [why] The server rejects a missing name; Python leaves it optional.
+              body: { url: args.url, name: args.name || args.url },
+              token,
+              schema: z.unknown(),
+            }),
+          async (ack) => {
+            const row = findRow(await cardAttachments(args.cardId), 'id', String(ack.id));
+            return {
+              row,
+              selected: true,
+              extra: {
+                attachment: fields(
+                  row,
+                  new Set(
+                    'id card_id type name external_url view_url content_type size_bytes status created_at'.split(
+                      ' '
+                    )
+                  )
+                ) as Row,
+              },
+            };
+          },
+          { name: args.name || args.url, view_url: args.url }
+        );
       })
   );
 

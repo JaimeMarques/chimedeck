@@ -533,6 +533,29 @@ All conventions are embedded in `.github/copilot-instructions.md` and are enforc
 
 Refer to [.github/copilot-instructions.md](.github/copilot-instructions.md) for the full reference.
 
+## Isolated MCP development lab
+
+`scripts/local-lab/control.mjs` runs a resettable synthetic lab without the stock `.env` or existing Docker services. It uses dedicated Postgres, Redis and LocalStack resources, with API `127.0.0.1:33000`, frontend `127.0.0.1:35173`, Postgres `35432`, Redis `36379`, and S3 `34566`. All publications are loopback only. External email, notifications, webhooks, billing, AI and telemetry integrations are disabled; the dedicated bridge permits Docker's normal loopback port publishing.
+
+From a selected checkout with runtime source changes committed and no loader environment files (templates such as `.env.example` remain allowed):
+
+```sh
+LAB_STATE=/absolute/path/to/private-lab-state
+LAB_REVISION=$(git rev-parse HEAD)
+node scripts/local-lab/control.mjs init "$LAB_STATE" "$LAB_REVISION"
+node scripts/local-lab/control.mjs start "$LAB_STATE" "$LAB_REVISION"
+node scripts/local-lab/control.mjs seed "$LAB_STATE" "$LAB_REVISION"
+node scripts/local-lab/control.mjs frontend "$LAB_STATE" "$LAB_REVISION"
+```
+
+The frontend command remains running. In another terminal, `test` exercises actual stdio and HTTP MCP CRUD, permissions, concurrent member additions, threads and S3 upload/download bytes. `browser STATE REVISION /path/to/browser` uses an explicitly supplied Chromium-compatible browser for real login and card-view smoke checks. Generated login credentials remain in the private `credentials.json`; never commit or print it. State is `0700`, credentials and keys `0600`.
+
+`status` observes validated owned resources without starting them, and checks the database marker read-only when Postgres is running. `stop` stops only owned containers and retains their network/volumes for guarded restart/reset. `reset` requires the owned database marker before removing only verified owned containers, network, volumes and generated credentials; follow with `start` and `seed`. Repeated seeding refuses populated data. API test clients reject any URL outside the exact lab origin and explicitly override inherited MCP URLs/tokens.
+
+The selected source checkout, revision and installed dependency preparation are recorded. Persistent operations reject protected working-tree, index and untracked app/schema/dependency/config changes. `LAB_ALLOW_MCP_DEV=1` explicitly permits only working MCP changes; other runtime source changes must be frozen first. `pin` accepts a new revision only when changes stay within MCP/lab code and this README, preserving application schema and dependencies; use `prepare` to recertify frozen dependencies and `restart-app` to load that pinned source. Other application or migration changes need a separate schema-aware baseline and database lifecycle. No command pulls, switches branches or removes source checkouts.
+
+Docker commands explicitly use a validated local Unix socket with `--host`, and the daemon identity is pinned in private state. `LAB_DOCKER_HOST=unix:///path/to/docker.sock` selects a local endpoint at initialization (default `/var/run/docker.sock`); TCP/SSH endpoints are refused. Saved global Docker contexts are neither used for daemon selection nor changed. Exact expected resource names are independently checked even without project labels; foreign names/mounts/networks are refused before mutation. Stop/reset can inspect their recorded owned resources despite source drift, avoiding a cleanup/pin deadlock. A stopped owned Postgres may be started only to verify its database marker before reset.
+
 ## Final Words from a Human (the creator)
 
 So just before we end this...this is a real human message (above are all AI-ish messages) (._.!)

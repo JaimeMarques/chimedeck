@@ -2,12 +2,17 @@ import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { apiCall } from '../apiClient';
 import { config } from '../config';
+import { identity, scrub } from './results';
 
 // Shared plumbing for the tool domain files (boardLookups.ts and siblings).
 // A tool body throws ToolError; runTool turns it into `Error: <code>`.
 
 export class ToolError extends Error {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly status?: number,
+    readonly phase?: 'transport' | 'response' | 'http'
+  ) {
     super(code);
   }
 }
@@ -47,11 +52,12 @@ export async function request<S extends z.ZodType>({
     response = await apiCall<unknown>({ method, path, body, token });
   } catch {
     // [why] Transport exceptions can contain URLs/credentials; expose no raw messages.
-    throw new ToolError('network');
+    throw new ToolError('network', undefined, 'transport');
   }
-  if ('error' in response) throw new ToolError(safeCode(response.error.name));
+  if ('error' in response)
+    throw new ToolError(safeCode(response.error.name), response.error.status, response.error.phase);
   const parsed = schema.safeParse(response.data);
-  if (!parsed.success) throw new ToolError('invalid-response');
+  if (!parsed.success) throw new ToolError('invalid-response', undefined, 'response');
   return parsed.data;
 }
 
@@ -65,9 +71,14 @@ export async function apiFetch(
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token ?? config.token}`);
   try {
-    return await fetch(`${config.apiUrl}${path}`, { ...init, headers });
+    return await fetch(`${config.apiUrl}${path}`, {
+      ...init,
+      headers,
+      signal: AbortSignal.timeout(config.timeoutMs ?? 30_000),
+      redirect: 'manual',
+    });
   } catch {
-    throw new ToolError('network');
+    throw new ToolError('network', undefined, 'transport');
   }
 }
 
@@ -95,7 +106,7 @@ export async function deleteNoContent(path: string, token: string): Promise<void
 // and the caller must not have sent any write yet.
 export function inParent<T extends { id: string }>(rows: T[], id: string, parent: string): T {
   const found = rows.find(
-    (row) => row.id === id || (row as Record<string, unknown>).short_id === id
+    (row) => identity(row.id) === identity(id) || (row as Record<string, unknown>).short_id === id
   );
   if (!found) throw new ToolError(`not-in-${parent}`);
   return found;
@@ -112,18 +123,26 @@ export function expectFields(
 }
 
 // Fresh `{data, includes}` read of a card, for card-scoped write read-backs.
-export const readCard = (cardId: string, token: string) =>
-  request({
+export const readCard = async (cardId: string, token: string) => {
+  const card = await request({
     path: apiPath`/api/v1/cards/${cardId}`,
     token,
     schema: z.looseObject({ data: rowWithId, includes: z.looseObject({}).optional() }),
   });
+  if (z.uuid().safeParse(cardId).success && identity(card.data.id) !== identity(cardId))
+    throw new ToolError('invalid-response');
+  return card;
+};
 
 // Find the written object in a list read; a miss means the write did not stick.
 export function findRow<T extends Record<string, unknown>>(rows: T[], key: string, id: string): T {
-  const found = rows.find((row) => row[key] === id);
-  if (!found) throw new ToolError('readback-failed');
-  return found;
+  const matches = rows.filter(
+    (row) => typeof row[key] === 'string' && identity(row[key]) === identity(id)
+  );
+  if (matches.length !== 1) throw new ToolError('readback-failed');
+  const match = matches[0];
+  if (!match) throw new ToolError('readback-failed');
+  return match;
 }
 
 // Delete read-back: the object's GET must now 404.
@@ -143,7 +162,9 @@ export async function runTool(
   body: () => Promise<unknown>
 ): Promise<CallToolResult> {
   try {
-    return { content: [{ type: 'text', text: redact(JSON.stringify(await body()), token) }] };
+    return {
+      content: [{ type: 'text', text: redact(JSON.stringify(scrub(await body())), token) }],
+    };
   } catch (error) {
     const code = error instanceof ToolError ? error.code : 'internal';
     return { content: [{ type: 'text', text: `Error: ${redact(code, token)}` }], isError: true };

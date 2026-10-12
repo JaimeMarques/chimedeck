@@ -5,12 +5,22 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiCall } from '../apiClient';
+import { runTool } from './toolSupport';
 
 export function registerImportValidate(server: McpServer, token: string): void {
-  server.tool(
+  server.registerTool(
     'historical_import_validate',
-    'Validate a historical-import plan manifest (contract + shape) and compute its plan hash. Read-only.',
-    { plan: z.unknown().describe('The full import plan manifest JSON (operations, provenance, evidence_refs, dependencies).') },
+    {
+      description:
+        'Validate a historical-import plan manifest (contract + shape) and compute its plan hash. Read-only.',
+      inputSchema: {
+        plan: z
+          .unknown()
+          .describe(
+            'The full import plan manifest JSON (operations, provenance, evidence_refs, dependencies).'
+          ),
+      },
+    },
     async ({ plan }) => {
       const result = await apiCall<{ data: unknown }>({
         method: 'POST',
@@ -21,7 +31,7 @@ export function registerImportValidate(server: McpServer, token: string): void {
       if ('error' in result) {
         return { content: [{ type: 'text', text: `Error: ${result.error.name}` }], isError: true };
       }
-      return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
-    },
+      return runTool(token, () => Promise.resolve(result.data));
+    }
   );
 }

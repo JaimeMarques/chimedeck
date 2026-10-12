@@ -1,39 +1,64 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { apiCall } from '../apiClient';
-
+import { sanitizeRichText, sanitizeText } from '../../../common/sanitize';
+import { apiPath, dataOf, request, rowWithId, runTool } from './toolSupport';
+import { acknowledgedCreate, fields, type Row } from './results';
 export function registerCreateBoard(server: McpServer, token: string): void {
-  server.tool(
+  server.registerTool(
     'create_board',
-    'Create a new board in a specified workspace.',
     {
-      workspaceId: z.string().describe('ID of the workspace to create the board in'),
-      title: z.string().min(1).describe('Title of the new board'),
-      visibility: z
-        .enum(['PRIVATE', 'WORKSPACE', 'PUBLIC'])
-        .optional()
-        .describe('Optional board visibility; defaults to PRIVATE'),
-      description: z.string().optional().describe('Optional board description'),
-      background: z.string().optional().describe('Optional board background value'),
+      description:
+        'Create a board and verify acknowledged identity and stored fields. Returns one selected board, with no automatic retries.',
+      inputSchema: {
+        workspaceId: z.string().min(1),
+        title: z.string().min(1),
+        visibility: z.enum(['PRIVATE', 'WORKSPACE', 'PUBLIC']).optional(),
+        description: z.string().optional(),
+        background: z.string().optional(),
+      },
     },
-    async ({ workspaceId, title, visibility, description, background }) => {
-      const result = await apiCall<{ data: unknown }>({
-        method: 'POST',
-        path: `/api/v1/workspaces/${workspaceId}/boards`,
-        body: { title, visibility, description, background },
-        token,
-      });
-
-      if ('error' in result) {
-        return {
-          content: [{ type: 'text', text: `Error: ${result.error.name}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
-    }
+    ({ workspaceId, title, visibility, description, background }) =>
+      runTool(token, () =>
+        acknowledgedCreate(
+          () =>
+            request({
+              method: 'POST',
+              path: apiPath`/api/v1/workspaces/${workspaceId}/boards`,
+              body: { title, visibility, description, background },
+              token,
+              schema: z.unknown(),
+            }),
+          async (ack) => {
+            const { data } = await request({
+              path: apiPath`/api/v1/boards/${String(ack.id)}`,
+              token,
+              schema: dataOf(rowWithId),
+            });
+            return {
+              row: data,
+              selected: true,
+              extra: {
+                board: fields(
+                  data,
+                  new Set(
+                    'id short_id workspace_id title description visibility background state created_at updated_at'.split(
+                      ' '
+                    )
+                  )
+                ) as Row,
+              },
+            };
+          },
+          {
+            workspace_id: workspaceId,
+            title: sanitizeText(title.trim()),
+            visibility: visibility ?? 'PRIVATE',
+            ...(description === undefined
+              ? {}
+              : { description: description ? sanitizeRichText(description.trim()) : null }),
+            ...(background === undefined ? {} : { background: background.trim() }),
+          }
+        )
+      )
   );
 }

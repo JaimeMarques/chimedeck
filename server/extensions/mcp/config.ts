@@ -5,4 +5,5 @@
 export const config = {
   apiUrl: Bun.env.CHIMEDECK_API_URL ?? 'http://localhost:3000',
   token: Bun.env.CHIMEDECK_TOKEN ?? '',
+  timeoutMs: 30_000 as number | undefined,
 };

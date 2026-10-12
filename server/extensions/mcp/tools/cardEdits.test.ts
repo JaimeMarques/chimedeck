@@ -80,7 +80,17 @@ defineToolScenarios(import.meta, registerCardEdits, {
         dueDate: '2026-09-20T12:00:00Z',
         dueComplete: true,
       }),
-      after
+      {
+        id: 'c1',
+        observed: {
+          title: 'New',
+          description: 'D',
+          due_complete: true,
+          due_date: '2026-09-20T12:00:00.000Z',
+        },
+        verified: true,
+        verified_fields: ['title', 'description', 'due_complete', 'due_date'],
+      }
     );
     assert.deepEqual(calls(h), [
       {
@@ -89,7 +99,7 @@ defineToolScenarios(import.meta, registerCardEdits, {
         body: {
           title: 'New',
           description: 'D',
-          due_date: '2026-09-20T12:00:00.000Z',
+          due_date: '2026-09-20T12:00:00Z',
           due_complete: true,
         },
       },
@@ -118,9 +128,9 @@ defineToolScenarios(import.meta, registerCardEdits, {
     }
     // Read-back disagrees with the written due fields.
     h.respond(() => json(card({ due_complete: false })));
-    await h.fail('update_card', { cardId: 'c1', dueComplete: true }, 'readback-failed');
+    await h.fail('update_card', { cardId: 'c1', dueComplete: true }, 'readback-mismatch');
     h.respond(() => json(card({ due_date: '2026-01-01T00:00:00.000Z' })));
-    await h.fail('update_card', { cardId: 'c1', dueDate: null }, 'readback-failed');
+    await h.fail('update_card', { cardId: 'c1', dueDate: null }, 'readback-mismatch');
     await patchErrors(h, 'update_card', { cardId: 'c1', title: 'Card' });
   },
   update_card_text_readback: async (h) => {
@@ -138,16 +148,25 @@ defineToolScenarios(import.meta, registerCardEdits, {
     await h.ok('update_card', { cardId: 'c1', description: '' });
     // Read back unchanged: not success.
     h.respond(() => json(card({ description: 'old' })));
-    await h.fail('update_card', { cardId: 'c1', title: 'New' }, 'readback-failed');
-    await h.fail('update_card', { cardId: 'c1', description: 'new' }, 'readback-failed');
-    await h.fail('update_card', { cardId: 'c1', description: '' }, 'readback-failed');
+    await h.fail('update_card', { cardId: 'c1', title: 'New' }, 'readback-mismatch');
+    await h.fail('update_card', { cardId: 'c1', description: 'new' }, 'readback-mismatch');
+    await h.fail('update_card', { cardId: 'c1', description: '' }, 'readback-mismatch');
   },
   set_card_due: async (h) => {
     const after = card({ due_date: '2026-09-20T00:00:00.000Z', due_complete: false });
     h.respond(() => json(after));
     assert.deepEqual(
-      await h.ok('set_card_due', { cardId: 'c1', dueDate: '2026-09-20', dueComplete: false }),
-      after
+      await h.ok('set_card_due', {
+        cardId: 'c1',
+        dueDate: '2026-09-20T00:00:00.000Z',
+        dueComplete: false,
+      }),
+      {
+        id: 'c1',
+        observed: { due_complete: false, due_date: '2026-09-20T00:00:00.000Z' },
+        verified: true,
+        verified_fields: ['due_complete', 'due_date'],
+      }
     );
     assert.deepEqual(calls(h), [
       // A bare date is sent as an explicit UTC instant.
@@ -160,9 +179,9 @@ defineToolScenarios(import.meta, registerCardEdits, {
     ]);
     h.respond(() => json(card({ due_date: '2026-09-20T10:00:00.000Z' })));
     await h.ok('set_card_due', { cardId: 'c1', dueDate: '2026-09-20T12:00:00+02:00' });
-    assert.deepEqual(calls(h)[0]?.body, { due_date: '2026-09-20T10:00:00.000Z' });
+    assert.deepEqual(calls(h)[0]?.body, { due_date: '2026-09-20T12:00:00+02:00' });
     h.respond(() => json(card({ due_date: '0001-01-01T00:00:00.000Z' })));
-    await h.ok('set_card_due', { cardId: 'c1', dueDate: '0001-01-01' });
+    await h.ok('set_card_due', { cardId: 'c1', dueDate: '0001-01-01T00:00:00.000Z' });
     assert.deepEqual(calls(h)[0]?.body, { due_date: '0001-01-01T00:00:00.000Z' });
     h.respond(() => json(card()));
     await h.ok('set_card_due', { cardId: 'c1', dueDate: null });
@@ -179,7 +198,12 @@ defineToolScenarios(import.meta, registerCardEdits, {
       if (r.method === 'PATCH') archived = !archived;
       return json(card({ archived }));
     });
-    assert.deepEqual(await h.ok('archive_card', { cardId: 'c1' }), card({ archived: true }));
+    assert.deepEqual(await h.ok('archive_card', { cardId: 'c1' }), {
+      id: 'c1',
+      observed: { archived: true },
+      verified: true,
+      verified_fields: ['archived'],
+    });
     assert.deepEqual(calls(h), [
       get('/api/v1/cards/c1'),
       { method: 'PATCH', path: '/api/v1/cards/c1/archive', body: {} },
@@ -198,7 +222,12 @@ defineToolScenarios(import.meta, registerCardEdits, {
       if (r.method === 'PATCH') archived = !archived;
       return json(card({ archived }));
     });
-    assert.deepEqual(await h.ok('archive_card', { cardId: 'c1', archived: false }), card());
+    assert.deepEqual(await h.ok('archive_card', { cardId: 'c1', archived: false }), {
+      id: 'c1',
+      observed: { archived: false },
+      verified: true,
+      verified_fields: ['archived'],
+    });
     assert.deepEqual(calls(h)[1], {
       method: 'PATCH',
       path: '/api/v1/cards/c1/archive',
@@ -231,10 +260,13 @@ defineToolScenarios(import.meta, registerCardEdits, {
   archive_card_short_id: async (h) => {
     // Already archived, given by short ID: no toggle (the router would resolve it and restore the card).
     h.respond(() => json(card({ id: 'uuid-1', archived: true })));
-    assert.deepEqual(
-      await h.ok('archive_card', { cardId: 'abcd1234' }),
-      card({ id: 'uuid-1', archived: true })
-    );
+    assert.deepEqual(await h.ok('archive_card', { cardId: 'abcd1234' }), {
+      id: 'uuid-1',
+      observed: { archived: true },
+      verified: true,
+      verified_fields: ['archived'],
+      write_skipped: true,
+    });
     assert.deepEqual(calls(h), [get('/api/v1/cards/abcd1234'), get('/api/v1/cards/uuid-1')]);
     // Open, by short ID: PATCH and read-back use the UUID.
     let archived = false;
@@ -333,7 +365,14 @@ defineToolScenarios(import.meta, registerCardEdits, {
         keepChecklists: true,
         keepMembers: false,
       }),
-      copy
+      {
+        id: 'c2',
+        request_outcome: 'succeeded',
+        observed: { list_id: 'l2', title: 'Copy' },
+        verified: false,
+        verified_fields: ['list_id', 'title'],
+        unverified: ['keepChecklists', 'keepMembers'],
+      }
     );
     assert.deepEqual(calls(h), [
       {
@@ -359,10 +398,14 @@ defineToolScenarios(import.meta, registerCardEdits, {
       )
     );
     await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2', title: ' Copy ' });
-    await h.fail(
-      'copy_card',
-      { cardId: 'c1', targetListId: 'l2', title: 'Other' },
-      'readback-failed'
+    assert.deepEqual(
+      await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2', title: 'Other' }),
+      {
+        id: 'c2',
+        request_outcome: 'succeeded',
+        verified: false,
+        verification_error: { code: 'readback-mismatch' },
+      }
     );
     // A successful POST is not proof that the copy reached the requested list or kept its ID.
     h.respond(
@@ -371,14 +414,24 @@ defineToolScenarios(import.meta, registerCardEdits, {
         () => json(card({ id: 'c2', title: 'Copy', list_id: 'l3' }))
       )
     );
-    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'readback-failed');
+    assert.deepEqual(await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2' }), {
+      id: 'c2',
+      request_outcome: 'succeeded',
+      verified: false,
+      verification_error: { code: 'readback-mismatch' },
+    });
     h.respond(
       route(
         () => json({ data: { id: 'c2' } }, 201),
         () => json(card({ id: 'c3', title: 'Copy', list_id: 'l2' }))
       )
     );
-    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'readback-failed');
+    assert.deepEqual(await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2' }), {
+      id: 'c2',
+      request_outcome: 'succeeded',
+      verified: false,
+      verification_error: { code: 'readback-mismatch' },
+    });
     h.respond(
       route(
         () => apiError(404, 'list-not-found'),
@@ -392,15 +445,28 @@ defineToolScenarios(import.meta, registerCardEdits, {
         () => json(copy)
       )
     );
-    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'invalid-response');
+    assert.deepEqual(await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2' }), {
+      request_outcome: 'unknown',
+      verified: false,
+      verification_error: { code: 'invalid-response' },
+    });
     h.respond(route(html, () => json(copy)));
-    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'invalid-response');
+    assert.deepEqual(await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2' }), {
+      request_outcome: 'unknown',
+      verified: false,
+      verification_error: { code: 'invalid-response' },
+    });
     h.respond(
       route(
         () => json({ data: { id: 'c2' } }, 201),
         () => apiError(404)
       )
     );
-    await h.fail('copy_card', { cardId: 'c1', targetListId: 'l2' }, 'http-404');
+    assert.deepEqual(await h.ok('copy_card', { cardId: 'c1', targetListId: 'l2' }), {
+      id: 'c2',
+      request_outcome: 'succeeded',
+      verified: false,
+      verification_error: { code: 'http-404' },
+    });
   },
 });

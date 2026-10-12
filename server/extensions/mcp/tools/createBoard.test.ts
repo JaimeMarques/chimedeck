@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 const apiCallMock = mock();
 
-mock.module('../apiClient', () => ({
+void mock.module('../apiClient', () => ({
   apiCall: apiCallMock,
 }));
 
@@ -21,11 +21,16 @@ let toolName = '';
 let handler: ToolHandler | undefined;
 
 const server = {
-  tool: (name: string, _description: string, _schema: unknown, registeredHandler: ToolHandler) => {
+  registerTool: (name: string, _config: unknown, registeredHandler: ToolHandler) => {
     toolName = name;
     handler = registeredHandler;
   },
 };
+
+function registered() {
+  if (!handler) throw new Error('Missing handler');
+  return handler;
+}
 
 const { registerCreateBoard } = await import('./createBoard');
 
@@ -37,14 +42,25 @@ describe('registerCreateBoard', () => {
   });
 
   test('registers create_board and posts optional board fields to its workspace endpoint', async () => {
-    apiCallMock.mockResolvedValue({ data: { data: { id: 'board-1', title: 'Demo board' } } });
+    apiCallMock.mockResolvedValue({
+      data: {
+        data: {
+          id: 'board-1',
+          workspace_id: 'workspace-1',
+          title: 'Demo board',
+          visibility: 'WORKSPACE',
+          description: 'MCP-created board',
+          background: '#123456',
+        },
+      },
+    });
 
     registerCreateBoard(server as never, 'token-1');
 
     expect(toolName).toBe('create_board');
     expect(handler).toBeDefined();
 
-    const result = await handler!({
+    const result = await registered()({
       workspaceId: 'workspace-1',
       title: 'Demo board',
       visibility: 'WORKSPACE',
@@ -52,20 +68,39 @@ describe('registerCreateBoard', () => {
       background: '#123456',
     });
 
-    expect(apiCallMock).toHaveBeenCalledWith({
-      method: 'POST',
-      path: '/api/v1/workspaces/workspace-1/boards',
-      body: {
-        title: 'Demo board',
-        visibility: 'WORKSPACE',
-        description: 'MCP-created board',
-        background: '#123456',
-      },
-      token: 'token-1',
-    });
+    expect(apiCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/v1/workspaces/workspace-1/boards',
+        body: {
+          title: 'Demo board',
+          visibility: 'WORKSPACE',
+          description: 'MCP-created board',
+          background: '#123456',
+        },
+        token: 'token-1',
+      })
+    );
     expect(result).toEqual({
       content: [
-        { type: 'text', text: JSON.stringify({ data: { id: 'board-1', title: 'Demo board' } }) },
+        {
+          type: 'text',
+          text: JSON.stringify({
+            id: 'board-1',
+            observed: {},
+            verified: true,
+            verified_fields: ['workspace_id', 'title', 'visibility', 'description', 'background'],
+            board: {
+              id: 'board-1',
+              workspace_id: 'workspace-1',
+              title: 'Demo board',
+              visibility: 'WORKSPACE',
+              description: 'MCP-created board',
+              background: '#123456',
+            },
+            request_outcome: 'succeeded',
+          }),
+        },
       ],
     });
   });
@@ -74,7 +109,7 @@ describe('registerCreateBoard', () => {
     apiCallMock.mockResolvedValue({ error: { name: 'forbidden' } });
     registerCreateBoard(server as never, 'token-1');
 
-    const result = await handler!({ workspaceId: 'workspace-1', title: 'Demo board' });
+    const result = await registered()({ workspaceId: 'workspace-1', title: 'Demo board' });
 
     expect(result).toEqual({
       content: [{ type: 'text', text: 'Error: forbidden' }],

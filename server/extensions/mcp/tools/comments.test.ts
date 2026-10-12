@@ -32,7 +32,7 @@ defineToolScenarios(import.meta, registerCommentTools, {
   get_comments: async (h) => {
     const rows = [comment(), comment({ id: 'm2', deleted: true, content: '[deleted]' })];
     h.respond(() => json({ data: rows }));
-    assert.deepEqual(await h.ok('get_comments', { cardId: 'c/1' }), rows);
+    assert.deepEqual(await h.ok('get_comments', { cardId: 'c/1', view: 'full' }), { data: rows });
     assert.deepEqual(calls(h), [
       { method: 'GET', path: '/api/v1/cards/c%2F1/comments', body: undefined },
     ]);
@@ -50,7 +50,14 @@ defineToolScenarios(import.meta, registerCommentTools, {
       }
       return json({ data: [comment({ id: 'm0' }), comment({ content, version: 2 })] });
     });
-    assert.deepEqual(await h.ok('edit_comment', args), edited);
+    assert.deepEqual(await h.ok('edit_comment', args), {
+      id: 'm1',
+      observed: { content: 'new' },
+      verified: true,
+      verified_fields: ['content'],
+      card_id: 'c1',
+      parent_id: null,
+    });
     assert.deepEqual(calls(h), [
       { method: 'GET', path: '/api/v1/cards/c1/comments', body: undefined },
       { method: 'PATCH', path: '/api/v1/comments/m1', body: { content: ' new ' } },
@@ -71,7 +78,7 @@ defineToolScenarios(import.meta, registerCommentTools, {
         () => json({ data: [comment()] })
       )
     );
-    await h.fail('edit_comment', args, 'readback-failed');
+    await h.fail('edit_comment', args, 'readback-mismatch');
     // A reply is found in its parent's thread and read back from there.
     const parent = comment({ id: 'p/1', reply_count: 1 });
     const reply = comment({ id: 'r1', parent_id: 'p/1', content: 'new' });
@@ -81,7 +88,14 @@ defineToolScenarios(import.meta, registerCommentTools, {
         ? json({ data: [comment({ id: 'r0', parent_id: 'p/1' }), reply] })
         : json({ data: [comment(), parent] });
     h.respond((r) => (r.method === 'GET' ? thread(r) : json({ data: reply })));
-    assert.deepEqual(await h.ok('edit_comment', replyArgs), reply);
+    assert.deepEqual(await h.ok('edit_comment', replyArgs), {
+      id: 'r1',
+      observed: { content: 'new' },
+      verified: true,
+      verified_fields: ['content'],
+      card_id: 'c1',
+      parent_id: 'p/1',
+    });
     assert.deepEqual(calls(h), [
       { method: 'GET', path: '/api/v1/cards/c1/comments', body: undefined },
       { method: 'GET', path: '/api/v1/comments/p%2F1/replies', body: undefined },
@@ -89,7 +103,7 @@ defineToolScenarios(import.meta, registerCommentTools, {
       { method: 'GET', path: '/api/v1/comments/p%2F1/replies', body: undefined },
     ]);
     h.respond((r) => (r.method === 'GET' ? thread(r) : json({ data: reply })));
-    await h.fail('edit_comment', { ...replyArgs, content: 'other' }, 'readback-failed');
+    await h.fail('edit_comment', { ...replyArgs, content: 'other' }, 'readback-mismatch');
     const ok = () => json({ data: [edited] });
     h.respond(route(() => apiError(403, 'comment-not-owner'), ok));
     await h.fail('edit_comment', args, 'comment-not-owner');
@@ -133,7 +147,12 @@ defineToolScenarios(import.meta, registerCommentTools, {
       }
       return json({ data: [deleted ? placeholder : comment()] });
     });
-    assert.deepEqual(await h.ok('delete_comment', args), placeholder);
+    assert.deepEqual(await h.ok('delete_comment', args), {
+      id: 'm1',
+      card_id: 'c1',
+      verified: true,
+      deleted: true,
+    });
     assert.deepEqual(calls(h), [
       { method: 'GET', path: '/api/v1/cards/c1/comments', body: undefined },
       { method: 'DELETE', path: '/api/v1/comments/m1', body: undefined },
@@ -193,7 +212,12 @@ defineToolScenarios(import.meta, registerCommentTools, {
       }
       return thread(r);
     });
-    assert.deepEqual(await h.ok('delete_comment', replyArgs), { deleted: true, id: 'r1' });
+    assert.deepEqual(await h.ok('delete_comment', replyArgs), {
+      deleted: true,
+      verified: true,
+      id: 'r1',
+      card_id: 'c1',
+    });
     assert.deepEqual(calls(h), [
       { method: 'GET', path: '/api/v1/cards/c1/comments', body: undefined },
       { method: 'GET', path: '/api/v1/comments/p1/replies', body: undefined },

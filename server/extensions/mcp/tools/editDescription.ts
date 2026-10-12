@@ -1,35 +1,30 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { apiCall } from '../apiClient';
+import { sanitizeRichText } from '../../../common/sanitize';
+import { apiPath, dataOf, readCard, request, rowWithId, runTool } from './toolSupport';
+import { verified } from './results';
 
 export function registerEditDescription(server: McpServer, token: string): void {
   server.registerTool(
     'edit_card_description',
     {
-      description: 'Update the description of an existing card.',
-      inputSchema: {
-      cardId: z.string().describe('ID of the card to update'),
-      description: z.string().describe('New description text for the card'),
-      },
+      description: 'Update a card description and verify the stored sanitized value.',
+      inputSchema: { cardId: z.string().min(1), description: z.string() },
     },
-    async ({ cardId, description }) => {
-      const result = await apiCall<{ data: unknown }>({
-        method: 'PATCH',
-        path: `/api/v1/cards/${cardId}/description`,
-        body: { description },
-        token,
-      });
-
-      if ('error' in result) {
+    ({ cardId, description }) =>
+      runTool(token, async () => {
+        await request({
+          method: 'PATCH',
+          path: apiPath`/api/v1/cards/${cardId}/description`,
+          body: { description },
+          token,
+          schema: dataOf(rowWithId),
+        });
+        const desired = description ? sanitizeRichText(description.trim()) : null;
         return {
-          content: [{ type: 'text', text: `Error: ${result.error.name}` }],
-          isError: true,
+          ...verified((await readCard(cardId, token)).data, { description: desired }),
+          ...(desired !== description ? { normalized_fields: ['description'] } : {}),
         };
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
-    }
+      })
   );
 }

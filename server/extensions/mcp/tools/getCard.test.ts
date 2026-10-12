@@ -50,18 +50,27 @@ describe('registerGetCard', () => {
 
     const result = await registeredHandler({ cardId: 'card-1' });
 
-    expect(apiCallMock).toHaveBeenCalledWith({
-      method: 'GET',
-      path: '/api/v1/cards/card-1',
-      token: 'token-1',
-    });
+    expect(apiCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'GET',
+        path: '/api/v1/cards/card-1',
+        token: 'token-1',
+      })
+    );
     expect(result).toEqual({
-      content: [{ type: 'text', text: JSON.stringify({ data: { id: 'card-1', title: 'Demo card' } }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ data: { id: 'card-1', title: 'Demo card' }, includes: {} }),
+        },
+      ],
     });
   });
 
   test('requests activities only when include_activities is true', async () => {
-    apiCallMock.mockResolvedValue({ data: { data: { id: 'card-1' }, includes: { activities: [] } } });
+    apiCallMock.mockResolvedValue({
+      data: { data: { id: 'card-1' }, includes: { activities: [] } },
+    });
     registerGetCard(server as never, 'token-1');
 
     const registeredHandler = handler;

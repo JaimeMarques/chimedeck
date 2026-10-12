@@ -150,6 +150,14 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
     await h.fail('download_attachment', args, 'invalid-response');
   },
   add_url_attachment: async (h) => {
+    const failed = async (args: Record<string, unknown>, code: string, known = true) => {
+      assert.deepEqual(await h.ok('add_url_attachment', args), {
+        ...(known ? { id: 'a2' } : {}),
+        request_outcome: known ? 'succeeded' : 'unknown',
+        verified: false,
+        verification_error: { code },
+      });
+    };
     const args = { cardId: 'c1', url: 'https://example.test/docs', name: 'Docs' };
     h.respond(
       route(
@@ -157,7 +165,21 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
         () => json({ data: [file(), link] })
       )
     );
-    assert.deepEqual(await h.ok('add_url_attachment', args), link);
+    assert.deepEqual(await h.ok('add_url_attachment', args), {
+      id: 'a2',
+      request_outcome: 'succeeded',
+      verified: true,
+      verified_fields: ['name', 'view_url'],
+      observed: {},
+      attachment: {
+        id: 'a2',
+        card_id: 'c1',
+        name: 'Docs',
+        type: 'URL',
+        status: 'READY',
+        view_url: 'https://example.test/docs',
+      },
+    });
     assert.deepEqual(calls(h), [
       {
         method: 'POST',
@@ -186,7 +208,7 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
           () => json({ data: [link] })
         )
       );
-      await h.fail('add_url_attachment', { ...args, ...wrong }, 'readback-failed');
+      await failed({ ...args, ...wrong }, 'readback-mismatch');
     }
     h.respond(
       route(
@@ -201,23 +223,23 @@ defineToolScenarios(import.meta, registerAttachmentTools, {
         () => json({ data: [file()] })
       )
     );
-    await h.fail('add_url_attachment', args, 'readback-failed');
+    await failed(args, 'readback-failed');
     h.respond(
       route(
         () => json(null),
         () => json({ data: [link] })
       )
     );
-    await h.fail('add_url_attachment', args, 'invalid-response');
+    await failed(args, 'invalid-response', false);
     h.respond(route(html, () => json({ data: [link] })));
-    await h.fail('add_url_attachment', args, 'invalid-response');
+    await failed(args, 'invalid-response', false);
     h.respond(
       route(
         () => json({ data: { id: 'a2' } }, 201),
         () => apiError(404)
       )
     );
-    await h.fail('add_url_attachment', args, 'http-404');
+    await failed(args, 'http-404');
   },
   delete_attachment: async (h) => {
     const args = { cardId: 'c1', attachmentId: 'a1' };

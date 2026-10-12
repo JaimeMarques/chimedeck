@@ -8,7 +8,7 @@ const server = {
   registerTool: (
     name: string,
     config: { description: string; inputSchema: unknown },
-    _handler: unknown,
+    _handler: unknown
   ) => {
     toolName = name;
     toolDescription = config.description;
@@ -29,7 +29,7 @@ describe('registerWriteComment', () => {
     registerWriteComment(server as never, 'token-1');
 
     expect(toolName).toBe('write_comment');
-    expect(toolDescription).toBe("Post a comment on a card.");
+    expect(toolDescription).toContain('parent comment');
     expect(handlerRegistered).toBeTrue();
   });
 });

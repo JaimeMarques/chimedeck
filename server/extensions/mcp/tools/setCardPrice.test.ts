@@ -8,7 +8,7 @@ const server = {
   registerTool: (
     name: string,
     config: { description: string; inputSchema: unknown },
-    _handler: unknown,
+    _handler: unknown
   ) => {
     toolName = name;
     toolDescription = config.description;
@@ -29,7 +29,7 @@ describe('registerSetCardPrice', () => {
     registerSetCardPrice(server as never, 'token-1');
 
     expect(toolName).toBe('set_card_price');
-    expect(toolDescription).toBe("Set or clear the price on a card. Pass amount=null to remove the price.");
+    expect(toolDescription).toContain('exact finite');
     expect(handlerRegistered).toBeTrue();
   });
 });

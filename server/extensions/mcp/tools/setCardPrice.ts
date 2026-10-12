@@ -1,38 +1,37 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { apiCall } from '../apiClient';
-
+import { apiPath, dataOf, readCard, request, rowWithId, runTool } from './toolSupport';
+import { verified } from './results';
 export function registerSetCardPrice(server: McpServer, token: string): void {
   server.registerTool(
     'set_card_price',
     {
-      description: 'Set or clear the price on a card. Pass amount=null to remove the price.',
+      description:
+        'Set or clear card price and verify the exact finite JavaScript number transmitted. Unsafe integer inputs are rejected.',
       inputSchema: {
-      cardId: z.string().describe('ID of the card to update'),
-      // nullable() allows amount: null to explicitly clear the price
-      amount: z.number().nullable().describe('Price amount (pass null to clear the price)'),
-      currency: z.string().optional().describe('ISO 4217 currency code, e.g. "USD"'),
-      label: z.string().optional().describe('Optional display label for the price'),
+        cardId: z.string().min(1),
+        amount: z
+          .number()
+          .refine((value) => !Number.isInteger(value) || Number.isSafeInteger(value))
+          .nullable(),
+        currency: z.string().optional(),
+        label: z.string().optional(),
       },
     },
-    async ({ cardId, amount, currency, label }) => {
-      const result = await apiCall<{ data: unknown }>({
-        method: 'PATCH',
-        path: `/api/v1/cards/${cardId}/money`,
-        body: { amount, currency, label },
-        token,
-      });
-
-      if ('error' in result) {
-        return {
-          content: [{ type: 'text', text: `Error: ${result.error.name}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result.data) }],
-      };
-    }
+    ({ cardId, amount, currency, label }) =>
+      runTool(token, async () => {
+        await request({
+          method: 'PATCH',
+          path: apiPath`/api/v1/cards/${cardId}/money`,
+          body: { amount, currency, label },
+          token,
+          schema: dataOf(rowWithId),
+        });
+        return verified((await readCard(cardId, token)).data, {
+          amount,
+          ...(amount === null ? { currency: null } : currency === undefined ? {} : { currency }),
+          ...(label === undefined ? {} : { money_label: label.trim() }),
+        });
+      })
   );
 }

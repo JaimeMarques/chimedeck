@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { sanitizeRichText, sanitizeText } from '../../../common/sanitize';
+import { acknowledgedCreate, timestamp, verified } from './results';
 import {
   ToolError,
   apiPath,
   assertGone,
   dataOf,
   deleteNoContent,
-  expectFields,
   readCard,
   request,
   rowWithId,
@@ -19,47 +19,14 @@ import {
 // "Extensions: card writes").
 
 const cardId = z.string().min(1).describe('ID of the card');
-// [why] Date.parse normalizes impossible dates and accepts inputs like "0" as a date.
-// Accept an exact calendar date or an ISO timestamp with an explicit timezone.
-function isISODate(value: string): boolean {
-  if (value === '') return true;
-  const match =
-    /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|([+-])(\d{2}):(\d{2})))?$/.exec(
-      value
-    );
-  if (!match) return false;
-  const [
-    ,
-    yearText,
-    monthText,
-    dayText,
-    hourText,
-    minuteText,
-    secondText,
-    zone,
-    ,
-    offsetHourText,
-    offsetMinuteText,
-  ] = match;
-  const year = Number(yearText),
-    month = Number(monthText),
-    day = Number(dayText);
-  const calendar = new Date(0);
-  // Date.UTC remaps years 0–99 into 1900–1999; setUTCFullYear preserves ISO years.
-  calendar.setUTCFullYear(year, month - 1, day);
-  if (
-    calendar.getUTCFullYear() !== year ||
-    calendar.getUTCMonth() + 1 !== month ||
-    calendar.getUTCDate() !== day
+const dueDate = z
+  .string()
+  .refine(
+    (value) => value === '' || timestamp(value) !== null,
+    'Expected a timezone-aware ISO timestamp with at most 6 fractional digits'
   )
-    return false;
-  if (zone && (Number(hourText) > 23 || Number(minuteText) > 59 || Number(secondText) > 59))
-    return false;
-  if (offsetHourText && (Number(offsetHourText) > 23 || Number(offsetMinuteText) > 59))
-    return false;
-  return !Number.isNaN(Date.parse(value));
-}
-const dueDate = z.string().refine(isISODate, 'Expected an ISO-8601 date').nullable().optional();
+  .nullable()
+  .optional();
 const written = dataOf(rowWithId);
 
 type CardFields = {
@@ -82,9 +49,8 @@ async function patchCard(id: string, fields: CardFields, token: string) {
     schema: written,
   });
   const card = await readCard(id, token);
-  const { due_date: date } = card.data;
   const { title, description } = fields;
-  expectFields(card.data, {
+  const desired = {
     title: title === undefined ? undefined : sanitizeText(title.trim()),
     description:
       description === undefined
@@ -93,13 +59,18 @@ async function patchCard(id: string, fields: CardFields, token: string) {
           ? sanitizeRichText(description.trim())
           : null,
     due_complete: fields.due_complete,
-  });
-  if (fields.due_date !== undefined) {
-    const got = typeof date === 'string' ? Date.parse(date) : date;
-    if (got !== (fields.due_date === null ? null : Date.parse(fields.due_date)))
-      throw new ToolError('readback-failed');
-  }
-  return card;
+    due_date: fields.due_date,
+  };
+  const expected = Object.fromEntries(
+    Object.entries(desired).filter(([, value]) => value !== undefined)
+  );
+  const normalized = Object.keys(expected).filter(
+    (key) => expected[key] !== fields[key as keyof CardFields]
+  );
+  return {
+    ...verified(card.data, expected),
+    ...(normalized.length ? { normalized_fields: normalized } : {}),
+  };
 }
 
 // snake_case body; camelCase keys are silently ignored by the server.
@@ -110,8 +81,7 @@ function dueFields(args: {
   const fields: CardFields = {};
   // [why] An explicit UTC instant: a bare date would be stored in the DB session's
   // timezone and fail the read-back comparison on a non-UTC database.
-  if (args.dueDate !== undefined)
-    fields.due_date = args.dueDate ? new Date(args.dueDate).toISOString() : null;
+  if (args.dueDate !== undefined) fields.due_date = args.dueDate || null;
   if (args.dueComplete !== undefined) fields.due_complete = args.dueComplete;
   return fields;
 }
@@ -193,7 +163,10 @@ export function registerCardEdits(server: McpServer, token: string): void {
         }
         const card = await readCard(before.id, token);
         if (card.data.archived !== want) throw new ToolError('archive-state-conflict');
-        return card;
+        return {
+          ...verified(card.data, { archived: want }),
+          ...(before.archived === want ? { write_skipped: true } : {}),
+        };
       })
   );
 
@@ -227,19 +200,22 @@ export function registerCardEdits(server: McpServer, token: string): void {
     },
     ({ cardId: source, targetListId, title, keepChecklists, keepMembers }) =>
       runTool(token, async () => {
-        const created = await request({
-          method: 'POST',
-          path: apiPath`/api/v1/cards/${source}/copy`,
-          body: { targetListId, title, keepChecklists, keepMembers },
-          token,
-          schema: written,
-        });
-        const card = await readCard(created.data.id, token);
-        if (card.data.id !== created.data.id || card.data.list_id !== targetListId)
-          throw new ToolError('readback-failed');
-        // A given title is stored trimmed (card/api/copy.ts); blank keeps the original's.
-        if (title?.trim()) expectFields(card.data, { title: title.trim() });
-        return card;
+        return acknowledgedCreate(
+          () =>
+            request({
+              method: 'POST',
+              path: apiPath`/api/v1/cards/${source}/copy`,
+              body: { targetListId, title, keepChecklists, keepMembers },
+              token,
+              schema: z.unknown(),
+            }),
+          async (ack) => ({ row: (await readCard(String(ack.id), token)).data }),
+          { list_id: targetListId, ...(title?.trim() ? { title: title.trim() } : {}) },
+          [
+            ...(keepChecklists === undefined ? [] : ['keepChecklists']),
+            ...(keepMembers === undefined ? [] : ['keepMembers']),
+          ]
+        );
       })
   );
 }
