@@ -10,6 +10,9 @@ const url = new URL(Bun.env.DATABASE_URL ?? '');
 const marker = Bun.env.LAB_MARKER;
 const state = Bun.env.LAB_STATE;
 if (
+  // Knex/pg query parameters can override the authority fields below.
+  (url.protocol !== 'postgresql:' && url.protocol !== 'postgres:') ||
+  url.search !== '' ||
   url.hostname !== '127.0.0.1' ||
   url.port !== '35432' ||
   url.pathname !== '/chimedeck_lab' ||
