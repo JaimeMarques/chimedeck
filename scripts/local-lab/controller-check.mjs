@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import { dependencyDigest } from './labGuards.mjs';
-import { checkpointFor } from './resetCheckpoint.mjs';
+import { checkpointFor, atomicPrivateJson } from './resetCheckpoint.mjs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { acquireLease } from './labLease.mjs';
 
 const source = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +67,7 @@ function ownedObjects(checkout, options) {
         'com.docker.compose.oneoff': options.foreignMigration ? 'False' : 'True',
       },
     });
+  if (options.disappearPgOnStart) container[0].Running = false;
   return {
     container,
     volume: ['postgres', 'redis', 's3'].map((name) => ({
@@ -125,6 +128,8 @@ async function fixture(options) {
     startupDrift: options.startupDrift,
     foreignConsumer: options.foreignConsumer,
     interrupt: options.interrupt,
+    disappearPgOnStart: options.disappearPgOnStart,
+    disappearPgOnExec: options.disappearPgOnExec,
     daemon: options.daemon,
     log: resolve(directory, 'docker-calls.jsonl'),
   };
@@ -151,7 +156,13 @@ if(config.objects){
   }
   if(a[0]==='ps'&&a.some(x=>x.startsWith('volume='))){process.stdout.write(config.objects.container.map(x=>x.Id).concat(config.foreignConsumer?['f'.repeat(64)]:[]).join('\\n'));process.exit(0);}
   if(a[0]==='ps'||a.includes('ls')){process.stdout.write(config.objects[kind].map(x=>x.Name.replace(/^\\//,'')).join('\\n'));process.exit(0);}
-  if(a[0]==='exec'){process.stdout.write(a.at(-1).includes('to_regclass')?'t':'chimedeck_lab:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');process.exit(0);}
+  if(a[0]==='start'||a[0]==='exec'){
+    if((a[0]==='start'&&config.disappearPgOnStart)||(a[0]==='exec'&&config.disappearPgOnExec)){config.objects.container.find(x=>x.Name.endsWith('-postgres-1')).Id='e'.repeat(64);save();}
+    const entry=config.objects.container.find(x=>x.Id===a[1]);
+    if(!entry){process.stderr.write('No such container: '+a[1]);process.exit(1);}
+    if(a[0]==='start'){entry.Running=true;save();process.exit(0);}
+    process.stdout.write(a.at(-1).includes('to_regclass')?'t':'chimedeck_lab:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');process.exit(0);
+  }
   if(a[0]==='stop'||a[0]==='rm'){
     if(config.interrupt==='post-pg'&&a[0]==='rm'&&a[1]==='2'.repeat(64)){config.interrupt=undefined;save();process.stderr.write('injected interruption');process.exit(81);}
     const entry=config.objects.container.find(x=>x.Id===a[1]);
@@ -647,6 +658,70 @@ test('active same-state lifecycle owner prevents another reset from resuming its
     const reset = value.invoke('reset');
     assert.equal(reset.status, 0, reset.stderr);
   } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('validated Postgres snapshot ID never starts or queries a same-name replacement', async () => {
+  for (const options of [{ disappearPgOnStart: true }, { disappearPgOnExec: true }]) {
+    const value = await fixture({ command: 'reset', owned: true, ...options });
+    try {
+      assert.notEqual(value.result.status, 0);
+      const postgresCalls = value.calls.filter((args) => ['start', 'exec'].includes(args[2]));
+      assert.ok(postgresCalls.length > 0);
+      assert.ok(postgresCalls.every((args) => args[3] === '1'.repeat(64)));
+      assert.ok(!postgresCalls.some((args) => args[3] === 'e'.repeat(64)));
+      await assert.rejects(readFile(resolve(value.state, 'reset-checkpoint.json')));
+      assert.equal(
+        await readFile(resolve(value.state, 'identity.json'), 'utf8'),
+        value.identityBefore
+      );
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('owner publication failures leave complete authority usable by cleanup commands', async () => {
+  const value = await fixture({ command: 'status', owned: true });
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    const owner = JSON.parse(value.identityBefore);
+    const updated = { ...owner, dependency_digest: 'new-preparation' };
+    mock.method(fs, 'renameSync', () => {
+      throw new Error('injected before publication');
+    });
+    syncBuiltinESMExports();
+    assert.throws(
+      () => atomicPrivateJson(value.state, 'identity.json', updated),
+      /before publication/
+    );
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    assert.equal(value.invoke('status').status, 0);
+    const sync = fs.fsyncSync;
+    let calls = 0;
+    mock.method(fs, 'fsyncSync', (fd) => {
+      if (++calls === 2) throw new Error('injected after publication');
+      return sync(fd);
+    });
+    syncBuiltinESMExports();
+    assert.throws(
+      () => atomicPrivateJson(value.state, 'identity.json', updated),
+      /after publication/
+    );
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    assert.deepEqual(
+      JSON.parse(await readFile(resolve(value.state, 'identity.json'), 'utf8')),
+      updated
+    );
+    const stopped = value.invoke('stop');
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(value.invoke('status').status, 0);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
     await new Promise((accept) => value.socket.close(accept));
     await rm(value.directory, { recursive: true, force: true });
   }

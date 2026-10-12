@@ -188,10 +188,12 @@ let pending = present(resetName)
 const resetResources = () => validateSubset(pending, resources());
 const compose = (...args) =>
   docker(['compose', '--project-name', project, '--file', composePath, ...args], { env });
-function sql(text) {
+function sql(text, postgres) {
+  if (!postgres?.Id || !/^[a-f0-9]{64}$/.test(postgres.Id))
+    throw new Error('Validated Postgres snapshot ID required');
   return docker([
     'exec',
-    `${project}-postgres-1`,
+    postgres.Id,
     'psql',
     '-U',
     'chimedeck_lab',
@@ -211,7 +213,7 @@ function database(allowStart = false) {
     throw new Error('Owned Postgres container missing; start the clean pinned lab before reset');
   if (!postgres.Running) {
     if (!allowStart) throw new Error('Owned Postgres is stopped');
-    docker(['start', `${project}-postgres-1`]);
+    docker(['start', postgres.Id]);
     // SQL availability, not an assumption that docker start means ready.
     for (let attempt = 0; attempt < 30; attempt++) {
       const ready = spawnSync(
@@ -220,7 +222,7 @@ function database(allowStart = false) {
           '--host',
           dockerHost,
           'exec',
-          `${project}-postgres-1`,
+          postgres.Id,
           'pg_isready',
           '-U',
           'chimedeck_lab',
@@ -235,7 +237,7 @@ function database(allowStart = false) {
     }
   }
   if (
-    sql("SELECT current_database() || ':' || marker FROM local_lab_identity") !==
+    sql("SELECT current_database() || ':' || marker FROM local_lab_identity", postgres) !==
     `chimedeck_lab:${identity.marker}`
   )
     throw new Error('Connected database is not the owned lab');
@@ -258,11 +260,17 @@ function refreshApp() {
   if (!app?.Running || typeof app.Id !== 'string') throw new Error('Fresh owned app missing');
   const after = sourceSnapshot(checkout, run, revision, allowMcp);
   if (after !== before) throw new Error('Source content changed across app startup boundaries');
-  atomicPrivateJson(state, 'app-start.json', {
-    container_id: app.Id,
-    revision,
-    development: allowMcp,
-  });
+  atomicPrivateJson(
+    state,
+    'app-start.json',
+    {
+      container_id: app.Id,
+      revision,
+      development: allowMcp,
+    },
+    false,
+    true
+  );
 }
 async function proofApp() {
   const found = database();
@@ -331,7 +339,7 @@ try {
     run('bun', ['install', '--frozen-lockfile']);
     guardSource(checkout, run, allowMcp);
     identity.dependency_digest = dependencyDigest(checkout);
-    writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
+    atomicPrivateJson(state, 'identity.json', identity);
     console.info('Prepared frozen dependencies for the selected source');
   } else if (command === 'pin') {
     const changed = run('git', ['diff', '--no-renames', '--name-only', identity.revision, revision])
@@ -358,7 +366,7 @@ try {
     identity.docker_host = dockerHost;
     identity.docker_id = daemonId;
     delete identity.allow_mcp_dev;
-    writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
+    atomicPrivateJson(state, 'identity.json', identity);
     console.info('Pinned the unchanged-schema source and verified local Docker daemon');
   } else if (command === 'start') {
     const found = resources();
@@ -375,13 +383,22 @@ try {
           server.listen(port, '127.0.0.1', () => server.close(accept));
         });
     compose('up', '-d', '--wait', 'postgres', 'redis', 'localstack');
-    resources(true, true);
-    const present = sql("SELECT to_regclass('public.local_lab_identity') IS NOT NULL");
+    const infrastructure = resources(true, true);
+    const postgres = infrastructure.container.find(
+      (container) => container.Name === `/${project}-postgres-1`
+    );
+    const present = sql("SELECT to_regclass('public.local_lab_identity') IS NOT NULL", postgres);
     if (present === 'f') {
-      if (sql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'") !== '0')
+      if (
+        sql(
+          "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
+          postgres
+        ) !== '0'
+      )
         throw new Error('Refusing to claim a populated unmarked database');
       sql(
-        `CREATE TABLE local_lab_identity(marker text PRIMARY KEY); INSERT INTO local_lab_identity VALUES('${identity.marker}')`
+        `CREATE TABLE local_lab_identity(marker text PRIMARY KEY); INSERT INTO local_lab_identity VALUES('${identity.marker}')`,
+        postgres
       );
     }
     database();

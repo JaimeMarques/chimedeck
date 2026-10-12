@@ -18,7 +18,7 @@ Automated protocol proof:
 
 ```bash
 bun test server/extensions/mcp
-node --test scripts/local-lab/labGuards.test.mjs scripts/local-lab/controller-check.mjs
+node --test scripts/local-lab/labGuards.test.mjs scripts/local-lab/labLease.test.mjs scripts/local-lab/atomicOwner-check.mjs scripts/local-lab/controller-check.mjs
 ```
 
 Repository-wide type/full-suite failures must be compared with the same canonical base and reported as known baseline issues. Focused success does not certify a green full suite. No acceptance step authorizes production writes, connection switches or deployment.

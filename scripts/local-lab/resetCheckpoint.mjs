@@ -128,7 +128,13 @@ export function validateSubset(checkpoint, resources) {
   }
   return resources;
 }
-export function atomicPrivateJson(state, name, value, exclusive = false) {
+export function atomicPrivateJson(
+  state,
+  name,
+  value,
+  exclusive = false,
+  discardPublishedOnFailure = false
+) {
   const temporary = resolve(state, `.lab-${randomUUID()}.tmp`);
   const destination = resolve(state, name);
   let fd;
@@ -152,7 +158,7 @@ export function atomicPrivateJson(state, name, value, exclusive = false) {
     }
   } catch (error) {
     failure = error;
-    if (published && !exclusive) {
+    if (published && discardPublishedOnFailure && !exclusive) {
       try {
         unlinkSync(destination);
       } catch (cleanupError) {

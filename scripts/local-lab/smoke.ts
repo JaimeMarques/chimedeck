@@ -130,9 +130,10 @@ try {
   });
   assert.equal(board.verified, true);
   createdBoard = z.string().parse(board.id);
-  const selected = z
-    .object({ short_id: z.string().length(8), background: z.null() })
-    .parse(board.board);
+  const selected = z.object({ short_id: z.string().length(8) }).parse(board.board);
+  const rawBoard = await rest(`/api/v1/boards/${createdBoard}`);
+  assert.equal(rawBoard.status, 200);
+  z.object({ data: z.object({ background: z.null() }) }).parse(await rawBoard.json());
   const list = await call(admin, 'create_list', {
     boardId: selected.short_id,
     title: 'Synthetic list',
