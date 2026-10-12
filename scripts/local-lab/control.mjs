@@ -93,7 +93,8 @@ function validRuntime(value) {
     typeof value.LAB_JWT_PUBLIC_KEY === 'string'
   );
 }
-const identity = command === 'init' ? undefined : privateJson('identity.json');
+const identity =
+  command === 'init' && !present('identity.json') ? undefined : privateJson('identity.json');
 const resetName = 'reset-checkpoint.json';
 const migrationName = 'migration-pending.json';
 if (present(resetName) && !cleanup)

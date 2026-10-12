@@ -274,7 +274,7 @@ process.stderr.write('unexpected mutation');process.exit(81);`,
   const identityBefore = options.initializing
     ? undefined
     : await readFile(resolve(state, 'identity.json'), 'utf8');
-  const invoke = (command, extra = [], inject = false) =>
+  const invoke = (command, extra = [], inject = false, recordedEndpoint = false) =>
     spawnSync(
       process.execPath,
       [
@@ -290,7 +290,7 @@ process.stderr.write('unexpected mutation');process.exit(81);`,
         env: {
           PATH: `${bin}:${process.env.PATH}`,
           HOME: home,
-          ...(options.initializing ? { LAB_DOCKER_HOST: endpoint } : {}),
+          ...(options.initializing && !recordedEndpoint ? { LAB_DOCKER_HOST: endpoint } : {}),
           ...(options.endpoint ? { LAB_DOCKER_HOST: options.endpoint } : {}),
           ...(options.allowMcp !== undefined ? { LAB_ALLOW_MCP_DEV: options.allowMcp } : {}),
         },
@@ -813,6 +813,25 @@ test('migration source refusal happens before execution; drift error or crash st
     }
   }
 });
+test('repeat init uses its recorded nondefault socket for completed pairs and stale initializer recovery', async () => {
+  const value = await fixture({ command: 'init', initializing: true, initCrash: 'identity' });
+  try {
+    assert.equal(value.result.status, 91);
+    const owner = await readFile(resolve(value.state, 'identity.json'), 'utf8');
+    const environment = await readFile(resolve(value.state, 'environment.json'), 'utf8');
+    const recovered = value.invoke('init', [], false, true);
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.equal(value.invoke('init', [], false, true).status, 0);
+    assert.equal(await readFile(resolve(value.state, 'identity.json'), 'utf8'), owner);
+    assert.equal(await readFile(resolve(value.state, 'environment.json'), 'utf8'), environment);
+    const calls = await readFile(resolve(value.directory, 'docker-calls.jsonl'), 'utf8');
+    assert.ok(calls.includes(value.endpoint));
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+
 test('init crash boundaries recover orphan environment or committed pair under stable initializer lease', async () => {
   for (const initCrash of ['environment', 'identity']) {
     const value = await fixture({ command: 'init', initializing: true, initCrash });
