@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import {
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  lstatSync,
+  readlinkSync,
+  existsSync,
+} from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 export function localDockerHost(value) {
@@ -49,6 +57,28 @@ export function dependencyDigest(checkout) {
     .update(readFileSync(resolve(checkout, 'bun.lock')))
     .digest('hex');
 }
+export function sourceSnapshot(checkout, run, revision, allowMcp) {
+  const head = run('git', ['rev-parse', 'HEAD']).trim();
+  if (head !== revision) throw new Error('Selected checkout revision changed at startup boundary');
+  guardSource(checkout, run, allowMcp);
+  const hash = createHash('sha256')
+    .update(head)
+    .update(run('git', ['diff', '--cached', '--binary']));
+  const paths = run('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
+    .split('\0')
+    .filter(Boolean)
+    .sort();
+  for (const path of paths) {
+    const file = resolve(checkout, path);
+    if (!file.startsWith(`${checkout}/`)) throw new Error('Source path outside selected checkout');
+    hash.update(path).update('\0');
+    if (!existsSync(file)) hash.update('missing');
+    else if (lstatSync(file).isSymbolicLink()) hash.update(readlinkSync(file));
+    else hash.update(readFileSync(file));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
 
 const services = {
   postgres: {
@@ -80,9 +110,9 @@ export function inspectOwnedResources(docker, project, checkout, composePath) {
     container:
       '{"Id":{{json .Id}},"Name":{{json .Name}},"Command":{{json .Config.Cmd}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .NetworkSettings.Ports}},"RequestedPorts":{{json .HostConfig.PortBindings}},"Running":{{json .State.Running}}}',
     volume:
-      '{"Name":{{json .Name}},"Labels":{{json .Labels}},"Driver":{{json .Driver}},"Options":{{json .Options}}}',
+      '{"Name":{{json .Name}},"CreatedAt":{{json .CreatedAt}},"Labels":{{json .Labels}},"Driver":{{json .Driver}},"Options":{{json .Options}}}',
     network:
-      '{"Name":{{json .Name}},"Labels":{{json .Labels}},"Containers":{{json .Containers}},"Driver":{{json .Driver}},"Internal":{{json .Internal}},"Scope":{{json .Scope}}}',
+      '{"Id":{{json .Id}},"Name":{{json .Name}},"Labels":{{json .Labels}},"Containers":{{json .Containers}},"Driver":{{json .Driver}},"Internal":{{json .Internal}},"Scope":{{json .Scope}}}',
   };
   for (const kind of Object.keys(names)) {
     const all = docker(
@@ -192,10 +222,36 @@ export function inspectOwnedResources(docker, project, checkout, composePath) {
     }
   }
   for (const volume of objects.volume)
-    if (volume.Driver !== 'local' || Object.keys(volume.Options ?? {}).length)
+    if (
+      volume.Driver !== 'local' ||
+      Object.keys(volume.Options ?? {}).length ||
+      typeof volume.CreatedAt !== 'string'
+    )
       throw new Error('Unexpected lab volume driver/options');
+  const ownedIds = new Set(objects.container.map((container) => container.Id));
+  for (const volume of objects.volume) {
+    const consumers = docker([
+      'ps',
+      '-a',
+      '--no-trunc',
+      '--filter',
+      `volume=${volume.Name}`,
+      '--format',
+      '{{.ID}}',
+    ])
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    if (consumers.some((id) => !ownedIds.has(id)))
+      throw new Error('Foreign consumer of owned lab volume');
+  }
   for (const network of objects.network) {
-    if (network.Driver !== 'bridge' || network.Internal || network.Scope !== 'local')
+    if (
+      !/^[a-f0-9]{64}$/.test(network.Id) ||
+      network.Driver !== 'bridge' ||
+      network.Internal ||
+      network.Scope !== 'local'
+    )
       throw new Error('Lab network must be a dedicated local normal bridge');
     if (
       Object.values(network.Containers ?? {}).some(

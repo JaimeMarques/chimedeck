@@ -539,6 +539,8 @@ Refer to [.github/copilot-instructions.md](.github/copilot-instructions.md) for 
 
 From a selected checkout with runtime source changes committed and no loader environment files (templates such as `.env.example` remain allowed):
 
+The controller requires Node, Bun, Docker Compose on an explicitly selected local Unix daemon, and `flock` for its per-state lifecycle journal.
+
 ```sh
 LAB_STATE=/absolute/path/to/private-lab-state
 LAB_REVISION=$(git rev-parse HEAD)
@@ -556,7 +558,9 @@ The selected source checkout/revision and manifest/lockfile digest of frozen dep
 
 Docker commands explicitly use a validated local Unix socket with `--host`, and the daemon identity is pinned in private state. `LAB_DOCKER_HOST=unix:///path/to/docker.sock` selects a local endpoint at initialization (default `/var/run/docker.sock`); TCP/SSH endpoints are refused. Saved global Docker contexts are neither used for daemon selection nor changed. Exact expected resource names are independently checked even without project labels; foreign names/mounts/networks are refused before mutation. Stop/reset can inspect their recorded owned resources despite source drift, avoiding a cleanup/pin deadlock. A stopped owned Postgres may be started only to verify its database marker before reset or pin.
 
-start/restart-app always recreate the app and record its owned container ID, selected base revision and development mode in private app-start.json. Clean test/browser/guards require matching non-development loaded provenance; pin alone does not update it. Explicit MCP development proof refreshes the app before testing so hosted and newly spawned stdio source agree. status only reports loaded provenance; reset removes it. Migrations use one exact owned migrate container name with no published ports. Interrupted owned migrations can be stopped/reset safely by snapshot ID; arbitrary similar or legacy one-off containers are refused, never adopted.
+start/restart-app always recreate the app and record its owned container ID, selected base revision and development mode in private app-start.json. Clean test/browser/guards require matching non-development loaded provenance; pin alone does not update it. Explicit MCP development proof refreshes the app before testing so hosted and newly spawned stdio source agree. status only reports loaded provenance; reset removes it. Source/HEAD/content are observed immediately before recreation and after healthy-resource validation; this does not prove the loaded bytes or exclude transient edit-and-revert between observations. Migrations use one exact owned migrate container name with no published ports. Interrupted owned migrations can be stopped/reset safely by snapshot ID; arbitrary similar or legacy one-off containers are refused, never adopted.
+
+Reset first checks every running/stopped consumer of owned volumes by full container ID. After real database-marker and complete ownership verification it durably publishes a strict private reset checkpoint. Interrupted cleanup resumes only the original authorized subset, using saved container/network IDs and freshly matching volume creation/label/driver/options attributes. Missing resources are benign; replacements or foreign consumers refuse. Pending reset blocks setup/proof commands until fixed generated files and resources are removed; identity/environment are retained. A per-state `flock`-backed lifecycle lease fails fast on concurrent mutation, with recovery only for a validated bound owner whose PID is gone. Status stays observational; the short development refresh lease ends before proof clients/helpers run. No global Docker lock or immutable-source architecture is claimed.
 
 ## Final Words from a Human (the creator)
 

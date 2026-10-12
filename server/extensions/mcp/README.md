@@ -20,7 +20,7 @@ Created card, copy, comment, checklist, item, board and list IDs survive later v
 
 Nonempty due dates require a calendar-valid timezone-aware timestamp with at most six fractional digits. The original input is sent without millisecond conversion; comparisons use exact integer microseconds. Backend serialization/storage may still lose precision, which fails verification. Prices compare exact decimal coefficients/scales against finite parsed JavaScript numbers, including internal exponent expansion. Unsafe integer inputs are rejected before HTTP; this does not claim arbitrary Python-integer or raw JSON-number precision after JavaScript parsing. Money clear/label behavior follows the native backend.
 
-Attachment download schemas differ by trusted transport registration. Local stdio requires an absolute `destPath`, uses a bounded header/setup deadline and a body idle timeout reset only on byte progress, streams to an exclusive temporary file, verifies size, then atomically replaces the destination and returns small metadata only. Progressing large transfers may exceed the setup budget; validated EOF retires network timing before disk publication. Local stdio deliberately permits atomic overwrite of an existing explicitly chosen destination; the replacement has private mode0600 and destructiveHint:true. Hosted HTTP exposes no destination path or disk writes and retains capped in-band attachment content. Both retain file/readiness/card-scope, redirect and size guards.
+Attachment download schemas differ by trusted transport registration. Local stdio requires an absolute `destPath`, uses a bounded header/setup deadline and a body idle timeout reset only on byte progress, streams to an exclusive temporary file, verifies size, then atomically replaces the destination and returns small metadata only. Progressing large transfers may exceed the setup budget; validated EOF retires network timing before disk publication. Local stdio deliberately permits atomic overwrite of an existing explicitly chosen destination; the replacement has private mode0600 and destructiveHint:true. Hosted HTTP exposes no destination path or disk writes and retains capped in-band attachment content. Both retain file/readiness/card-scope, redirect and size guards. Parent directories are intentionally created as needed and may remain after failure; rollback removes only the owned temporary file, never unrelated directories.
 
 This port deliberately strengthens `create_label` and `add_url_attachment` beyond the Python 0.3 legacy results: newly allocated IDs survive secondary verification failures and selected label/attachment text is returned once. Native roles, normalization and threaded comment mutation support follow the current application. Full tool catalogue parity does not imply every legacy wire result is identical.
 
@@ -332,6 +332,8 @@ Returns an acknowledged creation receipt: a valid new ID survives failed seconda
 
 #### `create_board`
 
+Blank backgrounds expect an observed null; a proxy readback for a blank request is a mismatch. Ordinary URLs/strings compare exactly after trimming. For a nonempty requested background, a fresh board-specific proxy is a lossy view: the receipt retains its ID/succeeded request and verifies other fields, but marks background unverified without inventing a mismatch or claiming raw S3-key verification.
+
 Returns an acknowledged ID receipt with selected board text once; later verification failure retains the known ID without invented observations.
 
 | Parameter | Type | Required | Description |
@@ -345,6 +347,8 @@ Returns an acknowledged ID receipt with selected board text once; later verifica
 The existing board API enforces workspace membership and makes the caller a board admin on success.
 
 #### `create_list`
+
+Short board aliases are resolved through an authenticated canonical board read before POST. Lookup refusal sends no POST; later failures retain an acknowledged new list ID.
 
 Returns an acknowledged ID receipt with selected list text once; later verification failure retains the known ID. Optional ordering fields may remain explicitly unverified.
 

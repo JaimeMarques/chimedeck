@@ -228,7 +228,7 @@ export type Creation =
       | Verified
       | { verified: false; verification_error: { code: string } }
     ));
-type CreationObservation =
+type CreationObservation = (
   | { row: Row; selected?: false; extra?: Row }
   | {
       row: Row;
@@ -240,7 +240,8 @@ type CreationObservation =
         | { list: Row }
         | { label: Row }
         | { attachment: Row };
-    };
+    }
+) & { unverified?: string[] };
 export const ambiguous = (error: unknown): boolean =>
   !(error instanceof ToolError) ||
   error.phase === 'response' ||
@@ -274,10 +275,13 @@ export async function acknowledgedCreate(
     };
   const id = ack.id;
   try {
-    const { row, extra, selected } = await observe(ack);
+    const { row, extra, selected, unverified: observedUnverified = [] } = await observe(ack);
     if (typeof row.id !== 'string' || identity(row.id) !== identity(id))
       throw new ToolError('readback-mismatch');
-    const result = verified(row, desired, unverified);
+    const remaining = Object.fromEntries(
+      Object.entries(desired).filter(([key]) => !observedUnverified.includes(key))
+    );
+    const result = verified(row, remaining, [...unverified, ...observedUnverified]);
     if (selected) result.observed = {};
     return { ...result, ...extra, id, request_outcome: 'succeeded' };
   } catch (error) {

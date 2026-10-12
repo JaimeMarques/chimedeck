@@ -21,7 +21,16 @@ import {
   guardSource,
   inspectOwnedResources,
   localDockerHost,
+  sourceSnapshot,
 } from './labGuards.mjs';
+import {
+  checkpointFor,
+  validateCheckpoint,
+  validateSubset,
+  atomicPrivateJson,
+  generatedFiles,
+} from './resetCheckpoint.mjs';
+import { acquireLease } from './labLease.mjs';
 
 const checkout = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
 const [command, stateArg, revision] = process.argv.slice(2);
@@ -59,7 +68,19 @@ function privateJson(name) {
     throw new Error('Private state file ownership/mode mismatch');
   return JSON.parse(readFileSync(path, 'utf8'));
 }
+function present(name) {
+  try {
+    lstatSync(resolve(state, name));
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
 const identity = command === 'init' ? undefined : privateJson('identity.json');
+const resetName = 'reset-checkpoint.json';
+if (present(resetName) && !cleanup)
+  throw new Error('Pending reset blocks setup/proof commands; continue reset first');
 const allowMcp = process.env.LAB_ALLOW_MCP_DEV === '1';
 if (allowMcp && !cleanup)
   console.info('MCP development allowance enabled for this invocation; source may be uncommitted');
@@ -144,6 +165,27 @@ if (
 )
   throw new Error('Lab ownership/configuration mismatch');
 const env = { ...cleanEnv, ...runtime };
+const resetBinding = {
+  state,
+  checkout,
+  project,
+  marker: identity.marker,
+  docker_host: dockerHost,
+  docker_id: daemonId,
+  revision: identity.revision,
+};
+const { revision: bindingRevision, ...leaseBinding } = resetBinding;
+void bindingRevision;
+const assertJournal = () => {
+  if (JSON.stringify(privateJson('identity.json')) !== JSON.stringify(identity))
+    throw new Error('Lab identity changed across lifecycle lease boundary');
+  if (present(resetName) && !cleanup)
+    throw new Error('Pending reset blocks setup/proof commands; continue reset first');
+};
+let pending = present(resetName)
+  ? validateCheckpoint(privateJson(resetName), resetBinding)
+  : undefined;
+const resetResources = () => validateSubset(pending, resources());
 const compose = (...args) =>
   docker(['compose', '--project-name', project, '--file', composePath, ...args], { env });
 function sql(text) {
@@ -207,29 +249,34 @@ function stopOrder(found) {
   );
 }
 function refreshApp() {
-  if (existsSync(resolve(state, 'app-start.json'))) privateJson('app-start.json');
+  if (present('app-start.json')) privateJson('app-start.json');
+  const before = sourceSnapshot(checkout, run, revision, allowMcp);
   compose('up', '-d', '--wait', '--no-deps', '--force-recreate', 'app');
   const app = resources(true, true).container.find(
     (container) => container.Name === `/${project}-app-1`
   );
   if (!app?.Running || typeof app.Id !== 'string') throw new Error('Fresh owned app missing');
-  writeFileSync(
-    resolve(state, 'app-start.json'),
-    JSON.stringify({
-      container_id: app.Id,
-      revision,
-      development: allowMcp,
-    }),
-    { mode: 0o600 }
-  );
+  const after = sourceSnapshot(checkout, run, revision, allowMcp);
+  if (after !== before) throw new Error('Source content changed across app startup boundaries');
+  atomicPrivateJson(state, 'app-start.json', {
+    container_id: app.Id,
+    revision,
+    development: allowMcp,
+  });
 }
-function proofApp() {
+async function proofApp() {
   const found = database();
   if (allowMcp) {
-    refreshApp();
+    const release = await acquireLease(state, leaseBinding);
+    try {
+      assertJournal();
+      refreshApp();
+    } finally {
+      await release();
+    }
     return;
   }
-  if (!existsSync(resolve(state, 'app-start.json')))
+  if (!present('app-start.json'))
     throw new Error('Loaded app provenance missing; run clean restart-app');
   const loaded = privateJson('app-start.json');
   const app = found.container.find((container) => container.Name === `/${project}-app-1`);
@@ -244,14 +291,23 @@ function proofApp() {
 function containerAction(action, container) {
   // Snapshot IDs cannot select a replacement that reuses an owned name.
   try {
-    docker([action, container.Id]);
+    docker(action === 'network' ? ['network', 'rm', container.Id] : [action, container.Id]);
   } catch (error) {
     const probe = spawnSync(
       'docker',
-      ['--host', dockerHost, 'container', 'inspect', '--format', '{{.Id}}', container.Id],
+      [
+        '--host',
+        dockerHost,
+        action === 'network' ? 'network' : 'container',
+        'inspect',
+        '--format',
+        '{{.Id}}',
+        container.Id,
+      ],
       { env: cleanEnv, encoding: 'utf8' }
     );
-    if (probe.status === 1 && /No such (object|container)/i.test(probe.stderr ?? '')) return;
+    if (probe.status === 1 && /No such (object|container|network)/i.test(probe.stderr ?? ''))
+      return;
     throw error;
   }
 }
@@ -261,175 +317,212 @@ if (
   identity.dependency_digest !== dependencyDigest(checkout)
 )
   throw new Error('Dependencies not prepared for this source; run prepare');
-if (command === 'prepare') {
-  resources();
-  run('bun', ['install', '--frozen-lockfile']);
-  guardSource(checkout, run, allowMcp);
-  identity.dependency_digest = dependencyDigest(checkout);
-  writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
-  console.info('Prepared frozen dependencies for the selected source');
-} else if (command === 'pin') {
-  const changed = run('git', ['diff', '--no-renames', '--name-only', identity.revision, revision])
-    .trim()
-    .split('\n')
-    .filter(Boolean);
-  if (
-    changed.some(
-      (path) =>
-        !path.startsWith('server/extensions/mcp/') &&
-        !path.startsWith('scripts/local-lab/') &&
-        path !== 'README.md' &&
-        path !== 'src/extensions/DeveloperDocs/containers/McpDocsPage/McpDocsPage.tsx' &&
-        !/^specs\/changelog\/\d{8}_\d{6}\.md$/.test(path) &&
-        path !== 'specs/tests/mcp/mcp-12-compact-lab.md' &&
-        path !== 'specs/tests/mcp/mcp-10-discussion.md'
-    )
-  )
-    throw new Error(
-      'Pin only supports committed MCP/lab changes with unchanged application/schema/dependencies; choose a separate baseline'
-    );
-  database(true);
-  identity.revision = revision;
-  identity.docker_host = dockerHost;
-  identity.docker_id = daemonId;
-  delete identity.allow_mcp_dev;
-  writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
-  console.info('Pinned the unchanged-schema source and verified local Docker daemon');
-} else if (command === 'start') {
-  const found = resources();
-  const migration = found.container.find((container) => container.Name === `/${project}-migrate-1`);
-  if (migration?.Running)
-    throw new Error('Owned migration is already running; stop it before start');
-  if (!found.container.some((container) => container.Running))
-    for (const port of [33000, 35432, 36379, 34566])
-      await new Promise((accept, reject) => {
-        const server = net.createServer();
-        server.once('error', reject);
-        server.listen(port, '127.0.0.1', () => server.close(accept));
-      });
-  compose('up', '-d', '--wait', 'postgres', 'redis', 'localstack');
-  resources(true, true);
-  const present = sql("SELECT to_regclass('public.local_lab_identity') IS NOT NULL");
-  if (present === 'f') {
-    if (sql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'") !== '0')
-      throw new Error('Refusing to claim a populated unmarked database');
-    sql(
-      `CREATE TABLE local_lab_identity(marker text PRIMARY KEY); INSERT INTO local_lab_identity VALUES('${identity.marker}')`
-    );
+let release;
+try {
+  if (['reset', 'start', 'restart-app', 'stop', 'pin', 'seed', 'prepare'].includes(command)) {
+    release = await acquireLease(state, leaseBinding);
+    assertJournal();
+    pending = present(resetName)
+      ? validateCheckpoint(privateJson(resetName), resetBinding)
+      : undefined;
   }
-  database();
-  if (migration) containerAction('rm', migration);
-  compose(
-    'run',
-    '--name',
-    `${project}-migrate-1`,
-    '--rm',
-    '--no-deps',
-    'app',
-    'bun',
-    'run',
-    'db:migrate'
-  );
-  refreshApp();
-  console.info('Local API started on http://127.0.0.1:33000');
-} else if (command === 'seed') {
-  database();
-  run('bun', ['scripts/local-lab/seed.ts'], {
-    env: {
-      ...cleanEnv,
-      DATABASE_URL: `postgresql://chimedeck_lab:${runtime.LAB_DB_PASSWORD}@127.0.0.1:35432/chimedeck_lab`,
-      LAB_MARKER: identity.marker,
-      LAB_STATE: state,
-    },
-  });
-  console.info('Synthetic fixtures seeded; credentials remain private');
-} else if (command === 'reset') {
-  database(true);
-  const found = resources(true);
-  for (const container of stopOrder(found))
-    if (container.Running) containerAction('stop', container);
-  for (const container of found.container) containerAction('rm', container);
-  for (const network of found.network) docker(['network', 'rm', network.Name]);
-  for (const volume of found.volume) docker(['volume', 'rm', volume.Name]);
-  for (const name of [
-    'credentials.json',
-    'smoke-result.json',
-    'browser-result.json',
-    'smoke-attachment.txt',
-    'browser-smoke.png',
-    'app-start.json',
-  ]) {
-    const file = resolve(state, name);
-    if (existsSync(file)) unlinkSync(file);
-  }
-  console.info('Removed only verified owned lab resources and generated credentials');
-} else if (command === 'stop') {
-  const found = resources(true);
-  for (const container of stopOrder(found))
-    if (container.Running) containerAction('stop', container);
-  console.info('Stopped owned lab containers; resources retained for guarded reset/restart');
-} else if (command === 'status') {
-  const found = resources(true);
-  if (
-    found.container.some(
-      (container) => container.Name === `/${project}-postgres-1` && container.Running
+  if (command === 'prepare') {
+    resources();
+    run('bun', ['install', '--frozen-lockfile']);
+    guardSource(checkout, run, allowMcp);
+    identity.dependency_digest = dependencyDigest(checkout);
+    writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
+    console.info('Prepared frozen dependencies for the selected source');
+  } else if (command === 'pin') {
+    const changed = run('git', ['diff', '--no-renames', '--name-only', identity.revision, revision])
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    if (
+      changed.some(
+        (path) =>
+          !path.startsWith('server/extensions/mcp/') &&
+          !path.startsWith('scripts/local-lab/') &&
+          path !== 'README.md' &&
+          path !== 'src/extensions/DeveloperDocs/containers/McpDocsPage/McpDocsPage.tsx' &&
+          !/^specs\/changelog\/\d{8}_\d{6}\.md$/.test(path) &&
+          path !== 'specs/tests/mcp/mcp-12-compact-lab.md' &&
+          path !== 'specs/tests/mcp/mcp-10-discussion.md'
+      )
     )
-  )
+      throw new Error(
+        'Pin only supports committed MCP/lab changes with unchanged application/schema/dependencies; choose a separate baseline'
+      );
+    database(true);
+    identity.revision = revision;
+    identity.docker_host = dockerHost;
+    identity.docker_id = daemonId;
+    delete identity.allow_mcp_dev;
+    writeFileSync(resolve(state, 'identity.json'), JSON.stringify(identity), { mode: 0o600 });
+    console.info('Pinned the unchanged-schema source and verified local Docker daemon');
+  } else if (command === 'start') {
+    const found = resources();
+    const migration = found.container.find(
+      (container) => container.Name === `/${project}-migrate-1`
+    );
+    if (migration?.Running)
+      throw new Error('Owned migration is already running; stop it before start');
+    if (!found.container.some((container) => container.Running))
+      for (const port of [33000, 35432, 36379, 34566])
+        await new Promise((accept, reject) => {
+          const server = net.createServer();
+          server.once('error', reject);
+          server.listen(port, '127.0.0.1', () => server.close(accept));
+        });
+    compose('up', '-d', '--wait', 'postgres', 'redis', 'localstack');
+    resources(true, true);
+    const present = sql("SELECT to_regclass('public.local_lab_identity') IS NOT NULL");
+    if (present === 'f') {
+      if (sql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'") !== '0')
+        throw new Error('Refusing to claim a populated unmarked database');
+      sql(
+        `CREATE TABLE local_lab_identity(marker text PRIMARY KEY); INSERT INTO local_lab_identity VALUES('${identity.marker}')`
+      );
+    }
     database();
-  else
-    console.info(
-      'Owned stopped resources validated; database marker is unverified while Postgres is stopped'
+    if (migration) containerAction('rm', migration);
+    compose(
+      'run',
+      '--name',
+      `${project}-migrate-1`,
+      '--rm',
+      '--no-deps',
+      'app',
+      'bun',
+      'run',
+      'db:migrate'
     );
-  if (existsSync(resolve(state, 'app-start.json'))) {
-    const loaded = privateJson('app-start.json');
-    console.info(
-      `Loaded app revision=${String(loaded.revision)} development=${String(loaded.development)} container=${String(loaded.container_id)}`
-    );
-  } else console.info('Loaded app provenance missing; clean restart-app required before proof');
-  console.info(
-    docker([
-      'ps',
-      '-a',
-      '--filter',
-      `label=com.docker.compose.project=${project}`,
-      '--format',
-      '{{.Names}} {{.Status}} {{.Ports}}',
-    ])
-  );
-} else if (command === 'restart-app') {
-  database();
-  refreshApp();
-  console.info('Restarted the API on the explicitly pinned revision');
-} else if (command === 'test') {
-  proofApp();
-  console.info(
-    run('bun', ['scripts/local-lab/smoke.ts'], { env: { ...cleanEnv, LAB_STATE: state } })
-  );
-} else if (command === 'guards') {
-  proofApp();
-  console.info(run('node', ['scripts/local-lab/guards.mjs', state, revision]));
-} else if (command === 'browser') {
-  proofApp();
-  const executable = process.argv[5];
-  if (!executable || !existsSync(executable))
-    throw new Error('Explicit existing browser executable required');
-  console.info(run('node', ['scripts/local-lab/browser.mjs', state, executable]));
-} else if (command === 'frontend') {
-  database();
-  for (const key of Object.keys(process.env)) if (!(key in cleanEnv)) delete process.env[key];
-  const { createServer } = await import(resolve(checkout, 'node_modules/vite/dist/node/index.js'));
-  const server = await createServer({
-    root: checkout,
-    server: {
-      host: '127.0.0.1',
-      port: 35173,
-      strictPort: true,
-      proxy: {
-        '/api': { target: 'http://127.0.0.1:33000', ws: true, changeOrigin: true },
-        '/trello': { target: 'http://127.0.0.1:33000', changeOrigin: true },
+    refreshApp();
+    console.info('Local API started on http://127.0.0.1:33000');
+  } else if (command === 'seed') {
+    database();
+    run('bun', ['scripts/local-lab/seed.ts'], {
+      env: {
+        ...cleanEnv,
+        DATABASE_URL: `postgresql://chimedeck_lab:${runtime.LAB_DB_PASSWORD}@127.0.0.1:35432/chimedeck_lab`,
+        LAB_MARKER: identity.marker,
+        LAB_STATE: state,
       },
-    },
-  });
-  await server.listen();
-  console.info('Local frontend on http://127.0.0.1:35173');
-} else throw new Error('Unknown lab command');
+    });
+    console.info('Synthetic fixtures seeded; credentials remain private');
+  } else if (command === 'reset') {
+    if (!pending) {
+      const markerVerified = database(true);
+      pending = checkpointFor(resetBinding, markerVerified);
+      validateSubset(pending, resources(true));
+      atomicPrivateJson(state, resetName, pending, true);
+    }
+    for (const container of stopOrder(resetResources())) {
+      const current = resetResources().container.find((entry) => entry.Id === container.Id);
+      if (current?.Running) containerAction('stop', current);
+    }
+    for (const saved of pending.containers) {
+      const current = resetResources().container.find((entry) => entry.Id === saved.Id);
+      if (current) containerAction('rm', current);
+    }
+    for (const saved of pending.networks) {
+      const current = resetResources().network.find((entry) => entry.Id === saved.Id);
+      if (current) containerAction('network', current);
+    }
+    for (const saved of pending.volumes) {
+      const current = resetResources().volume.find((entry) => entry.Name === saved.Name);
+      if (current) docker(['volume', 'rm', current.Name]);
+    }
+    resetResources();
+    for (const name of generatedFiles) {
+      const file = resolve(state, name);
+      try {
+        unlinkSync(file);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    const remaining = resetResources();
+    if (remaining.container.length || remaining.volume.length || remaining.network.length)
+      throw new Error('Reset resources remain; checkpoint retained');
+    unlinkSync(resolve(state, resetName));
+    console.info('Removed only verified owned lab resources and generated credentials');
+  } else if (command === 'stop') {
+    const found = pending ? resetResources() : resources(true);
+    for (const container of stopOrder(found))
+      if (container.Running) {
+        if (pending) resetResources();
+        containerAction('stop', container);
+      }
+    console.info('Stopped owned lab containers; resources retained for guarded reset/restart');
+  } else if (command === 'status') {
+    const found = pending ? resetResources() : resources(true);
+    if (
+      found.container.some(
+        (container) => container.Name === `/${project}-postgres-1` && container.Running
+      )
+    ) {
+      if (!pending) database();
+    } else
+      console.info(
+        'Owned stopped resources validated; database marker is unverified while Postgres is stopped'
+      );
+    if (pending) console.info('Pending reset validated; only stop/status/reset are permitted');
+    if (present('app-start.json')) {
+      const loaded = privateJson('app-start.json');
+      console.info(
+        `Loaded app revision=${String(loaded.revision)} development=${String(loaded.development)} container=${String(loaded.container_id)}`
+      );
+    } else console.info('Loaded app provenance missing; clean restart-app required before proof');
+    console.info(
+      docker([
+        'ps',
+        '-a',
+        '--filter',
+        `label=com.docker.compose.project=${project}`,
+        '--format',
+        '{{.Names}} {{.Status}} {{.Ports}}',
+      ])
+    );
+  } else if (command === 'restart-app') {
+    database();
+    refreshApp();
+    console.info('Restarted the API on the explicitly pinned revision');
+  } else if (command === 'test') {
+    await proofApp();
+    console.info(
+      run('bun', ['scripts/local-lab/smoke.ts'], { env: { ...cleanEnv, LAB_STATE: state } })
+    );
+  } else if (command === 'guards') {
+    await proofApp();
+    console.info(run('node', ['scripts/local-lab/guards.mjs', state, revision]));
+  } else if (command === 'browser') {
+    await proofApp();
+    const executable = process.argv[5];
+    if (!executable || !existsSync(executable))
+      throw new Error('Explicit existing browser executable required');
+    console.info(run('node', ['scripts/local-lab/browser.mjs', state, executable]));
+  } else if (command === 'frontend') {
+    database();
+    for (const key of Object.keys(process.env)) if (!(key in cleanEnv)) delete process.env[key];
+    const { createServer } = await import(
+      resolve(checkout, 'node_modules/vite/dist/node/index.js')
+    );
+    const server = await createServer({
+      root: checkout,
+      server: {
+        host: '127.0.0.1',
+        port: 35173,
+        strictPort: true,
+        proxy: {
+          '/api': { target: 'http://127.0.0.1:33000', ws: true, changeOrigin: true },
+          '/trello': { target: 'http://127.0.0.1:33000', changeOrigin: true },
+        },
+      },
+    });
+    await server.listen();
+    console.info('Local frontend on http://127.0.0.1:35173');
+  } else throw new Error('Unknown lab command');
+} finally {
+  if (release) await release();
+}

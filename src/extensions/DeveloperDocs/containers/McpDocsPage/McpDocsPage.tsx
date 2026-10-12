@@ -1373,6 +1373,13 @@ curl -X POST http://localhost:3000/api/mcp \\
           <Section id="tool-create-board">
             <H3>create_board</H3>
             <P>
+              Blank backgrounds expect null; a proxy for a blank request is a mismatch. Ordinary
+              URLs/strings compare after trimming. For a nonempty requested background, an exact
+              current-board background proxy is a lossy view: background stays unverified while
+              other fields are verified and the acknowledged ID is retained. No raw remote S3-key
+              verification is claimed.
+            </P>
+            <P>
               Returns an acknowledged creation receipt. A valid new ID survives later verification
               failure without invented observations; malformed acknowledgements, timeouts and 5xx
               have unknown request outcomes. Check verified and errors; never automatically retry.
@@ -1436,6 +1443,10 @@ curl -X POST http://localhost:3000/api/mcp \\
           {/* create_list */}
           <Section id="tool-create-list">
             <H3>create_list</H3>
+            <P>
+              Short board aliases resolve through an authenticated canonical lookup before POST;
+              lookup failure sends no POST, and later failures preserve an acknowledged list ID.
+            </P>
             <P>
               Returns an acknowledged creation receipt. A valid new ID survives later verification
               failure without invented observations; malformed acknowledgements, timeouts and 5xx
@@ -2709,7 +2720,8 @@ curl -X POST http://localhost:3000/api/mcp \\
               atomically replaces the destination after success. It returns metadata without binary
               content. Hosted HTTP accepts no writable path. Local stdio deliberately permits atomic
               overwrite of the chosen destination; replacement files have private mode0600 and
-              destructiveHint:true.
+              destructiveHint:true. Parent directories may remain after failure; only the owned
+              temporary file is rolled back.
             </P>
             <Table
               headers={['Parameter', 'Type', 'Required', 'Description']}

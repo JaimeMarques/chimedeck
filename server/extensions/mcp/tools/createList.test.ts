@@ -44,7 +44,13 @@ describe('registerCreateList', () => {
         data: {
           data:
             method === 'GET'
-              ? [{ id: 'list-1', board_id: 'board-1', title: 'Backlog' }]
+              ? [
+                  {
+                    id: 'list-1',
+                    board_id: '11111111-1111-4111-8111-111111111111',
+                    title: 'Backlog',
+                  },
+                ]
               : { id: 'list-1' },
         },
       })
@@ -56,12 +62,15 @@ describe('registerCreateList', () => {
     expect(toolDescription).toContain('list');
     expect(handler).toBeDefined();
 
-    const result = await registered()({ boardId: 'board-1', title: 'Backlog' });
+    const result = await registered()({
+      boardId: '11111111-1111-4111-8111-111111111111',
+      title: 'Backlog',
+    });
 
     expect(apiCallMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: 'POST',
-        path: '/api/v1/boards/board-1/lists',
+        path: '/api/v1/boards/11111111-1111-4111-8111-111111111111/lists',
         body: { title: 'Backlog', afterId: undefined },
         token: 'token-1',
       })
@@ -75,7 +84,11 @@ describe('registerCreateList', () => {
             observed: {},
             verified: true,
             verified_fields: ['board_id', 'title'],
-            list: { id: 'list-1', board_id: 'board-1', title: 'Backlog' },
+            list: {
+              id: 'list-1',
+              board_id: '11111111-1111-4111-8111-111111111111',
+              title: 'Backlog',
+            },
             request_outcome: 'succeeded',
           }),
         },
@@ -87,7 +100,10 @@ describe('registerCreateList', () => {
     apiCallMock.mockResolvedValue({ error: { name: 'forbidden' } });
     registerCreateList(server as never, 'token-1');
 
-    const result = await registered()({ boardId: 'board-1', title: 'Backlog' });
+    const result = await registered()({
+      boardId: '11111111-1111-4111-8111-111111111111',
+      title: 'Backlog',
+    });
 
     expect(result).toEqual({
       content: [{ type: 'text', text: 'Error: forbidden' }],

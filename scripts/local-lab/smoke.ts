@@ -126,10 +126,17 @@ try {
     workspaceId: credentials.workspaceId,
     title: 'Synthetic board roundtrip',
     description: 'Board العربية',
+    background: '   ',
   });
   assert.equal(board.verified, true);
   createdBoard = z.string().parse(board.id);
-  const list = await call(admin, 'create_list', { boardId: createdBoard, title: 'Synthetic list' });
+  const selected = z
+    .object({ short_id: z.string().length(8), background: z.null() })
+    .parse(board.board);
+  const list = await call(admin, 'create_list', {
+    boardId: selected.short_id,
+    title: 'Synthetic list',
+  });
   assert.equal(list.verified, true);
   const membership = await call(admin, 'invite_to_board', {
     boardId: createdBoard,

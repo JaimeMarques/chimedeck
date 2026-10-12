@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import { dependencyDigest } from './labGuards.mjs';
+import { checkpointFor } from './resetCheckpoint.mjs';
+import { acquireLease } from './labLease.mjs';
 
 const source = dirname(fileURLToPath(import.meta.url));
 const revision = 'a'.repeat(40);
@@ -69,11 +71,13 @@ function ownedObjects(checkout, options) {
       Name: `${project}_${name}`,
       Labels: labels,
       Driver: 'local',
+      CreatedAt: '2026-10-12T00:00:00Z',
       Options: {},
     })),
     network: [
       {
         Name: network,
+        Id: '7'.repeat(64),
         Labels: labels,
         Driver: 'bridge',
         Scope: 'local',
@@ -105,7 +109,7 @@ async function fixture(options) {
     resolve(home, '.docker'),
   ])
     await mkdir(path, { recursive: true, mode: 0o700 });
-  for (const name of ['control.mjs', 'labGuards.mjs'])
+  for (const name of ['control.mjs', 'labGuards.mjs', 'resetCheckpoint.mjs', 'labLease.mjs'])
     await cp(resolve(source, name), resolve(checkout, 'scripts/local-lab', name));
   await writeFile(resolve(checkout, 'package.json'), '{}');
   await writeFile(resolve(checkout, 'bun.lock'), 'synthetic-lock');
@@ -117,13 +121,18 @@ async function fixture(options) {
     rename: options.rename,
     objects: options.owned ? ownedObjects(checkout, options) : undefined,
     disappearMigration: options.disappearMigration,
+    checkout,
+    startupDrift: options.startupDrift,
+    foreignConsumer: options.foreignConsumer,
+    interrupt: options.interrupt,
+    daemon: options.daemon,
     log: resolve(directory, 'docker-calls.jsonl'),
   };
   await writeFile(resolve(bin, 'fixture.json'), JSON.stringify(config));
   const common = `const fs=require('node:fs'),path=require('node:path');const config=JSON.parse(fs.readFileSync(path.join(__dirname,'fixture.json'),'utf8'));const args=process.argv.slice(2);`;
   await writeFile(
     resolve(bin, 'git'),
-    `#!${process.execPath}\n${common}\nprocess.stdout.write(args[0]==='status'?config.status:args[0]==='diff'?(config.rename?(args.includes('--no-renames')?'db/migrations/moved.ts\\n':'')+'server/extensions/mcp/moved.ts\\n':''):config.revision+'\\n');`,
+    `#!${process.execPath}\n${common}\nprocess.stdout.write(args[0]==='status'?config.status:args[0]==='ls-files'?'server/extensions/mcp/tools/example.ts\\0':args[0]==='diff'?(config.rename?(args.includes('--no-renames')?'db/migrations/moved.ts\\n':'')+'server/extensions/mcp/moved.ts\\n':''):config.revision+'\\n');`,
     { mode: 0o700 }
   );
   await writeFile(
@@ -132,7 +141,7 @@ async function fixture(options) {
 fs.appendFileSync(config.log,JSON.stringify(args)+'\\n');
 if(args[0]!=='--host'||!args[1].startsWith('unix:///'))process.exit(80);
 const a=args.slice(2),save=()=>fs.writeFileSync(path.join(__dirname,'fixture.json'),JSON.stringify(config));
-if(a[0]==='info'){process.stdout.write('fixture-daemon\\n');process.exit(0);}
+if(a[0]==='info'){process.stdout.write((config.daemon??'fixture-daemon')+'\\n');process.exit(0);}
 if(config.objects){
   const kind=a[0]==='ps'?'container':a[0];
   if(a.includes('inspect')){
@@ -140,18 +149,23 @@ if(config.objects){
     if(!entry){process.stderr.write('No such object: '+id);process.exit(1);}
     process.stdout.write(a.includes('{{.Id}}')?entry.Id:JSON.stringify(entry));process.exit(0);
   }
+  if(a[0]==='ps'&&a.some(x=>x.startsWith('volume='))){process.stdout.write(config.objects.container.map(x=>x.Id).concat(config.foreignConsumer?['f'.repeat(64)]:[]).join('\\n'));process.exit(0);}
   if(a[0]==='ps'||a.includes('ls')){process.stdout.write(config.objects[kind].map(x=>x.Name.replace(/^\\//,'')).join('\\n'));process.exit(0);}
   if(a[0]==='exec'){process.stdout.write(a.at(-1).includes('to_regclass')?'t':'chimedeck_lab:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');process.exit(0);}
   if(a[0]==='stop'||a[0]==='rm'){
+    if(config.interrupt==='post-pg'&&a[0]==='rm'&&a[1]==='2'.repeat(64)){config.interrupt=undefined;save();process.stderr.write('injected interruption');process.exit(81);}
     const entry=config.objects.container.find(x=>x.Id===a[1]);
     if(!entry){process.stderr.write('No such container: '+a[1]);process.exit(1);}
     if(a[0]==='rm'||(config.disappearMigration&&entry.Name.endsWith('-migrate-1')))config.objects.container=config.objects.container.filter(x=>x!==entry);
     else entry.Running=false;
     save();process.exit(0);
   }
-  if(a[0]==='compose'&&a.includes('--force-recreate')){config.objects.container.find(x=>x.Name.endsWith('-app-1')).Id='c'.repeat(64);save();process.exit(0);}
+  if(a[0]==='compose'&&a.includes('--force-recreate')){config.objects.container.find(x=>x.Name.endsWith('-app-1')).Id='c'.repeat(64);if(config.startupDrift==='head')config.revision='b'.repeat(40);if(config.startupDrift==='content')fs.writeFileSync(path.join(config.checkout,'server/extensions/mcp/tools/example.ts'),'changed');save();process.exit(0);}
   if(a[0]==='compose'&&(a.includes('up')||a.includes('run')))process.exit(0);
-  if((a[0]==='network'||a[0]==='volume')&&a[1]==='rm')process.exit(0);
+  if((a[0]==='network'||a[0]==='volume')&&a[1]==='rm'){
+    if(config.interrupt===a[0]){config.interrupt=undefined;save();process.stderr.write('injected interruption');process.exit(81);}
+    config.objects[a[0]]=config.objects[a[0]].filter(x=>x.Id!==a[2]&&x.Name!==a[2]);save();process.exit(0);
+  }
 }
 if(a.includes('inspect')){process.stdout.write(JSON.stringify({Name:config.collision,Labels:{}}));process.exit(0);}
 if(!a.includes('--filter')&&((a[0]==='volume'&&config.collision?.endsWith('_s3'))||(a[0]==='network'&&config.collision?.endsWith('_default'))||(a[0]==='ps'&&config.collision?.endsWith('-postgres-1')))){process.stdout.write(config.collision+'\\n');process.exit(0);}
@@ -159,6 +173,8 @@ if(a[0]==='ps'||a.includes('ls'))process.exit(0);
 process.stderr.write('unexpected mutation');process.exit(81);`,
     { mode: 0o700 }
   );
+  await mkdir(resolve(checkout, 'server/extensions/mcp/tools'), { recursive: true });
+  await writeFile(resolve(checkout, 'server/extensions/mcp/tools/example.ts'), 'original');
   await writeFile(
     resolve(state, 'identity.json'),
     JSON.stringify({
@@ -174,6 +190,31 @@ process.stderr.write('unexpected mutation');process.exit(81);`,
     }),
     { mode: 0o600 }
   );
+  if (options.pending) {
+    const binding = {
+      state,
+      checkout,
+      project: 'chimedeck-compact-lab',
+      marker: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      docker_host: endpoint,
+      docker_id: 'fixture-daemon',
+      revision: options.identityRevision ?? revision,
+    };
+    const checkpoint = checkpointFor(binding, ownedObjects(checkout, options));
+    if (options.mutateCheckpoint) options.mutateCheckpoint(checkpoint);
+    await writeFile(
+      resolve(state, 'reset-checkpoint.json'),
+      options.malformedCheckpoint ?? JSON.stringify(checkpoint),
+      { mode: 0o600 }
+    );
+    if (options.partial) {
+      config.objects.container = [];
+      config.objects.network = [];
+    }
+    if (options.mutateResources) options.mutateResources(config.objects);
+    await writeFile(resolve(bin, 'fixture.json'), JSON.stringify(config));
+  }
+  if (options.generatedFailure) await mkdir(resolve(state, 'credentials.json'));
   for (const name of ['node', 'bun'])
     await writeFile(
       resolve(bin, name),
@@ -431,8 +472,180 @@ test('interrupted owned migration can disappear after stop; cleanup uses snapsho
     assert.ok(stops.indexOf('5'.repeat(64)) < stops.indexOf('1'.repeat(64)));
     assert.ok(stops.indexOf('4'.repeat(64)) < stops.indexOf('1'.repeat(64)));
     assert.ok(
-      value.calls.some((args) => args.includes('inspect') && args.at(-1) === '5'.repeat(64))
+      !value.calls.some((args) => args[2] === 'rm' && args[3] === '5'.repeat(64)),
+      'An already absent authorized ID is not selected again by name'
     );
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('startup HEAD and same-status content drift refuse without a new app stamp', async () => {
+  for (const startupDrift of ['head', 'content']) {
+    const value = await fixture({
+      command: 'restart-app',
+      owned: true,
+      startupDrift,
+      ...(startupDrift === 'content'
+        ? { allowMcp: '1', status: ' M server/extensions/mcp/tools/example.ts\0' }
+        : {}),
+    });
+    try {
+      assert.notEqual(value.result.status, 0);
+      assert.ok(
+        value.result.stderr.includes(
+          startupDrift === 'head' ? 'revision changed' : 'content changed'
+        )
+      );
+      await assert.rejects(readFile(resolve(value.state, 'app-start.json')));
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('running and stopped foreign volume consumers refuse before destructive commands', async () => {
+  for (const foreignConsumer of ['running', 'stopped'])
+    await refuse({ command: 'reset', owned: true, foreignConsumer }, 'Foreign consumer');
+});
+test('reset resumes post-Postgres network volume and generated cleanup interruptions', async () => {
+  for (const interrupt of ['post-pg', 'network', 'volume', 'generated']) {
+    const value = await fixture({
+      command: 'reset',
+      owned: true,
+      ...(interrupt === 'generated' ? { generatedFailure: true } : { interrupt }),
+    });
+    try {
+      assert.notEqual(value.result.status, 0);
+      const checkpointPath = resolve(value.state, 'reset-checkpoint.json');
+      const checkpointBefore = await readFile(checkpointPath, 'utf8');
+      assert.ok(
+        !JSON.parse(
+          await readFile(resolve(value.directory, 'bin/fixture.json'), 'utf8')
+        ).objects.container.some((entry) => entry.Name.endsWith('-postgres-1'))
+      );
+      assert.equal(value.invoke('status').status, 0);
+      assert.equal(value.invoke('stop').status, 0);
+      assert.equal(await readFile(checkpointPath, 'utf8'), checkpointBefore);
+      if (interrupt === 'generated')
+        await rm(resolve(value.state, 'credentials.json'), { recursive: true });
+      const resumed = value.invoke('reset');
+      assert.equal(resumed.status, 0, resumed.stderr);
+      await assert.rejects(readFile(checkpointPath));
+      assert.equal(
+        await readFile(resolve(value.state, 'identity.json'), 'utf8'),
+        value.identityBefore
+      );
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('pending checkpoint blocks every setup/proof command without overwriting authority', async () => {
+  for (const command of [
+    'start',
+    'pin',
+    'prepare',
+    'restart-app',
+    'seed',
+    'frontend',
+    'browser',
+    'guards',
+    'test',
+  ])
+    await refuse({ command, owned: true, pending: true, partial: true }, 'Pending reset', true);
+});
+test('invalid unbound replaced altered or foreign-consumed snapshots refuse safely', async () => {
+  for (const options of [
+    { malformedCheckpoint: '{bad' },
+    {
+      mutateCheckpoint: (checkpoint) => {
+        checkpoint.version = 2;
+      },
+    },
+    {
+      mutateCheckpoint: (checkpoint) => {
+        checkpoint.binding.marker = 'changed';
+      },
+    },
+    {
+      mutateCheckpoint: (checkpoint) => {
+        checkpoint.binding.state = '/different';
+      },
+    },
+    {
+      mutateCheckpoint: (checkpoint) => {
+        checkpoint.generated.push('../outside');
+      },
+    },
+    {
+      mutateResources: (resources) => {
+        resources.container[0].Id = 'e'.repeat(64);
+      },
+    },
+    {
+      mutateResources: (resources) => {
+        resources.network[0].Id = 'e'.repeat(64);
+      },
+    },
+    {
+      mutateResources: (resources) => {
+        resources.volume[0].CreatedAt = '2026-10-13T00:00:00Z';
+      },
+    },
+    { foreignConsumer: 'stopped' },
+    { daemon: 'changed-daemon' },
+  ]) {
+    const value = await fixture({ command: 'reset', owned: true, pending: true, ...options });
+    try {
+      const checkpointBefore = await readFile(
+        resolve(value.state, 'reset-checkpoint.json'),
+        'utf8'
+      );
+      assert.notEqual(value.result.status, 0);
+      assert.ok(value.calls.every((args) => !args.some((arg) => mutations.includes(arg))));
+      assert.equal(
+        await readFile(resolve(value.state, 'reset-checkpoint.json'), 'utf8'),
+        checkpointBefore
+      );
+      assert.equal(
+        await readFile(resolve(value.state, 'identity.json'), 'utf8'),
+        value.identityBefore
+      );
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('active same-state lifecycle owner prevents another reset from resuming its journal', async () => {
+  const value = await fixture({ command: 'status', owned: true, pending: true, partial: true });
+  const binding = {
+    state: value.state,
+    checkout: value.checkout,
+    project: 'chimedeck-compact-lab',
+    marker: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    docker_host: value.endpoint,
+    docker_id: 'fixture-daemon',
+  };
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    const checkpoint = await readFile(resolve(value.state, 'reset-checkpoint.json'), 'utf8');
+    const release = await acquireLease(value.state, binding);
+    try {
+      const reset = value.invoke('reset');
+      assert.notEqual(reset.status, 0);
+      assert.ok(reset.stderr.includes('lease busy'));
+      assert.equal(
+        await readFile(resolve(value.state, 'reset-checkpoint.json'), 'utf8'),
+        checkpoint
+      );
+    } finally {
+      await release();
+    }
+    const reset = value.invoke('reset');
+    assert.equal(reset.status, 0, reset.stderr);
   } finally {
     await new Promise((accept) => value.socket.close(accept));
     await rm(value.directory, { recursive: true, force: true });

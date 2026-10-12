@@ -39,6 +39,9 @@ export function registerCreateBoard(server: McpServer, token: string): void {
             });
             return {
               row: data,
+              ...(background?.trim() && data.background === `/api/v1/boards/${data.id}/background`
+                ? { unverified: ['background'] }
+                : {}),
               selected: true,
               extra: {
                 board: fields(
@@ -59,7 +62,7 @@ export function registerCreateBoard(server: McpServer, token: string): void {
             ...(description === undefined
               ? {}
               : { description: description ? sanitizeRichText(description.trim()) : null }),
-            ...(background === undefined ? {} : { background: background.trim() }),
+            ...(background === undefined ? {} : { background: background.trim() || null }),
           }
         )
       )

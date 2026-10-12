@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { sanitizeText } from '../../../common/sanitize';
-import { apiPath, findRow, request, rowWithId, rowsOf, runTool } from './toolSupport';
+import { apiPath, dataOf, findRow, request, rowWithId, rowsOf, runTool } from './toolSupport';
 import { acknowledgedCreate, fields, type Row } from './results';
 export function registerCreateList(server: McpServer, token: string): void {
   server.registerTool(
@@ -20,19 +20,28 @@ export function registerCreateList(server: McpServer, token: string): void {
       },
     },
     ({ boardId, title, afterId }) =>
-      runTool(token, () =>
-        acknowledgedCreate(
+      runTool(token, async () => {
+        const canonical = z.uuid().safeParse(boardId).success
+          ? boardId
+          : (
+              await request({
+                path: apiPath`/api/v1/boards/${boardId}`,
+                token,
+                schema: dataOf(rowWithId.extend({ id: z.uuid() })),
+              })
+            ).data.id;
+        return acknowledgedCreate(
           () =>
             request({
               method: 'POST',
-              path: apiPath`/api/v1/boards/${boardId}/lists`,
+              path: apiPath`/api/v1/boards/${canonical}/lists`,
               body: { title, afterId },
               token,
               schema: z.unknown(),
             }),
           async (ack) => {
             const { data } = await request({
-              path: apiPath`/api/v1/boards/${boardId}/lists`,
+              path: apiPath`/api/v1/boards/${canonical}/lists`,
               token,
               schema: rowsOf(rowWithId),
             });
@@ -48,9 +57,9 @@ export function registerCreateList(server: McpServer, token: string): void {
               },
             };
           },
-          { board_id: boardId, title: sanitizeText(title.trim()) },
+          { board_id: canonical, title: sanitizeText(title.trim()) },
           afterId === undefined ? [] : ['ordering']
-        )
-      )
+        );
+      })
   );
 }

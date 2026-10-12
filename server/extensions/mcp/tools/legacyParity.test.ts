@@ -3,6 +3,89 @@ import { registerMcpTools } from '../registerTools';
 import { apiError, defineToolScenarios, html, json, TOKEN } from './toolSupport.fixture';
 
 defineToolScenarios(import.meta, registerMcpTools, {
+  'list alias lookup precedes canonical creation and preserves acknowledged later failure': async (
+    h
+  ) => {
+    const boardId = '11111111-1111-4111-8111-111111111111';
+    for (const fail of [false, true]) {
+      h.respond(({ path, method }) =>
+        path.endsWith('/labboard')
+          ? json({ data: { id: boardId } })
+          : method === 'POST'
+            ? json({ data: { id: 'known-list' } })
+            : fail
+              ? apiError(500, 'read-failed')
+              : json({ data: [{ id: 'known-list', board_id: boardId, title: 'List' }] })
+      );
+      const result = (await h.ok('create_list', { boardId: 'labboard', title: 'List' })) as Record<
+        string,
+        unknown
+      >;
+      assert.equal(result.id, 'known-list');
+      assert.equal(result.verified, !fail);
+      assert.deepEqual(
+        h.requests.map((entry) => entry.method),
+        ['GET', 'POST', 'GET']
+      );
+      assert.equal(h.requests[1]?.path, `/api/v1/boards/${boardId}/lists`);
+    }
+    for (const response of [apiError(403, 'forbidden'), json({ data: { id: 'not-canonical' } })]) {
+      h.respond(() => response);
+      assert.equal(
+        (await h.call('create_list', { boardId: 'labboard', title: 'List' })).isError,
+        true
+      );
+      assert.equal(h.requests.length, 1);
+    }
+  },
+  'board background verification distinguishes exact observable values from lossy proxy': async (
+    h
+  ) => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const proxy = `/api/v1/boards/${id}/background`;
+    for (const [input, actual, valid, lossy] of [
+      [undefined, undefined, true, false],
+      ['', null, true, false],
+      ['', proxy, false, false],
+      ['   ', proxy, false, false],
+      ['  ', null, true, false],
+      [' https://outside.test/a?b=1 ', 'https://outside.test/a?b=1', true, false],
+      [' bare-key ', 'bare-key', true, false],
+      ['#123456', '#123456', true, false],
+      ['https://remote-bucket.s3.amazonaws.com/key', proxy, true, true],
+      [proxy, proxy, true, true],
+      ['value', undefined, false, false],
+      ['value', {}, false, false],
+      ['value', 'wrong', false, false],
+    ] as const) {
+      h.respond(({ method }) =>
+        json({
+          data:
+            method === 'POST'
+              ? { id }
+              : {
+                  id,
+                  workspace_id: 'ws1',
+                  title: 'Board',
+                  visibility: 'PRIVATE',
+                  ...(actual === undefined ? {} : { background: actual }),
+                },
+        })
+      );
+      const result = (await h.ok('create_board', {
+        workspaceId: 'ws1',
+        title: 'Board',
+        ...(input === undefined ? {} : { background: input }),
+      })) as Record<string, unknown>;
+      assert.equal(result.id, id);
+      assert.equal(result.request_outcome, 'succeeded');
+      assert.equal(result.verified, valid && !lossy);
+      if (lossy) {
+        assert.deepEqual(result.unverified, ['background']);
+        assert.equal(result.verification_error, undefined);
+      } else if (!valid) assert.ok(result.verification_error);
+    }
+  },
   'board and list creation preserve IDs and selected text once after readback': async (h) => {
     h.respond(({ method }) =>
       json({
@@ -33,13 +116,16 @@ defineToolScenarios(import.meta, registerMcpTools, {
     );
     h.respond(({ method }) =>
       json({
-        data: method === 'POST' ? { id: 'l1' } : [{ id: 'l1', board_id: 'b1', title: 'List text' }],
+        data:
+          method === 'POST'
+            ? { id: 'l1' }
+            : [{ id: 'l1', board_id: '11111111-1111-4111-8111-111111111111', title: 'List text' }],
       })
     );
-    const list = (await h.ok('create_list', { boardId: 'b1', title: 'List text' })) as Record<
-      string,
-      unknown
-    >;
+    const list = (await h.ok('create_list', {
+      boardId: '11111111-1111-4111-8111-111111111111',
+      title: 'List text',
+    })) as Record<string, unknown>;
     assert.equal(list.verified, true);
     assert.equal(JSON.stringify(list).split('List text').length - 1, 1);
     assert.deepEqual(list.observed, {});
@@ -49,7 +135,7 @@ defineToolScenarios(import.meta, registerMcpTools, {
   ) => {
     for (const [name, args] of [
       ['create_board', { workspaceId: 'ws1', title: 'Board' }],
-      ['create_list', { boardId: 'b1', title: 'List' }],
+      ['create_list', { boardId: '11111111-1111-4111-8111-111111111111', title: 'List' }],
     ] as const) {
       for (const read of [
         () => apiError(403, 'forbidden'),
