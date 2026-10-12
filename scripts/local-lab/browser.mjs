@@ -37,6 +37,10 @@ try {
   await page.getByText('Complete UTF-8 description', { exact: false }).waitFor({ timeout: 15000 });
   assert.equal(errors.length, 0, 'Local browser runtime error');
   await page.screenshot({ path: resolve(state, 'browser-smoke.png'), fullPage: true });
+  await page.goto(`${credentials.frontendUrl}/developer/mcp`);
+  await page.getByRole('heading', { name: 'Compact results and verified writes' }).waitFor();
+  await page.getByRole('heading', { name: 'set_checklist_items', exact: true }).waitFor();
+  assert.equal(errors.length, 0, 'Developer MCP documentation runtime error');
   await writeFile(
     resolve(state, 'browser-result.json'),
     JSON.stringify({
@@ -44,6 +48,7 @@ try {
       login: 'real password form',
       board: 'real private board',
       card: 'full UTF-8 description',
+      docs: 'compact results and batch checklist reference',
       pageErrors: errors.length,
     }),
     { mode: 0o600 }

@@ -1,5 +1,10 @@
 # MCP 10. Read a threaded discussion
 
+> Historical acceptance for the previous full-discussion default. Superseded by
+> [MCP 12: compact results and isolated local acceptance](mcp-12-compact-lab.md).
+> The original scenario below is retained as prior-contract provenance; its
+> default completeness and reaction expectations are not current acceptance.
+
 Use an existing test card with an unthreaded comment and a parent with two
 non-deleted replies. Run against a disposable instance when provisioning data;
 production acceptance must be GET-only and must not post test comments.

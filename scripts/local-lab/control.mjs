@@ -221,7 +221,11 @@ if (command === 'prepare') {
       (path) =>
         !path.startsWith('server/extensions/mcp/') &&
         !path.startsWith('scripts/local-lab/') &&
-        path !== 'README.md'
+        path !== 'README.md' &&
+        path !== 'src/extensions/DeveloperDocs/containers/McpDocsPage/McpDocsPage.tsx' &&
+        !/^specs\/changelog\/\d{8}_\d{6}\.md$/.test(path) &&
+        path !== 'specs/tests/mcp/mcp-12-compact-lab.md' &&
+        path !== 'specs/tests/mcp/mcp-10-discussion.md'
     )
   )
     throw new Error(
