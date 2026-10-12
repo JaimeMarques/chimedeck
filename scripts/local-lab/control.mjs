@@ -222,7 +222,7 @@ if (
   typeof runtime.LAB_JWT_PUBLIC_KEY !== 'string'
 )
   throw new Error('Lab ownership/configuration mismatch');
-const env = { ...cleanEnv, ...runtime };
+const env = { ...cleanEnv, ...runtime, LAB_MARKER: identity.marker };
 const resetBinding = {
   state,
   checkout,
@@ -246,6 +246,43 @@ let pending = present(resetName)
   ? validateCheckpoint(privateJson(resetName), resetBinding)
   : undefined;
 const resetResources = () => validateSubset(pending, resources());
+const stopOwnershipName = 'stop-ownership.json';
+function stopAuthority() {
+  const found = resources(true);
+  const postgres = found.container.find((container) => container.Name === `/${project}-postgres-1`);
+  if (postgres?.Running) {
+    const authorized = checkpointFor(leaseBinding, database(false, found));
+    validateSubset(authorized, resources(true));
+    // Persist before the first stop: an interrupted stop may leave Postgres unavailable.
+    atomicPrivateJson(state, stopOwnershipName, authorized);
+    return authorized;
+  }
+  if (!present(stopOwnershipName))
+    throw new Error('Stopped Postgres requires marker-verified stop ownership; no adoption');
+  const authorized = validateCheckpoint(privateJson(stopOwnershipName), leaseBinding);
+  // App recreation and migration creation can outlive a failed controller call.
+  // Only state-labelled app resources can reconcile those interrupted IDs; the
+  // saved Postgres, network and volumes still must match their original witness.
+  for (const container of found.container) {
+    if (
+      authorized.containers.some(
+        (saved) => saved.Id === container.Id && saved.Name === container.Name
+      )
+    )
+      continue;
+    if (
+      ![`/${project}-app-1`, `/${project}-migrate-1`].includes(container.Name) ||
+      container.Labels['org.chimedeck.lab.marker'] !== identity.marker
+    )
+      throw new Error('Reset resource replaced or outside authorized snapshot');
+    authorized.containers = authorized.containers.filter((saved) => saved.Name !== container.Name);
+    authorized.containers.push({ Id: container.Id, Name: container.Name });
+  }
+  validateCheckpoint(authorized, leaseBinding);
+  validateSubset(authorized, found);
+  atomicPrivateJson(state, stopOwnershipName, authorized);
+  return authorized;
+}
 const compose = (...args) =>
   docker(['compose', '--project-name', project, '--file', composePath, ...args], { env });
 function sql(text, postgres) {
@@ -266,8 +303,7 @@ function sql(text, postgres) {
     text,
   ]).trim();
 }
-function database(allowStart = false) {
-  const found = resources(true, !cleanup);
+function database(allowStart = false, found = resources(true, !cleanup)) {
   const postgres = found.container.find((container) => container.Name === `/${project}-postgres-1`);
   if (!postgres)
     throw new Error('Owned Postgres container missing; start the clean pinned lab before reset');
@@ -318,6 +354,8 @@ function refreshApp() {
     (container) => container.Name === `/${project}-app-1`
   );
   if (!app?.Running || typeof app.Id !== 'string') throw new Error('Fresh owned app missing');
+  // Cleanup authority is separate from successful source/proof provenance.
+  stopAuthority();
   const after = sourceSnapshot(checkout, run, revision, allowMcp);
   if (after !== before) throw new Error('Source content changed across app startup boundaries');
   atomicPrivateJson(
@@ -477,6 +515,7 @@ try {
     if (docker(['info', '--format', '{{.ID}}']).trim() !== daemonId)
       throw new Error('Local daemon changed before migration');
     const migrationResources = checkpointFor(resetBinding, database());
+    stopAuthority();
     const beforeMigration = sourceSnapshot(checkout, run, revision, allowMcp);
     const migrationReceipt = {
       version: 1,
@@ -491,6 +530,8 @@ try {
       `${project}-migrate-1`,
       '--rm',
       '--no-deps',
+      '--label',
+      `org.chimedeck.lab.marker=${identity.marker}`,
       'app',
       'bun',
       'run',
@@ -564,7 +605,7 @@ try {
       beforeGenerated.network.length
     )
       throw new Error('Reset resources remain; generated receipts retained');
-    for (const name of generatedFiles) {
+    for (const name of [...generatedFiles, stopOwnershipName]) {
       const file = resolve(state, name);
       try {
         unlinkSync(file);
@@ -578,12 +619,12 @@ try {
     unlinkSync(resolve(state, resetName));
     console.info('Removed only verified owned lab resources and generated credentials');
   } else if (command === 'stop') {
-    const found = pending ? resetResources() : resources(true);
-    for (const container of stopOrder(found))
-      if (container.Running) {
-        if (pending) resetResources();
-        containerAction('stop', container);
-      }
+    const authorized = pending ?? stopAuthority();
+    const owned = () => validateSubset(authorized, resources());
+    for (const container of stopOrder(owned()).filter((entry) => entry.Running)) {
+      const current = owned().container.find((entry) => entry.Id === container.Id);
+      if (current?.Running) containerAction('stop', current);
+    }
     console.info('Stopped owned lab containers; resources retained for guarded reset/restart');
   } else if (command === 'status') {
     const found = pending ? resetResources() : resources(true);

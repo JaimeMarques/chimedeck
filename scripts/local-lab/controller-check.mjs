@@ -132,11 +132,13 @@ async function fixture(options) {
     disappearMigration: options.disappearMigration,
     checkout,
     startupDrift: options.startupDrift,
+    recreateFailure: options.recreateFailure,
     foreignConsumer: options.foreignConsumer,
     interrupt: options.interrupt,
     disappearPgOnStart: options.disappearPgOnStart,
     disappearPgOnExec: options.disappearPgOnExec,
     daemon: options.daemon,
+    databaseMarker: options.databaseMarker,
     migrationFault: options.migrationFault,
     initCrash: options.initCrash,
     migrationClearFault: options.migrationClearFault,
@@ -173,18 +175,20 @@ if(config.objects){
     const entry=config.objects.container.find(x=>x.Id===a[1]);
     if(!entry){process.stderr.write('No such container: '+a[1]);process.exit(1);}
     if(a[0]==='start'){entry.Running=true;save();process.exit(0);}
-    process.stdout.write(a.at(-1).includes('to_regclass')?'t':'chimedeck_lab:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');process.exit(0);
+    process.stdout.write(a.at(-1).includes('to_regclass')?'t':'chimedeck_lab:'+(config.databaseMarker??'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'));process.exit(0);
   }
   if(a[0]==='stop'||a[0]==='rm'){
     if(config.interrupt==='post-pg'&&a[0]==='rm'&&a[1]==='2'.repeat(64)){config.interrupt=undefined;save();process.stderr.write('injected interruption');process.exit(81);}
+    if(config.interrupt==='stop-post-pg'&&a[0]==='stop'&&a[1]==='2'.repeat(64)){config.interrupt=undefined;save();process.stderr.write('injected stop interruption');process.exit(81);}
     const entry=config.objects.container.find(x=>x.Id===a[1]);
     if(!entry){process.stderr.write('No such container: '+a[1]);process.exit(1);}
     if(a[0]==='rm'||(config.disappearMigration&&entry.Name.endsWith('-migrate-1')))config.objects.container=config.objects.container.filter(x=>x!==entry);
     else entry.Running=false;
     save();process.exit(0);
   }
-  if(a[0]==='compose'&&a.includes('--force-recreate')){config.objects.container.find(x=>x.Name.endsWith('-app-1')).Id='c'.repeat(64);if(config.startupDrift==='head')config.revision='b'.repeat(40);if(config.startupDrift==='content')fs.writeFileSync(path.join(config.checkout,'server/extensions/mcp/tools/example.ts'),'changed');save();process.exit(0);}
+  if(a[0]==='compose'&&a.includes('--force-recreate')){const app=config.objects.container.find(x=>x.Name.endsWith('-app-1'));app.Id=(config.recreateFailure?'d':'c').repeat(64);if(config.recreateFailure){app.Labels['org.chimedeck.lab.marker']=JSON.parse(fs.readFileSync(path.join(config.state,'identity.json'),'utf8')).marker;save();process.stderr.write('injected app readiness failure');process.exit(81);}if(config.startupDrift==='head')config.revision='b'.repeat(40);if(config.startupDrift==='content')fs.writeFileSync(path.join(config.checkout,'server/extensions/mcp/tools/example.ts'),'changed');save();process.exit(0);}
   if(a[0]==='compose'&&a.includes('run')){
+    if(config.migrationFault==='retained'){const app=config.objects.container.find(x=>x.Name.endsWith('-app-1'));config.objects.container.push({...app,Id:'5'.repeat(64),Name:'/chimedeck-compact-lab-migrate-1',Ports:{},RequestedPorts:{},Command:['bun','run','db:migrate'],Labels:{...app.Labels,'com.docker.compose.oneoff':'True','org.chimedeck.lab.marker':JSON.parse(fs.readFileSync(path.join(config.state,'identity.json'),'utf8')).marker}});save();process.stderr.write('injected retained migration failure');process.exit(81);}
     if(config.migrationFault==='error'){process.stderr.write('injected migration failure');process.exit(81);}
     if(config.migrationFault==='drift')config.status=' M db/migrations/changed.ts\\0';
     save();process.exit(0);
@@ -274,14 +278,20 @@ process.stderr.write('unexpected mutation');process.exit(81);`,
   const identityBefore = options.initializing
     ? undefined
     : await readFile(resolve(state, 'identity.json'), 'utf8');
-  const invoke = (command, extra = [], inject = false, recordedEndpoint = false) =>
+  const invoke = (
+    command,
+    extra = [],
+    inject = false,
+    recordedEndpoint = false,
+    targetState = state
+  ) =>
     spawnSync(
       process.execPath,
       [
         ...(inject ? ['--import', faultFile] : []),
         resolve(checkout, 'scripts/local-lab/control.mjs'),
         command,
-        state,
+        targetState,
         revision,
         ...extra,
       ],
@@ -458,6 +468,295 @@ test('explicit development proof recreates hosted source before fresh stdio clie
       await readFile(resolve(value.state, 'identity.json'), 'utf8'),
       value.identityBefore
     );
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('stop refuses same-checkout resources with another state database marker before any mutation', async () => {
+  await refuse(
+    {
+      command: 'stop',
+      owned: true,
+      databaseMarker: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    },
+    'Connected database is not the owned lab'
+  );
+});
+test('stop retains marker-bound authority for repeated cleanup without starting stopped Postgres', async () => {
+  const value = await fixture({ command: 'stop', owned: true });
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    const receipt = await readFile(resolve(value.state, 'stop-ownership.json'), 'utf8');
+    const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+    const again = value.invoke('stop');
+    assert.equal(again.status, 0, again.stderr);
+    const calls = (await readFile(value.config.log, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(before)
+      .map(JSON.parse);
+    assert.ok(calls.every((args) => !args.some((arg) => mutations.includes(arg))));
+    assert.ok(!calls.some((args) => args[2] === 'exec'));
+    assert.equal(await readFile(resolve(value.state, 'stop-ownership.json'), 'utf8'), receipt);
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('successful start records current IDs for cleanup when Postgres later stops externally', async () => {
+  const value = await fixture({ command: 'start', owned: true });
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    const configPath = resolve(value.directory, 'bin/fixture.json');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.objects.container[0].Running = false;
+    await writeFile(configPath, JSON.stringify(config));
+    const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+    const stopped = value.invoke('stop');
+    assert.equal(stopped.status, 0, stopped.stderr);
+    const calls = (await readFile(value.config.log, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(before)
+      .map(JSON.parse);
+    assert.ok(!calls.some((args) => ['start', 'exec', 'compose'].includes(args[2])));
+    assert.deepEqual(
+      calls
+        .filter((args) => args[2] === 'stop')
+        .map((args) => args[3])
+        .sort(),
+      ['2'.repeat(64), '3'.repeat(64), 'c'.repeat(64)].sort()
+    );
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('interrupted first migration preserves stop authority when Postgres becomes unavailable', async () => {
+  const value = await fixture({ command: 'start', owned: true, migrationFault: 'error' });
+  try {
+    assert.notEqual(value.result.status, 0);
+    assert.ok(value.result.stderr.includes('injected migration failure'));
+    const receipt = await readFile(resolve(value.state, 'migration-pending.json'), 'utf8');
+    const configPath = resolve(value.directory, 'bin/fixture.json');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.objects.container[0].Running = false;
+    await writeFile(configPath, JSON.stringify(config));
+    const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+    const stopped = value.invoke('stop');
+    assert.equal(stopped.status, 0, stopped.stderr);
+    const calls = (await readFile(value.config.log, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(before)
+      .map(JSON.parse);
+    assert.ok(!calls.some((args) => ['start', 'exec', 'compose'].includes(args[2])));
+    assert.equal(await readFile(resolve(value.state, 'migration-pending.json'), 'utf8'), receipt);
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('failed app provenance still records replacement IDs for stopped-Postgres cleanup', async () => {
+  const value = await fixture({ command: 'restart-app', owned: true, startupDrift: 'head' });
+  try {
+    assert.notEqual(value.result.status, 0);
+    assert.ok(value.result.stderr.includes('revision changed'));
+    await assert.rejects(readFile(resolve(value.state, 'app-start.json')));
+    const configPath = resolve(value.directory, 'bin/fixture.json');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.objects.container[0].Running = false;
+    await writeFile(configPath, JSON.stringify(config));
+    const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+    const stopped = value.invoke('stop');
+    assert.equal(stopped.status, 0, stopped.stderr);
+    const calls = (await readFile(value.config.log, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(before)
+      .map(JSON.parse);
+    assert.ok(!calls.some((args) => ['start', 'exec', 'compose'].includes(args[2])));
+    assert.ok(calls.some((args) => args[2] === 'stop' && args[3] === 'c'.repeat(64)));
+    await assert.rejects(readFile(resolve(value.state, 'app-start.json')));
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('failed app readiness and retained migration remain stoppable with Postgres unavailable', async () => {
+  for (const failure of ['app', 'migration']) {
+    const value = await fixture({ command: 'start', owned: true });
+    try {
+      assert.equal(value.result.status, 0, value.result.stderr);
+      const configPath = resolve(value.directory, 'bin/fixture.json');
+      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      if (failure === 'app') config.recreateFailure = true;
+      else config.migrationFault = 'retained';
+      await writeFile(configPath, JSON.stringify(config));
+      const failed = value.invoke(failure === 'app' ? 'restart-app' : 'start');
+      assert.notEqual(failed.status, 0);
+      assert.ok(
+        failed.stderr.includes(
+          failure === 'app' ? 'app readiness failure' : 'retained migration failure'
+        )
+      );
+      const after = JSON.parse(await readFile(configPath, 'utf8'));
+      after.objects.container[0].Running = false;
+      await writeFile(configPath, JSON.stringify(after));
+      const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+      const stopped = value.invoke('stop');
+      assert.equal(stopped.status, 0, stopped.stderr);
+      const calls = (await readFile(value.config.log, 'utf8'))
+        .trim()
+        .split('\n')
+        .slice(before)
+        .map(JSON.parse);
+      assert.ok(!calls.some((args) => ['start', 'exec', 'compose'].includes(args[2])));
+      assert.ok(
+        calls.some(
+          (args) => args[2] === 'stop' && args[3] === (failure === 'app' ? 'd' : '5').repeat(64)
+        )
+      );
+      if (failure === 'migration') await readFile(resolve(value.state, 'migration-pending.json'));
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('reset removes stop authority only after owned resource cleanup', async () => {
+  const value = await fixture({ command: 'stop', owned: true });
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    await readFile(resolve(value.state, 'stop-ownership.json'));
+    const reset = value.invoke('reset');
+    assert.equal(reset.status, 0, reset.stderr);
+    await assert.rejects(readFile(resolve(value.state, 'stop-ownership.json')));
+    assert.equal(
+      await readFile(resolve(value.state, 'identity.json'), 'utf8'),
+      value.identityBefore
+    );
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('independently initialized same-checkout states cannot stop each other’s resources', async () => {
+  const value = await fixture({ command: 'init', initializing: true });
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    const otherState = resolve(value.directory, 'other-state');
+    const initialized = value.invoke('init', [], false, false, otherState);
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const owner = JSON.parse(await readFile(resolve(value.state, 'identity.json'), 'utf8'));
+    const otherBefore = await readFile(resolve(otherState, 'identity.json'), 'utf8');
+    assert.notEqual(owner.marker, JSON.parse(otherBefore).marker);
+    const configPath = resolve(value.directory, 'bin/fixture.json');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.objects = ownedObjects(value.checkout, {});
+    config.databaseMarker = owner.marker;
+    await writeFile(configPath, JSON.stringify(config));
+    const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+    const foreignStop = value.invoke('stop', [], false, false, otherState);
+    assert.notEqual(foreignStop.status, 0);
+    assert.ok(foreignStop.stderr.includes('Connected database is not the owned lab'));
+    const calls = (await readFile(value.config.log, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(before)
+      .map(JSON.parse);
+    assert.ok(calls.every((args) => !args.some((arg) => mutations.includes(arg))));
+    assert.equal(await readFile(resolve(otherState, 'identity.json'), 'utf8'), otherBefore);
+    await assert.rejects(readFile(resolve(otherState, 'stop-ownership.json')));
+    const ownedStop = value.invoke('stop');
+    assert.equal(ownedStop.status, 0, ownedStop.stderr);
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('stopped Postgres without private marker-verified authority refuses without mutation', async () => {
+  await refuse(
+    { command: 'stop', owned: true, disappearPgOnStart: true },
+    'Stopped Postgres requires marker-verified stop ownership'
+  );
+});
+test('stopped cleanup rejects copied altered or replaced marker-bound authority before any stop', async () => {
+  for (const change of ['state', 'marker', 'daemon', 'postgres', 'app', 'network', 'volume']) {
+    const value = await fixture({ command: 'stop', owned: true });
+    try {
+      assert.equal(value.result.status, 0, value.result.stderr);
+      const receiptPath = resolve(value.state, 'stop-ownership.json');
+      const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+      const configPath = resolve(value.directory, 'bin/fixture.json');
+      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      config.objects.container[3].Running = true;
+      if (change === 'state') receipt.binding.state = resolve(value.directory, 'other-state');
+      if (change === 'marker') receipt.binding.marker = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      if (change === 'daemon') receipt.binding.docker_id = 'other-daemon';
+      if (change === 'postgres') config.objects.container[0].Id = 'e'.repeat(64);
+      if (change === 'app') config.objects.container[3].Id = 'e'.repeat(64);
+      if (change === 'network') config.objects.network[0].Id = 'e'.repeat(64);
+      if (change === 'volume') config.objects.volume[0].CreatedAt = '2026-10-13T00:00:00Z';
+      await writeFile(receiptPath, JSON.stringify(receipt), { mode: 0o600 });
+      await writeFile(configPath, JSON.stringify(config));
+      const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+      const stopped = value.invoke('stop');
+      assert.notEqual(stopped.status, 0, change);
+      assert.ok(
+        stopped.stderr.includes('unbound reset checkpoint') ||
+          stopped.stderr.includes('Reset resource') ||
+          stopped.stderr.includes('Reset volume'),
+        stopped.stderr
+      );
+      const calls = (await readFile(value.config.log, 'utf8'))
+        .trim()
+        .split('\n')
+        .slice(before)
+        .map(JSON.parse);
+      assert.ok(
+        calls.every((args) => !args.some((arg) => mutations.includes(arg))),
+        change
+      );
+      assert.ok(!calls.some((args) => args[2] === 'exec'), change);
+      assert.equal(await readFile(receiptPath, 'utf8'), JSON.stringify(receipt));
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('interrupted stop resumes by saved IDs after Postgres stops and migration disappears', async () => {
+  const value = await fixture({
+    command: 'stop',
+    owned: true,
+    migration: 'running',
+    disappearMigration: true,
+    interrupt: 'stop-post-pg',
+  });
+  try {
+    assert.notEqual(value.result.status, 0);
+    assert.ok(value.result.stderr.includes('injected stop interruption'));
+    const receiptPath = resolve(value.state, 'stop-ownership.json');
+    const receipt = await readFile(receiptPath, 'utf8');
+    const config = JSON.parse(await readFile(resolve(value.directory, 'bin/fixture.json'), 'utf8'));
+    assert.equal(config.objects.container[0].Running, false);
+    assert.ok(!config.objects.container.some((entry) => entry.Name.endsWith('-migrate-1')));
+    const before = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+    const stopped = value.invoke('stop');
+    assert.equal(stopped.status, 0, stopped.stderr);
+    const calls = (await readFile(value.config.log, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(before)
+      .map(JSON.parse);
+    assert.ok(!calls.some((args) => ['start', 'exec', 'compose'].includes(args[2])));
+    assert.deepEqual(
+      calls.filter((args) => args[2] === 'stop').map((args) => args[3]),
+      ['2'.repeat(64), '3'.repeat(64)]
+    );
+    assert.equal(await readFile(receiptPath, 'utf8'), receipt);
   } finally {
     await new Promise((accept) => value.socket.close(accept));
     await rm(value.directory, { recursive: true, force: true });
