@@ -17,6 +17,7 @@ export const generatedFiles = Object.freeze([
   'smoke-attachment.txt',
   'browser-smoke.png',
   'app-start.json',
+  'migration-pending.json',
 ]);
 const id = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);

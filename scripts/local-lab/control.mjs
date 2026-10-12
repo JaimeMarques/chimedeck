@@ -1,12 +1,13 @@
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
-  writeFileSync,
   unlinkSync,
+  openSync,
+  closeSync,
+  fsyncSync,
 } from 'node:fs';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
@@ -34,6 +35,8 @@ import { acquireLease } from './labLease.mjs';
 
 const checkout = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
 const [command, stateArg, revision] = process.argv.slice(2);
+const markerProbe = process.argv[5] === '--nonstarting-marker-check';
+if (markerProbe && command !== 'reset') throw new Error('Marker probe is only valid for reset');
 if (!stateArg || !revision || !/^[0-9a-f]{40}$/.test(revision))
   throw new Error('Usage: node scripts/local-lab/control.mjs COMMAND STATE EXACT_REVISION');
 const state = resolve(stateArg);
@@ -77,10 +80,26 @@ function present(name) {
     throw error;
   }
 }
+function validRuntime(value) {
+  return (
+    value?.LAB_CHECKOUT === checkout &&
+    Object.keys(value).length === 4 &&
+    Object.keys(value).every((key) =>
+      ['LAB_CHECKOUT', 'LAB_DB_PASSWORD', 'LAB_JWT_PRIVATE_KEY', 'LAB_JWT_PUBLIC_KEY'].includes(key)
+    ) &&
+    typeof value.LAB_DB_PASSWORD === 'string' &&
+    /^[a-f0-9]{48}$/.test(value.LAB_DB_PASSWORD) &&
+    typeof value.LAB_JWT_PRIVATE_KEY === 'string' &&
+    typeof value.LAB_JWT_PUBLIC_KEY === 'string'
+  );
+}
 const identity = command === 'init' ? undefined : privateJson('identity.json');
 const resetName = 'reset-checkpoint.json';
+const migrationName = 'migration-pending.json';
 if (present(resetName) && !cleanup)
   throw new Error('Pending reset blocks setup/proof commands; continue reset first');
+if (present(migrationName) && !cleanup)
+  throw new Error('Pending migration blocks setup/proof commands; owned reset required');
 const allowMcp = process.env.LAB_ALLOW_MCP_DEV === '1';
 if (allowMcp && !cleanup)
   console.info('MCP development allowance enabled for this invocation; source may be uncommitted');
@@ -109,41 +128,79 @@ function resources(required = false, probe = false) {
   return found;
 }
 if (command === 'init') {
-  if (existsSync(resolve(state, 'identity.json'))) throw new Error('Lab already initialized');
-  const existing = resources();
-  if (existing.container.length || existing.volume.length || existing.network.length)
-    throw new Error('Existing lab resources require their original state; no adoption');
-  run('bun', ['install', '--frozen-lockfile']);
-  guardSource(checkout, run, allowMcp);
   mkdirSync(state, { recursive: true, mode: 0o700 });
-  chmodSync(state, 0o700);
-  const keys = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
-  const record = {
-    project,
+  if (realpathSync(state) !== state || (lstatSync(state).mode & 0o077) !== 0)
+    throw new Error('Private initialization state path/mode mismatch');
+  const releaseInit = await acquireLease(state, {
+    state,
     checkout,
-    revision,
-    marker: randomUUID(),
-    database: 'chimedeck_lab',
+    project,
+    marker: 'initialization',
     docker_host: dockerHost,
     docker_id: daemonId,
-    dependency_digest: dependencyDigest(checkout),
-  };
-  const runtime = {
-    LAB_CHECKOUT: checkout,
-    LAB_DB_PASSWORD: randomBytes(24).toString('hex'),
-    LAB_JWT_PRIVATE_KEY: Buffer.from(keys.privateKey).toString('base64'),
-    LAB_JWT_PUBLIC_KEY: Buffer.from(keys.publicKey).toString('base64'),
-  };
-  for (const [name, data] of [
-    ['identity.json', record],
-    ['environment.json', runtime],
-  ])
-    writeFileSync(resolve(state, name), JSON.stringify(data), { mode: 0o600, flag: 'wx' });
-  console.info('Initialized private lab state on an explicit local Docker endpoint');
+  });
+  try {
+    if (present(resetName) || present('migration-pending.json'))
+      throw new Error('Pending authority blocks initialization');
+    if (present('identity.json')) {
+      const previous = privateJson('identity.json');
+      const environment = privateJson('environment.json');
+      if (
+        previous.project !== project ||
+        previous.checkout !== checkout ||
+        previous.database !== 'chimedeck_lab' ||
+        previous.docker_host !== dockerHost ||
+        previous.docker_id !== daemonId ||
+        !/^[a-f0-9-]{36}$/.test(previous.marker) ||
+        !/^[a-f0-9]{40}$/.test(previous.revision) ||
+        !validRuntime(environment)
+      )
+        throw new Error('Invalid existing initialization pair; no replacement');
+      resources();
+      console.info('Already initialized; valid private pair retained');
+    } else {
+      const existing = resources();
+      if (existing.container.length || existing.volume.length || existing.network.length)
+        throw new Error('Existing lab resources require their original state; no adoption');
+      if (present('environment.json')) {
+        if ((lstatSync(resolve(state, 'environment.json')).mode & 0o777) !== 0o600)
+          throw new Error('Unknown orphan environment mode; recovery refused');
+        if (!validRuntime(privateJson('environment.json')))
+          throw new Error('Unknown orphan environment; recovery refused');
+        if (present('identity.json'))
+          throw new Error('Initialization ownership appeared; recovery refused');
+        unlinkSync(resolve(state, 'environment.json'));
+      }
+      run('bun', ['install', '--frozen-lockfile']);
+      guardSource(checkout, run, allowMcp);
+      const keys = generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+      });
+      const environment = {
+        LAB_CHECKOUT: checkout,
+        LAB_DB_PASSWORD: randomBytes(24).toString('hex'),
+        LAB_JWT_PRIVATE_KEY: Buffer.from(keys.privateKey).toString('base64'),
+        LAB_JWT_PUBLIC_KEY: Buffer.from(keys.publicKey).toString('base64'),
+      };
+      const owner = {
+        project,
+        checkout,
+        revision,
+        marker: randomUUID(),
+        database: 'chimedeck_lab',
+        docker_host: dockerHost,
+        docker_id: daemonId,
+        dependency_digest: dependencyDigest(checkout),
+      };
+      atomicPrivateJson(state, 'environment.json', environment, true);
+      atomicPrivateJson(state, 'identity.json', owner, true);
+      console.info('Initialized private lab state on an explicit local Docker endpoint');
+    }
+  } finally {
+    await releaseInit();
+  }
   process.exit(0);
 }
 const runtime = privateJson('environment.json');
@@ -176,11 +233,13 @@ const resetBinding = {
 };
 const { revision: bindingRevision, ...leaseBinding } = resetBinding;
 void bindingRevision;
-const assertJournal = () => {
+const assertJournal = (duringMigration = false) => {
   if (JSON.stringify(privateJson('identity.json')) !== JSON.stringify(identity))
     throw new Error('Lab identity changed across lifecycle lease boundary');
   if (present(resetName) && !cleanup)
     throw new Error('Pending reset blocks setup/proof commands; continue reset first');
+  if (present(migrationName) && !cleanup && !duringMigration)
+    throw new Error('Pending migration blocks setup/proof commands; owned reset required');
 };
 let pending = present(resetName)
   ? validateCheckpoint(privateJson(resetName), resetBinding)
@@ -272,15 +331,20 @@ function refreshApp() {
     true
   );
 }
-async function proofApp() {
+async function proofApp(leaseHeld = false) {
   const found = database();
   if (allowMcp) {
-    const release = await acquireLease(state, leaseBinding);
-    try {
+    if (leaseHeld) {
       assertJournal();
       refreshApp();
-    } finally {
-      await release();
+    } else {
+      const release = await acquireLease(state, leaseBinding);
+      try {
+        assertJournal();
+        refreshApp();
+      } finally {
+        await release();
+      }
     }
     return;
   }
@@ -327,7 +391,9 @@ if (
   throw new Error('Dependencies not prepared for this source; run prepare');
 let release;
 try {
-  if (['reset', 'start', 'restart-app', 'stop', 'pin', 'seed', 'prepare'].includes(command)) {
+  if (
+    ['reset', 'start', 'restart-app', 'stop', 'pin', 'seed', 'prepare', 'guards'].includes(command)
+  ) {
     release = await acquireLease(state, leaseBinding);
     assertJournal();
     pending = present(resetName)
@@ -387,8 +453,11 @@ try {
     const postgres = infrastructure.container.find(
       (container) => container.Name === `/${project}-postgres-1`
     );
-    const present = sql("SELECT to_regclass('public.local_lab_identity') IS NOT NULL", postgres);
-    if (present === 'f') {
+    const markerPresent = sql(
+      "SELECT to_regclass('public.local_lab_identity') IS NOT NULL",
+      postgres
+    );
+    if (markerPresent === 'f') {
       if (
         sql(
           "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
@@ -403,6 +472,18 @@ try {
     }
     database();
     if (migration) containerAction('rm', migration);
+    assertJournal();
+    if (docker(['info', '--format', '{{.ID}}']).trim() !== daemonId)
+      throw new Error('Local daemon changed before migration');
+    const migrationResources = checkpointFor(resetBinding, database());
+    const beforeMigration = sourceSnapshot(checkout, run, revision, allowMcp);
+    const migrationReceipt = {
+      version: 1,
+      binding: resetBinding,
+      pre_source: beforeMigration,
+      resources: migrationResources,
+    };
+    atomicPrivateJson(state, migrationName, migrationReceipt, true);
     compose(
       'run',
       '--name',
@@ -414,6 +495,27 @@ try {
       'run',
       'db:migrate'
     );
+    const afterMigration = sourceSnapshot(checkout, run, revision, allowMcp);
+    if (afterMigration !== beforeMigration)
+      throw new Error('Source changed across migration boundaries; owned reset required');
+    assertJournal(true);
+    if (docker(['info', '--format', '{{.ID}}']).trim() !== daemonId)
+      throw new Error('Local daemon changed after migration');
+    validateSubset(migrationResources, database());
+    if (JSON.stringify(privateJson(migrationName)) !== JSON.stringify(migrationReceipt))
+      throw new Error('Migration receipt changed; owned reset required');
+    try {
+      unlinkSync(resolve(state, migrationName));
+      const directory = openSync(state, 'r');
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    } catch (error) {
+      if (!present(migrationName)) atomicPrivateJson(state, migrationName, migrationReceipt, true);
+      throw error;
+    }
     refreshApp();
     console.info('Local API started on http://127.0.0.1:33000');
   } else if (command === 'seed') {
@@ -428,6 +530,10 @@ try {
     });
     console.info('Synthetic fixtures seeded; credentials remain private');
   } else if (command === 'reset') {
+    if (markerProbe) {
+      database(false);
+      throw new Error('Nonstarting marker probe never authorizes reset mutation');
+    }
     if (!pending) {
       const markerVerified = database(true);
       pending = checkpointFor(resetBinding, markerVerified);
@@ -450,7 +556,13 @@ try {
       const current = resetResources().volume.find((entry) => entry.Name === saved.Name);
       if (current) docker(['volume', 'rm', current.Name]);
     }
-    resetResources();
+    const beforeGenerated = resetResources();
+    if (
+      beforeGenerated.container.length ||
+      beforeGenerated.volume.length ||
+      beforeGenerated.network.length
+    )
+      throw new Error('Reset resources remain; generated receipts retained');
     for (const name of generatedFiles) {
       const file = resolve(state, name);
       try {
@@ -485,6 +597,8 @@ try {
         'Owned stopped resources validated; database marker is unverified while Postgres is stopped'
       );
     if (pending) console.info('Pending reset validated; only stop/status/reset are permitted');
+    if (present(migrationName))
+      console.info('Pending migration: schema is uncertified; owned reset required');
     if (present('app-start.json')) {
       const loaded = privateJson('app-start.json');
       console.info(
@@ -511,8 +625,28 @@ try {
       run('bun', ['scripts/local-lab/smoke.ts'], { env: { ...cleanEnv, LAB_STATE: state } })
     );
   } else if (command === 'guards') {
-    await proofApp();
-    console.info(run('node', ['scripts/local-lab/guards.mjs', state, revision]));
+    await proofApp(true);
+    assertJournal();
+    if (docker(['info', '--format', '{{.ID}}']).trim() !== daemonId)
+      throw new Error('Local daemon changed before guards');
+    const guarded = database();
+    const postgres = guarded.container.find(
+      (container) => container.Name === `/${project}-postgres-1`
+    );
+    console.info(
+      run('node', [
+        'scripts/local-lab/guards.mjs',
+        state,
+        revision,
+        dockerHost,
+        daemonId,
+        postgres.Id,
+      ])
+    );
+    assertJournal();
+    if (docker(['info', '--format', '{{.ID}}']).trim() !== daemonId)
+      throw new Error('Local daemon changed after guards');
+    validateSubset(checkpointFor(resetBinding, guarded), database());
   } else if (command === 'browser') {
     await proofApp();
     const executable = process.argv[5];

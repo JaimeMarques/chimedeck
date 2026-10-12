@@ -112,7 +112,13 @@ async function fixture(options) {
     resolve(home, '.docker'),
   ])
     await mkdir(path, { recursive: true, mode: 0o700 });
-  for (const name of ['control.mjs', 'labGuards.mjs', 'resetCheckpoint.mjs', 'labLease.mjs'])
+  for (const name of [
+    'control.mjs',
+    'labGuards.mjs',
+    'resetCheckpoint.mjs',
+    'labLease.mjs',
+    'guards.mjs',
+  ])
     await cp(resolve(source, name), resolve(checkout, 'scripts/local-lab', name));
   await writeFile(resolve(checkout, 'package.json'), '{}');
   await writeFile(resolve(checkout, 'bun.lock'), 'synthetic-lock');
@@ -131,6 +137,12 @@ async function fixture(options) {
     disappearPgOnStart: options.disappearPgOnStart,
     disappearPgOnExec: options.disappearPgOnExec,
     daemon: options.daemon,
+    migrationFault: options.migrationFault,
+    initCrash: options.initCrash,
+    migrationClearFault: options.migrationClearFault,
+    migrationGateOnLease: options.migrationGateOnLease,
+    guardReentry: options.guardReentry,
+    state,
     log: resolve(directory, 'docker-calls.jsonl'),
   };
   await writeFile(resolve(bin, 'fixture.json'), JSON.stringify(config));
@@ -172,7 +184,12 @@ if(config.objects){
     save();process.exit(0);
   }
   if(a[0]==='compose'&&a.includes('--force-recreate')){config.objects.container.find(x=>x.Name.endsWith('-app-1')).Id='c'.repeat(64);if(config.startupDrift==='head')config.revision='b'.repeat(40);if(config.startupDrift==='content')fs.writeFileSync(path.join(config.checkout,'server/extensions/mcp/tools/example.ts'),'changed');save();process.exit(0);}
-  if(a[0]==='compose'&&(a.includes('up')||a.includes('run')))process.exit(0);
+  if(a[0]==='compose'&&a.includes('run')){
+    if(config.migrationFault==='error'){process.stderr.write('injected migration failure');process.exit(81);}
+    if(config.migrationFault==='drift')config.status=' M db/migrations/changed.ts\\0';
+    save();process.exit(0);
+  }
+  if(a[0]==='compose'&&a.includes('up')){if(config.migrationFault==='before')config.status=' M db/migrations/changed.ts\\0';save();process.exit(0);}
   if((a[0]==='network'||a[0]==='volume')&&a[1]==='rm'){
     if(config.interrupt===a[0]){config.interrupt=undefined;save();process.stderr.write('injected interruption');process.exit(81);}
     config.objects[a[0]]=config.objects[a[0]].filter(x=>x.Id!==a[2]&&x.Name!==a[2]);save();process.exit(0);
@@ -186,21 +203,22 @@ process.stderr.write('unexpected mutation');process.exit(81);`,
   );
   await mkdir(resolve(checkout, 'server/extensions/mcp/tools'), { recursive: true });
   await writeFile(resolve(checkout, 'server/extensions/mcp/tools/example.ts'), 'original');
-  await writeFile(
-    resolve(state, 'identity.json'),
-    JSON.stringify({
-      project: 'chimedeck-compact-lab',
-      checkout,
-      revision: options.identityRevision ?? revision,
-      marker: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      database: 'chimedeck_lab',
-      docker_host: endpoint,
-      docker_id: 'fixture-daemon',
-      dependency_digest: dependencyDigest(checkout),
-      allow_mcp_dev: options.persistedMcp ?? false,
-    }),
-    { mode: 0o600 }
-  );
+  if (!options.initializing)
+    await writeFile(
+      resolve(state, 'identity.json'),
+      JSON.stringify({
+        project: 'chimedeck-compact-lab',
+        checkout,
+        revision: options.identityRevision ?? revision,
+        marker: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        database: 'chimedeck_lab',
+        docker_host: endpoint,
+        docker_id: 'fixture-daemon',
+        dependency_digest: dependencyDigest(checkout),
+        allow_mcp_dev: options.persistedMcp ?? false,
+      }),
+      { mode: 0o600 }
+    );
   if (options.pending) {
     const binding = {
       state,
@@ -229,41 +247,61 @@ process.stderr.write('unexpected mutation');process.exit(81);`,
   for (const name of ['node', 'bun'])
     await writeFile(
       resolve(bin, name),
-      `#!${process.execPath}\n${common}\nfs.appendFileSync(config.log,JSON.stringify(['client-${name}',...args])+'\\n');`,
+      `#!${process.execPath}\n${common}\nfs.appendFileSync(config.log,JSON.stringify(['client-${name}',...args])+'\\n');if(config.guardReentry&&args[0]?.endsWith('guards.mjs')){const cp=require('node:child_process');const value=cp.spawnSync(process.execPath,[path.join(config.checkout,'scripts/local-lab/control.mjs'),'stop',config.state,config.revision],{env:process.env,encoding:'utf8'});if(value.status===0||!value.stderr.includes('lease busy'))process.exit(82);}if(args[0]?.endsWith('control.mjs')&&args[1]==='reset'){const cp=require('node:child_process');const value=cp.spawnSync(process.execPath,args,{env:process.env,encoding:'utf8'});process.stdout.write(value.stdout??'');process.stderr.write(value.stderr??'');process.exit(value.status??1);}`,
       { mode: 0o700 }
     );
   if (options.loaded)
     await writeFile(resolve(state, 'app-start.json'), JSON.stringify(options.loaded), {
       mode: 0o600,
     });
+  if (!options.initializing || options.orphanEnvironment)
+    await writeFile(
+      resolve(state, 'environment.json'),
+      JSON.stringify({
+        LAB_CHECKOUT: checkout,
+        LAB_DB_PASSWORD: 'a'.repeat(48),
+        LAB_JWT_PRIVATE_KEY: 'synthetic',
+        LAB_JWT_PUBLIC_KEY: 'synthetic',
+      }),
+      { mode: 0o600 }
+    );
+  const faultFile = resolve(bin, 'init-fault.mjs');
   await writeFile(
-    resolve(state, 'environment.json'),
-    JSON.stringify({
-      LAB_CHECKOUT: checkout,
-      LAB_DB_PASSWORD: 'a'.repeat(48),
-      LAB_JWT_PRIVATE_KEY: 'synthetic',
-      LAB_JWT_PUBLIC_KEY: 'synthetic',
-    }),
-    { mode: 0o600 }
+    faultFile,
+    `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';import process from'node:process';const path=${JSON.stringify(resolve(bin, 'fixture.json'))};const original=fs.linkSync;fs.linkSync=(from,to)=>{const c=JSON.parse(fs.readFileSync(path,'utf8'));original(from,to);if(c.migrationGateOnLease&&to.endsWith('lifecycle-lease.json')){c.migrationGateOnLease=undefined;fs.writeFileSync(path,JSON.stringify(c));fs.writeFileSync(to.replace('lifecycle-lease.json','migration-pending.json'),'{}',{mode:0o600});}if(c.initCrash&&to.endsWith(c.initCrash+'.json')){c.initCrash=undefined;fs.writeFileSync(path,JSON.stringify(c));process.exit(91);}};const remove=fs.unlinkSync,sync=fs.fsyncSync;let clearing=false;fs.unlinkSync=(file)=>{const result=remove(file);if(String(file).endsWith('migration-pending.json'))clearing=true;return result;};fs.fsyncSync=(fd)=>{const c=JSON.parse(fs.readFileSync(path,'utf8'));if(clearing&&c.migrationClearFault){c.migrationClearFault=undefined;fs.writeFileSync(path,JSON.stringify(c));clearing=false;throw new Error('injected migration clear uncertainty');}return sync(fd);};syncBuiltinESMExports();`
   );
   if (options.envFile) await writeFile(resolve(checkout, options.envFile), 'SYNTHETIC=true');
-  const identityBefore = await readFile(resolve(state, 'identity.json'), 'utf8');
-  const invoke = (command) =>
+  const identityBefore = options.initializing
+    ? undefined
+    : await readFile(resolve(state, 'identity.json'), 'utf8');
+  const invoke = (command, extra = [], inject = false) =>
     spawnSync(
       process.execPath,
-      [resolve(checkout, 'scripts/local-lab/control.mjs'), command, state, revision],
+      [
+        ...(inject ? ['--import', faultFile] : []),
+        resolve(checkout, 'scripts/local-lab/control.mjs'),
+        command,
+        state,
+        revision,
+        ...extra,
+      ],
       {
         cwd: checkout,
         env: {
           PATH: `${bin}:${process.env.PATH}`,
           HOME: home,
+          ...(options.initializing ? { LAB_DOCKER_HOST: endpoint } : {}),
           ...(options.endpoint ? { LAB_DOCKER_HOST: options.endpoint } : {}),
           ...(options.allowMcp !== undefined ? { LAB_ALLOW_MCP_DEV: options.allowMcp } : {}),
         },
         encoding: 'utf8',
       }
     );
-  const result = invoke(options.command ?? 'start');
+  const result = invoke(
+    options.command ?? 'start',
+    [],
+    Boolean(options.initCrash || options.migrationClearFault || options.migrationGateOnLease)
+  );
   let calls = [];
   try {
     calls = (await readFile(config.log, 'utf8'))
@@ -722,6 +760,205 @@ test('owner publication failures leave complete authority usable by cleanup comm
   } finally {
     mock.restoreAll();
     syncBuiltinESMExports();
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('migration source refusal happens before execution; drift error or crash stays gated after revert', async () => {
+  for (const mode of ['before', 'drift', 'error', 'crash']) {
+    const value = await fixture({
+      command: 'start',
+      owned: true,
+      ...(mode === 'crash' ? { initCrash: 'migration-pending' } : { migrationFault: mode }),
+    });
+    try {
+      assert.notEqual(value.result.status, 0);
+      const receipt = resolve(value.state, 'migration-pending.json');
+      if (mode === 'before') {
+        await assert.rejects(readFile(receipt));
+        assert.ok(!value.calls.some((args) => args.includes('db:migrate')));
+      } else {
+        const recorded = await readFile(receipt, 'utf8');
+        const config = JSON.parse(
+          await readFile(resolve(value.directory, 'bin/fixture.json'), 'utf8')
+        );
+        config.status = '';
+        config.migrationFault = undefined;
+        await writeFile(resolve(value.directory, 'bin/fixture.json'), JSON.stringify(config));
+        for (const command of [
+          'start',
+          'restart-app',
+          'prepare',
+          'pin',
+          'seed',
+          'test',
+          'browser',
+          'frontend',
+          'guards',
+        ]) {
+          const blocked = value.invoke(command);
+          assert.notEqual(blocked.status, 0);
+          assert.ok(blocked.stderr.includes('Pending migration'));
+        }
+        assert.equal(value.invoke('status').status, 0);
+        assert.equal(value.invoke('stop').status, 0);
+        assert.equal(await readFile(receipt, 'utf8'), recorded);
+        const reset = value.invoke('reset');
+        assert.equal(reset.status, 0, reset.stderr);
+        await assert.rejects(readFile(receipt));
+      }
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('init crash boundaries recover orphan environment or committed pair under stable initializer lease', async () => {
+  for (const initCrash of ['environment', 'identity']) {
+    const value = await fixture({ command: 'init', initializing: true, initCrash });
+    try {
+      assert.equal(value.result.status, 91);
+      const environment = await readFile(resolve(value.state, 'environment.json'), 'utf8');
+      const resumed = value.invoke('init');
+      assert.equal(resumed.status, 0, resumed.stderr);
+      const owner = JSON.parse(await readFile(resolve(value.state, 'identity.json'), 'utf8'));
+      assert.equal(owner.checkout, value.checkout);
+      if (initCrash === 'identity')
+        assert.equal(await readFile(resolve(value.state, 'environment.json'), 'utf8'), environment);
+      const before = await readFile(resolve(value.state, 'identity.json'), 'utf8');
+      assert.equal(value.invoke('init').status, 0);
+      assert.equal(await readFile(resolve(value.state, 'identity.json'), 'utf8'), before);
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('guards hold real state lease and pass one validated postgres endpoint daemon and ID', async () => {
+  const value = await fixture({
+    command: 'guards',
+    owned: true,
+    guardReentry: true,
+    loaded: { container_id: '4'.repeat(64), revision, development: false },
+  });
+  try {
+    assert.equal(value.result.status, 0, value.result.stderr);
+    const helper = value.calls.find(
+      (args) => args[0] === 'client-node' && args[1].endsWith('guards.mjs')
+    );
+    assert.ok(helper);
+    assert.deepEqual(helper.slice(-3), [value.endpoint, 'fixture-daemon', '1'.repeat(64)]);
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('nonstarting marker probe refuses stopped postgres without start checkpoint or destruction', async () => {
+  const value = await fixture({ command: 'status', owned: true, disappearPgOnStart: true });
+  try {
+    const probed = value.invoke('reset', ['--nonstarting-marker-check']);
+    assert.notEqual(probed.status, 0);
+    assert.ok(probed.stderr.includes('Owned Postgres is stopped'));
+    const calls = (await readFile(value.config.log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.ok(calls.every((args) => !args.some((arg) => mutations.includes(arg))));
+    await assert.rejects(readFile(resolve(value.state, 'reset-checkpoint.json')));
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('guard helper independently refuses changed daemon or postgres identity before count SQL', async () => {
+  for (const change of ['daemon', 'postgres']) {
+    const value = await fixture({ command: 'status', owned: true });
+    try {
+      const configPath = resolve(value.directory, 'bin/fixture.json');
+      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      if (change === 'daemon') config.daemon = 'different';
+      else config.objects.container[0].Id = 'e'.repeat(64);
+      await writeFile(configPath, JSON.stringify(config));
+      const start = (await readFile(value.config.log, 'utf8')).trim().split('\n').length;
+      const helper = spawnSync(
+        process.execPath,
+        [
+          resolve(value.checkout, 'scripts/local-lab/guards.mjs'),
+          value.state,
+          revision,
+          value.endpoint,
+          'fixture-daemon',
+          '1'.repeat(64),
+        ],
+        {
+          env: { PATH: `${resolve(value.directory, 'bin')}:${process.env.PATH}`, HOME: value.home },
+          encoding: 'utf8',
+        }
+      );
+      assert.notEqual(helper.status, 0);
+      const calls = (await readFile(value.config.log, 'utf8'))
+        .trim()
+        .split('\n')
+        .slice(start)
+        .map(JSON.parse);
+      assert.ok(!calls.some((args) => args[2] === 'exec'));
+    } finally {
+      await new Promise((accept) => value.socket.close(accept));
+      await rm(value.directory, { recursive: true, force: true });
+    }
+  }
+});
+test('concurrent initializer cannot replace a live orphan environment or mix the private pair', async () => {
+  const value = await fixture({ command: 'init', initializing: true, initCrash: 'environment' });
+  const binding = {
+    state: value.state,
+    checkout: value.checkout,
+    project: 'chimedeck-compact-lab',
+    marker: 'initialization',
+    docker_host: value.endpoint,
+    docker_id: 'fixture-daemon',
+  };
+  try {
+    assert.equal(value.result.status, 91);
+    const environment = await readFile(resolve(value.state, 'environment.json'), 'utf8');
+    const release = await acquireLease(value.state, binding);
+    try {
+      const concurrent = value.invoke('init');
+      assert.notEqual(concurrent.status, 0);
+      assert.ok(concurrent.stderr.includes('lease busy'));
+      assert.equal(await readFile(resolve(value.state, 'environment.json'), 'utf8'), environment);
+      await assert.rejects(readFile(resolve(value.state, 'identity.json')));
+    } finally {
+      await release();
+    }
+    const recovered = value.invoke('init');
+    assert.equal(recovered.status, 0, recovered.stderr);
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('migration receipt clear uncertainty restores the durable fail-closed gate', async () => {
+  const value = await fixture({ command: 'start', owned: true, migrationClearFault: true });
+  try {
+    assert.notEqual(value.result.status, 0);
+    assert.ok(value.result.stderr.includes('clear uncertainty'));
+    const receipt = await readFile(resolve(value.state, 'migration-pending.json'), 'utf8');
+    assert.equal(JSON.parse(receipt).version, 1);
+    const blocked = value.invoke('restart-app');
+    assert.notEqual(blocked.status, 0);
+    assert.ok(blocked.stderr.includes('Pending migration'));
+    assert.equal(await readFile(resolve(value.state, 'migration-pending.json'), 'utf8'), receipt);
+  } finally {
+    await new Promise((accept) => value.socket.close(accept));
+    await rm(value.directory, { recursive: true, force: true });
+  }
+});
+test('migration gate appearing during lease acquisition blocks actions at second check', async () => {
+  const value = await fixture({ command: 'restart-app', owned: true, migrationGateOnLease: true });
+  try {
+    assert.notEqual(value.result.status, 0);
+    assert.ok(value.result.stderr.includes('Pending migration'));
+    assert.ok(value.calls.every((args) => !args.some((arg) => mutations.includes(arg))));
+    assert.equal(await readFile(resolve(value.state, 'migration-pending.json'), 'utf8'), '{}');
+  } finally {
     await new Promise((accept) => value.socket.close(accept));
     await rm(value.directory, { recursive: true, force: true });
   }
