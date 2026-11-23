@@ -32,6 +32,7 @@ const { handleChangePassword } = await import('../../server/extensions/auth/api/
 const { handleLogin } = await import('../../server/extensions/auth/api/login');
 const { authRouter } = await import('../../server/extensions/auth/api/index');
 const { issueAccessToken } = await import('../../server/extensions/auth/mods/token/issue');
+const { rotateRefreshToken } = await import('../../server/extensions/auth/mods/token/refresh');
 const { hashPassword } = await import('../../server/extensions/auth/mods/password/hash');
 const { verifyPassword } = await import('../../server/extensions/auth/mods/password/verify');
 const { pubsub } = await import('../../server/mods/pubsub/index');
@@ -298,6 +299,40 @@ try {
     await verifyPassword({ password: OLD, hash: (await passwordHash(dave.id)) ?? '' }),
     true
   );
+
+  // --- Refresh rotation cannot outlive a password change ----------------------------
+  const erin = await createUser('erin', OLD);
+  const erinToken = randomBytes(32).toString('hex');
+  await db('refresh_tokens').insert({
+    id: randomUUID(),
+    user_id: erin.id,
+    token: erinToken,
+    expires_at: new Date(Date.now() + 86_400_000),
+    created_at: new Date(),
+  });
+  const plainRotation = await rotateRefreshToken({ token: erinToken });
+  check('rotation still works', plainRotation.status, 200);
+  check(
+    'rotation revokes the old token',
+    (await rotateRefreshToken({ token: erinToken })).status,
+    401
+  );
+
+  // Hold the users-row lock and delete tokens exactly as change-password does,
+  // start a rotation of a live token, then commit: the rotation must not mint.
+  const liveToken = plainRotation.token ?? '';
+  const changeTrx = await db.transaction();
+  await changeTrx('users').where({ id: erin.id }).forUpdate().first('id');
+  await changeTrx('refresh_tokens').where({ user_id: erin.id }).delete();
+  let settled = false;
+  const racing = rotateRefreshToken({ token: liveToken }).finally(() => {
+    settled = true;
+  });
+  await Bun.sleep(300);
+  check('rotation waits for the password-change lock', settled, false);
+  await changeTrx.commit();
+  check('rotation racing a password change → 401', (await racing).status, 401);
+  check('no refresh token survives the change', await refreshCount(erin.id), 0);
 } finally {
   await db('api_tokens').whereIn('user_id', createdUsers).delete();
   await db('refresh_tokens').whereIn('user_id', createdUsers).delete();
