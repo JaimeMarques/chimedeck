@@ -76,6 +76,22 @@ export function cancelAuthRecovery() {
   };
 }
 
+let expectedSessionEndReason: string | null = null;
+
+/**
+ * A flow that deliberately ends every session (password change) names the
+ * login notice up front, because the server's WebSocket 4001 close can arrive
+ * before or after its HTTP reply. Pass null when the flow fails.
+ */
+export function expectSessionEnd(reason: string | null) {
+  expectedSessionEndReason = reason;
+}
+
+/** Login URL for a server-ended session; defaults to the generic expiry notice. */
+export function sessionEndedLoginUrl(): string {
+  return `/login?reason=${encodeURIComponent(expectedSessionEndReason ?? 'session_expired')}`;
+}
+
 /** Only a newly established validated session can undo explicit logout/revocation. */
 export function allowAuthRecovery() {
   if (authRecoveryBlocked) authGeneration++;

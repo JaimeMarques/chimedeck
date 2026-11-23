@@ -51,6 +51,18 @@ export const authApi = {
       data: { requiresConfirmation?: boolean; pendingEmail?: string; email?: string };
     }>('/auth/change-email', { email, currentPassword });
   },
+  changePassword({
+    currentPassword,
+    newPassword,
+  }: {
+    currentPassword: string;
+    newPassword: string;
+  }) {
+    return apiClient.post<{ data: { changed: boolean } }>('/auth/change-password', {
+      currentPassword,
+      newPassword,
+    });
+  },
   confirmEmailChange({ token }: { token: string }) {
     return apiClient.get<{ data: { confirmed: boolean } }>(
       `/auth/confirm-email-change?token=${encodeURIComponent(token)}`

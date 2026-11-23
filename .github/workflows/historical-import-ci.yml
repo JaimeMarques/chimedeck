@@ -119,6 +119,16 @@ jobs:
         env:
           CHIMEDECK_TEST_SANDBOX: '1'
         run: bun run tests/db/commentImageAccess.ts
+      - name: Verify authenticated password change on PostgreSQL
+        env:
+          CHIMEDECK_TEST_SANDBOX: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          JWT_PRIVATE_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
+          JWT_PUBLIC_KEY="$(printf '%s' "$JWT_PRIVATE_KEY" | openssl pkey -pubout 2>/dev/null)"
+          export JWT_PRIVATE_KEY JWT_PUBLIC_KEY
+          bun run tests/db/changePassword.ts
       - name: Run board-member HTTP contracts against the real server
         shell: bash
         run: |

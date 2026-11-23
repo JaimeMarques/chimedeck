@@ -11,6 +11,7 @@ import {
   cancelAuthRecovery,
   allowAuthRecovery,
   AuthRecoveryCancelledError,
+  sessionEndedLoginUrl,
 } from './common/api/client';
 import {
   clearAuth,
@@ -152,7 +153,7 @@ socket.setExpiredTokenCallback(async () => {
 socket.setForcedLogoutCallback(() => {
   cancelAuthRecovery();
   store.dispatch(clearAuth());
-  window.location.href = '/login?reason=session_expired';
+  window.location.href = sessionEndedLoginUrl();
 });
 
 const root = document.getElementById('root');
