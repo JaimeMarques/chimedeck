@@ -67,6 +67,22 @@
     "unchanged": "New email must be different from current email.",
     "emailDomainNotAllowed": "Your new email address must use an approved organisation domain."
   },
+  "changePassword": {
+    "title": "Change password",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm new password",
+    "hint": "At least 8 characters, with a letter and a number. You will be signed out on every device and sign in again with the new password.",
+    "submit": "Change password",
+    "submitting": "Changing…",
+    "mismatch": "The new passwords do not match.",
+    "tooWeak": "Password must be at least 8 characters and contain a letter and a number.",
+    "unchanged": "The new password must be different from the current one.",
+    "incorrect": "Current password is incorrect.",
+    "notSet": "This account has no password yet. Sign out and use “Forgot password?” to set one.",
+    "rateLimited": "Too many attempts. Wait a few minutes and try again.",
+    "failed": "Something went wrong. Please try again."
+  },
   "forgotPassword": {
     "title": "Forgot your password?",
     "description": "Enter your email address and we'll send you a reset link.",
@@ -87,7 +103,9 @@
     "requestNew": "Request a new reset link"
   },
   "loginPage": {
-    "forgotPassword": "Forgot password?"
+    "forgotPassword": "Forgot password?",
+    "passwordChanged": "Your password was changed. Sign in with your new password.",
+    "sessionEnded": "Your session has ended. Please sign in again."
   },
   "signupForm.ariaLabel": "Sign up form",
   "signupForm.namePlaceholder": "Jane Smith",

@@ -1,4 +1,4 @@
-// ProfilePage — settings page for avatar, nickname, and email.
+// ProfilePage — settings page for avatar, nickname, email and password.
 import { useCallback, useEffect, useState } from 'react';
 import { useAppDispatch } from '~/hooks/useAppDispatch';
 import { useAppSelector } from '~/hooks/useAppSelector';
@@ -8,6 +8,7 @@ import ProfileForm from '../../components/ProfileForm';
 import translations from '../../translations/en.json';
 import Spinner from '~/common/components/Spinner';
 import ChangeEmailForm from '~/extensions/Auth/components/ChangeEmailForm';
+import ChangePasswordForm from '~/extensions/Auth/components/ChangePasswordForm';
 import ToastRegion from '~/common/components/ToastRegion';
 import type { ToastItem } from '~/common/components/Toast';
 
@@ -76,6 +77,12 @@ export default function ProfilePage() {
               );
             }}
           />
+        </section>
+
+        {/* Change password section */}
+        <hr className="my-8 border-border" />
+        <section>
+          <ChangePasswordForm />
         </section>
       </div>
 

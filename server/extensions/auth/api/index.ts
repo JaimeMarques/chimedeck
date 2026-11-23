@@ -8,6 +8,7 @@ import { handleOAuthCallback } from './oauth/callback';
 import { handleVerifyEmail } from './verifyEmail';
 import { handleResendVerification } from './resendVerification';
 import { handleChangeEmail } from './changeEmail';
+import { handleChangePassword } from './changePassword';
 import { handleConfirmEmailChange } from './confirmEmailChange';
 import { handleForgotPassword } from './forgotPassword';
 import { handleResetPassword } from './resetPassword';
@@ -44,6 +45,10 @@ export async function authRouter(req: Request, pathname: string): Promise<Respon
 
   if (pathname === '/api/v1/auth/change-email' && req.method === 'POST') {
     return handleChangeEmail(req);
+  }
+
+  if (pathname === '/api/v1/auth/change-password' && req.method === 'POST') {
+    return handleChangePassword(req);
   }
 
   if (pathname === '/api/v1/auth/confirm-email-change' && req.method === 'GET') {

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppDispatch } from '~/hooks/useAppDispatch';
 import { useAppSelector } from '~/hooks/useAppSelector';
 import { loginThunk, selectAuthStatus, selectAuthError } from '../../duck/authDuck';
@@ -7,11 +7,30 @@ import LoginForm from '../../components/LoginForm';
 import config from '~/config';
 import translations from '../../translations/en.json';
 
+// Notices for sessions the server ended; unknown reasons show nothing.
+const REASON_NOTICES: Record<string, { text: string; tone: 'success' | 'info' }> = {
+  password_changed: { text: translations.loginPage.passwordChanged, tone: 'success' },
+  session_expired: { text: translations.loginPage.sessionEnded, tone: 'info' },
+};
+
 export default function LoginPage() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const status = useAppSelector(selectAuthStatus);
   const apiError = useAppSelector(selectAuthError);
+
+  // [why] Reset-password and confirm-email-change navigate here with a toast in
+  // router state; password change and forced logouts arrive with ?reason=.
+  const stateToast = (location.state as { toast?: unknown } | null)?.toast;
+  const reason = searchParams.get('reason');
+  const notice =
+    typeof stateToast === 'string'
+      ? { text: stateToast, tone: 'success' as const }
+      : reason
+        ? REASON_NOTICES[reason]
+        : undefined;
 
   // Redirect on successful login
   useEffect(() => {
@@ -39,6 +58,15 @@ export default function LoginPage() {
 
         <h1 className="text-2xl font-bold text-base mb-1">{translations.login.title}</h1>
         <p className="text-subtle text-sm mb-6">{translations.login.subtitle}</p>
+
+        {notice && (
+          <p
+            role="status"
+            className={`text-sm mb-6 ${notice.tone === 'success' ? 'text-success' : 'text-muted'}`}
+          >
+            {notice.text}
+          </p>
+        )}
 
         <LoginForm onSubmit={handleSubmit} isLoading={status === 'loading'} apiError={apiError} />
 

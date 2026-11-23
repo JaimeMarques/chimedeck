@@ -22,6 +22,7 @@
     "db/copyDestinationAndListDelete.ts",
     "db/activityReadPrivacy.ts",
     "db/commentImageAccess.ts",
+    "db/changePassword.ts",
     "e2e/board-members.spec.ts",
     "../server/mods/events/__tests__/dispatch.test.ts",
     "../server/mods/events/__tests__/fixtures/dispatchPolicy.ts",
