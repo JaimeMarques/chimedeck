@@ -11,7 +11,8 @@ import {
 } from '../../../middlewares/permissionManager';
 import { presignPut } from '../mods/s3/presignPut';
 import { s3Config } from '../common/config/s3';
-import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from '../config/allowedTypes';
+import { MAX_FILE_SIZE_BYTES } from '../config/allowedTypes';
+import { isAllowedUpload } from '../config/isAllowedUpload';
 import { resolveCardId } from '../../../common/ids/resolveEntityId';
 import { generateUniqueShortId } from '../../../common/ids/shortId';
 import { applyLimitGuard } from '../../../middlewares/limitGuard';
@@ -94,7 +95,7 @@ export async function handleRequestUploadUrl(req: Request, cardId: string): Prom
   if (body.uploadContext === 'comment' && !body.mimeType.startsWith('image/')) {
     return Response.json({ name: 'comment-image-required' }, { status: 400 });
   }
-  if (!ALLOWED_MIME_TYPES.includes(body.mimeType)) {
+  if (!isAllowedUpload(body.mimeType, body.filename)) {
     return Response.json(
       { name: 'mime-type-not-allowed', data: { mimeType: body.mimeType } },
       { status: 400 }

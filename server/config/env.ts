@@ -100,7 +100,7 @@ export const env = {
 
   // Attachment uploads
   /** Maximum single-file upload size in MB. Default: 50. */
-  MAX_ATTACHMENT_SIZE_MB: Number.parseInt(Bun.env['MAX_ATTACHMENT_SIZE_MB'] ?? '50', 10),
+  MAX_ATTACHMENT_SIZE_MB: Number.parseInt(Bun.env['MAX_ATTACHMENT_SIZE_MB'] ?? '100', 10),
 
   // Feature gates
   VIRUS_SCAN_ENABLED: Bun.env['VIRUS_SCAN_ENABLED'] === 'true',
