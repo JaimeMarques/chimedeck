@@ -569,7 +569,7 @@ export function AttachmentPanel({
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*,video/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,text/markdown,application/zip,application/x-tar,application/gzip,audio/*"
+            accept="image/*,video/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,text/markdown,application/zip,application/x-zip-compressed,application/x-tar,application/gzip,.zip,.tar,.gz,.tgz,audio/*"
             className="hidden"
             onChange={handleFileInputChange}
             data-testid="attachment-file-input"
